@@ -8,6 +8,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/hishamkaram/delegation-layer/internal/app"
+	"github.com/hishamkaram/delegation-layer/internal/tui/presentation"
 	"github.com/hishamkaram/delegation-layer/internal/tui/session"
 	"github.com/hishamkaram/delegation-layer/internal/tui/terminal"
 	"github.com/hishamkaram/delegation-layer/internal/tui/ui"
@@ -92,11 +93,13 @@ func (m *model) formKey(key tea.KeyPressMsg) tea.Cmd {
 func (m *model) searchKey(key tea.KeyPressMsg) tea.Cmd {
 	switch key.String() {
 	case "esc":
+		m.search.SetValue(m.appliedSearch)
 		m.searching = false
 		m.search.Blur()
 		return nil
 	case "enter":
 		m.navigationEpoch++
+		m.appliedSearch = m.search.Value()
 		m.searching = false
 		m.search.Blur()
 		m.after = ""
@@ -163,25 +166,33 @@ func (m *model) browseKey(key tea.KeyPressMsg) tea.Cmd {
 	case "a":
 		m.openActions()
 	case "o":
-		m.navigationEpoch++
-		m.viewport.SetContent(terminal.Safe(strings.Join(m.operationResults, "\n\n────\n\n")))
-		m.viewport.GotoTop()
-		m.message = "Operation results"
-		m.detail = true
+		m.openText("Operation results", strings.Join(m.operationResults, "\n\n────\n\n"))
+	case "c":
+		m.openCoverage()
 	case "d":
-		m.navigationEpoch++
-		m.message = "Diagnostics"
-		m.viewport.SetContent(strings.Join(m.diagnostics, "\n\n"))
-		m.viewport.GotoTop()
-		m.detail = true
+		m.openText("Diagnostics", strings.Join(m.diagnostics, "\n\n"))
 	case "enter":
 		m.openDetail()
 	case "esc":
 		m.navigationEpoch++
-		m.detail = false
-		m.message = ""
+		m.closeDetail()
 
 	}
+	return m.navigateBody(key)
+}
+
+func (m *model) openCoverage() {
+	if !m.detail && m.page.Coverage != "" {
+		m.openText("History coverage", m.page.Coverage)
+	}
+}
+
+func (m *model) openText(title, text string) {
+	m.navigationEpoch++
+	m.showDetail(nil, title, terminal.Safe(text))
+}
+
+func (m *model) navigateBody(key tea.KeyPressMsg) tea.Cmd {
 	if m.listKey(key.String()) {
 		return nil
 	}
@@ -252,6 +263,14 @@ func (m *model) listKey(key string) bool {
 		return false
 	}
 	switch key {
+	case "left", "right":
+		if len(m.page.Columns) > 0 {
+			delta := 1
+			if key == "left" {
+				delta = -1
+			}
+			m.tableOffset = presentation.ClampOffset(m.page.Columns, m.geometry().ListWidth, m.tableOffset+delta)
+		}
 	case "up", "k":
 		m.navigationEpoch++
 		m.cursor = max(0, m.cursor-1)
@@ -259,13 +278,13 @@ func (m *model) listKey(key string) bool {
 		m.navigationEpoch++
 		m.cursor = min(max(0, len(m.page.Entries)-1), m.cursor+1)
 	case "n":
-		if m.page.Next != "" {
+		if m.pageSearch == m.appliedSearch && m.page.Next != "" {
 			m.cursors = append(m.cursors, m.after)
 			m.after = m.page.Next
 			m.pageChanged()
 		}
 	case "p":
-		if len(m.cursors) > 0 {
+		if m.pageSearch == m.appliedSearch && len(m.cursors) > 0 {
 			m.after = m.cursors[len(m.cursors)-1]
 			m.cursors = m.cursors[:len(m.cursors)-1]
 			m.pageChanged()

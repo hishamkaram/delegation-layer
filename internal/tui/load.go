@@ -24,11 +24,11 @@ func (m *model) load() {
 	if loader == nil {
 		return
 	}
-	request := ui.PageRequest{Search: m.search.Value(), After: m.after}
+	request := ui.PageRequest{Search: m.appliedSearch, After: m.after}
 	m.loading = true
 	_, err := m.tracker.Start(session.Read, session.Reference{Description: "refresh " + m.sections[section].Name}, func(context.Context) error {
 		page, loadErr := loader(ctx, request)
-		m.publish(loadedMsg{generation: generation, section: section, page: page, err: loadErr})
+		m.publish(loadedMsg{generation: generation, section: section, page: page, search: request.Search, err: loadErr})
 		return nil
 	}, m.completed)
 	if err != nil {
@@ -54,6 +54,7 @@ func (m *model) loaded(msg loadedMsg) {
 	}
 	previous, hasPrevious := m.selectedEntry()
 	m.page = msg.page
+	m.pageSearch = msg.search
 	if hasPrevious {
 		for i, entry := range m.page.Entries {
 			if entry.ID == previous.ID {
@@ -66,4 +67,5 @@ func (m *model) loaded(msg loadedMsg) {
 		m.cursor = max(0, len(m.page.Entries)-1)
 	}
 	m.problem = ""
+	m.sizeViewport()
 }

@@ -667,9 +667,23 @@ func (r *componentPreparationRouting) MigrateOwn(ctx context.Context, store *tas
 	r.owner.ownClient(state.current, migrationErr)
 	r.owner.ownDaemonClients(state.current, before)
 	result := manualSupervisorMigrationResult(state, migrationErr)
-	r.recordReady(observation, state.current, result.err)
 	report, reportErr := infrastructureManualMigrationReport(result)
-	return observation.Disposition(), report, errors.Join(r.closePreparationClient(state.current, before, result.err), reportErr)
+	// Finite daemon fixtures need their owned endpoint before the canonical
+	// readiness probe; endpoint existence alone never records Ready.
+	r.establishPreparationEndpoint(observation, state.current, result.err)
+	preparationBefore := len(r.owner.daemonWaits())
+	var prepared *pueue.Client
+	var preparationErr error
+	if result.err == nil && state.current != nil {
+		prepared, preparationErr = supervisorcore.PreparePrivateAdmissionSupervisorContext(ctx, lookup, store, options)
+	}
+	r.owner.ownClient(prepared, preparationErr)
+	r.owner.ownDaemonClients(prepared, preparationBefore)
+	preparationErr = r.closePreparationClient(prepared, preparationBefore, preparationErr)
+	if result.err == nil && reportErr == nil && preparationErr == nil && state.current != nil {
+		observation.RecordReady()
+	}
+	return observation.Disposition(), report, errors.Join(r.closePreparationClient(state.current, before, result.err), reportErr, preparationErr)
 }
 
 func (r *componentPreparationRouting) closePreparationClient(client *pueue.Client, firstWait int, cause error) error {
@@ -685,12 +699,19 @@ func (r *componentPreparationRouting) recordReady(observation *infrastructure.Pr
 	if cause != nil || client == nil {
 		return
 	}
+	r.establishPreparationEndpoint(observation, client, cause)
+	observation.RecordReady()
+}
+
+func (r *componentPreparationRouting) establishPreparationEndpoint(observation *infrastructure.PreparationObservation, client *pueue.Client, cause error) {
+	if cause != nil || client == nil {
+		return
+	}
 	if observation.Disposition().Kind == infrastructure.DispositionStarted && r.owner.lifetime == componentFiniteDaemon {
 		// The authored finite CLI proves protocol readiness; this separately
 		// owned listener supplies the component's subsequent endpoint probe.
 		r.owner.listen(r.test, client.Binding().Endpoint)
 	}
-	observation.RecordReady()
 }
 
 func listenSupervisorProbeTestEndpoint(t *testing.T, endpoint string) {

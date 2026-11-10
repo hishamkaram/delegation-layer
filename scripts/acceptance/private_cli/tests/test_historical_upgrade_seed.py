@@ -7,6 +7,7 @@ import tempfile
 import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
+from unittest.mock import Mock
 
 from scripts.acceptance.evidence.encoding import canonical_go_json
 from scripts.acceptance.evidence.files import read_json
@@ -84,6 +85,119 @@ class InstalledUpgradeRecordTests(unittest.TestCase):
             with self.subTest(binding=binding), self.assertRaises(RuntimeError):
                 upgrade.observe_installed_package(self.state, self.libexec)
             self.assertEqual(self.record_bytes(), before)
+
+    def test_warm_queue_identity_requires_one_exact_running_receipt(self):
+        task_id = "c" * 32
+        directory = self.state / "tasks" / task_id
+        directory.mkdir(parents=True)
+        write_json(directory / "supervisor.ref.json", {
+            "task_id": task_id, "label": "delegate-exact-task", "numeric_task_id": 7,
+        })
+        row = {"id": 7, "label": "delegate-exact-task", "status": {"Running": {}}}
+        options = (self.state, {"task_id": task_id}, self.libexec / "pueue", self.root / "config", {}, None)
+        with patch.object(upgrade, "pueue_snapshot", return_value={"tasks": {"7": row}}):
+            upgrade._require_one_warm_queue_identity(*options)
+        for rows in ({}, {"7": {**row, "id": 8}}, {"7": {**row, "status": {"Stashed": {}}}},
+                     {"7": row, "8": {**row, "id": 8}}):
+            with self.subTest(rows=rows), \
+                    patch.object(upgrade, "pueue_snapshot", return_value={"tasks": rows}), \
+                    self.assertRaisesRegex(RuntimeError, "exactly one matching running"):
+                upgrade._require_one_warm_queue_identity(*options)
+
+    def _warm_removal_case(self, fault=""):
+        old_delegate = self.root / "old-delegate"
+        old_delegate.write_text("owned fixture source\n")
+        historical = self.state / "tasks" / ("d" * 32)
+        historical.mkdir(parents=True)
+        (historical / "outcome.json").write_text("committed fixture evidence\n")
+        history = upgrade.snapshot(historical)
+        original = "a" * 32
+        fresh = "b" * 32
+        client = self.root / "current" / "libexec" / "pueue"
+        gate = self.root / "release-gate"
+        cohorts = [Mock(spec=["assert_live", "close"]), Mock(spec=["assert_live", "close"])]
+        responses = []
+
+        def dispatch(binary, name, _brief):
+            task_id = original if name == "upgrade-live-original" else fresh
+            if task_id == fresh:
+                self.assertEqual(binary, self.root / "candidate")
+                self.assertFalse(old_delegate.exists())
+                self.assertFalse(self.libexec.exists())
+                write_json(self.supervisor / "ordinary-scheduling.json", {"supervisor": {
+                    "client_executable": str(client), "daemon_executable": str(client.parent / "pueued"),
+                }})
+            directory = self.state / "tasks" / task_id
+            directory.mkdir(parents=True)
+            for record in ("task.json", "meta.json", "submit.json", "supervisor.ref.json"):
+                (directory / record).write_text("immutable original input: " + record)
+            write_json(directory / "supervisor.ref.json", {
+                "task_id": task_id, "label": "delegate-" + task_id, "numeric_task_id": len(responses) + 1,
+            }, replace=True)
+            response = {"task_id": task_id}
+            responses.append(response)
+            return response
+
+        def remove_old():
+            self.assertEqual(len(responses), 1)
+            for member in self.libexec.iterdir():
+                member.unlink()
+            self.libexec.rmdir()
+            old_delegate.unlink()
+
+        def ensure(_binary, _env, arguments, **_kwargs):
+            self.assertEqual(arguments[-3:], ["supervisor", "ensure-owner", "--json"])
+            self.assertFalse(old_delegate.exists())
+            self.assertEqual(len(responses), 2, "ensure-owner ran before ordinary dispatch recovered")
+            if fault == "not ready":
+                return {"status": "unknown"}
+            if fault == "provenance":
+                (self.supervisor / "daemon.identity.json").write_text("changed provenance")
+            return {"status": "owner_ready"}
+
+        def queue(*_args, **_kwargs):
+            return {"tasks": {str(index): {"id": index, "label": "delegate-" + response["task_id"],
+                                           "status": {"Running": {}}}
+                              for index, response in enumerate(responses, start=1)}}
+
+        collect = Mock()
+        with patch.object(upgrade, "run_json", side_effect=ensure), \
+                patch.object(upgrade, "_upgrade_live_leases", return_value=[{"owned": "lease"}]), \
+                patch.object(upgrade.LiveFIFOLeaseCohort, "acquire", side_effect=cohorts), \
+                patch.object(upgrade, "pueue_snapshot", side_effect=queue):
+            options = dict(brief=self.root / "brief", capture_root=None, client=client, collect=collect,
+                           config=self.root / "config", delegate=self.root / "candidate", dispatch=dispatch,
+                           env={}, gate=gate, historical_directory=historical, history=history,
+                           lease_nonce="c" * 32, old_delegate=old_delegate, old_libexec=self.libexec,
+                           receipts=self.root, remove_old_package=remove_old, state=self.state,
+                           waiter_directory=self.root / "waiters")
+            if fault:
+                reason = "did not become ready" if fault == "not ready" else "changed daemon provenance"
+                with self.assertRaisesRegex(RuntimeError, reason):
+                    upgrade.prove_live_package_removal(**options)
+                self.assertTrue(gate.exists(), "unproven task closure removed its release gate")
+                collect.assert_not_called()
+            else:
+                evidence = upgrade.prove_live_package_removal(**options)
+                self.assertEqual(evidence["original_task"], original)
+                self.assertEqual(evidence["fresh_task"], fresh)
+                self.assertTrue(evidence["active_task_survived"])
+                self.assertTrue(evidence["first_recovery_by_dispatch"])
+                self.assertFalse(gate.exists())
+                self.assertEqual(collect.call_count, 2)
+                self.assertGreaterEqual(cohorts[0].assert_live.call_count, 2)
+                self.assertEqual(upgrade.snapshot(historical), history)
+            cohorts[0].close.assert_called_once()
+            cohorts[1].close.assert_called_once()
+
+    def test_live_package_removal_preserves_authority_and_releases_owned_gate_after_collection(self):
+        self._warm_removal_case()
+
+    def test_live_package_removal_refuses_false_readiness_and_preserves_cleanup_evidence(self):
+        self._warm_removal_case("not ready")
+
+    def test_live_package_removal_detects_daemon_provenance_rewrite(self):
+        self._warm_removal_case("provenance")
 
     def pending(self, *, binding=None, shutdown=False, proposal_digest=None, source=None, group_directory=None,
                 legacy_pid=0, legacy_process_start=""):

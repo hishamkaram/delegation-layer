@@ -10,6 +10,7 @@ import (
 
 	"github.com/hishamkaram/delegation-layer/internal/app"
 	"github.com/hishamkaram/delegation-layer/internal/history"
+	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 	"github.com/hishamkaram/delegation-layer/internal/tui/ui"
 )
@@ -65,7 +66,9 @@ func (v views) load(ctx context.Context, request ui.PageRequest) (ui.Page, error
 	if err != nil {
 		return page, err
 	}
-	page.Next, page.Summary = result.Next, coverage(result.Progress, query.Order)
+	page.Next = result.Next
+	page.Columns = taskColumns()
+	page.Strip, page.Coverage = coverage(result.Progress, query.Order)
 	identities := make([]history.Identity, len(result.Rows))
 	for i, row := range result.Rows {
 		identities[i] = row.Identity
@@ -87,17 +90,25 @@ func (v views) load(ctx context.Context, request ui.PageRequest) (ui.Page, error
 	return page, nil
 }
 
-func coverage(value history.Progress, order history.Order) string {
+func taskColumns() []ui.Column {
+	return []ui.Column{{Title: "Task ID", Width: 16}, {Title: "Provider", Width: 18}, {Title: "Admission", Width: 14}, {Title: "Liveness", Width: 14}, {Title: "Publication", Width: 14}, {Title: "Created", Width: 20}}
+}
+
+func coverage(value history.Progress, order history.Order) (strip, detail string) {
 	state := "Discovery incomplete; ordering is recent among indexed records."
+	compact := "discovery incomplete"
 	if !value.Incomplete {
 		state = "Last full metadata scan: " + value.LastScan.Format(time.RFC3339)
+		compact = "scanned " + value.LastScan.Format(time.RFC3339)
 	}
 	ordering := "Order: created (unknown creation times remain unknown)."
 	if order == history.OrderObserved {
 		ordering = "Order: last observed (dated evidence, not creation time)."
 	}
-	return ordering + "\n" + fmt.Sprintf("%d indexed • %d last-observed • %d unobserved • %d faults\n%s\nMetadata search; filters: publication:committed admission:admitted liveness:ended status:timed_out; order:created or order:observed. Filters use dated catalog observations, not current global status.",
+	strip = fmt.Sprintf("Dated • %s • %d indexed • %d observed • %d unobserved • %d faults • order:%s", compact, value.Indexed, value.Observed, value.Unobserved, value.Faults, order)
+	detail = ordering + "\n" + fmt.Sprintf("%d indexed • %d last-observed • %d unobserved • %d faults\n%s\nMetadata search; filters: publication:committed admission:admitted liveness:ended status:timed_out; order:created or order:observed. Filters use dated catalog observations, not current global status.",
 		value.Indexed, value.Observed, value.Unobserved, value.Faults, state)
+	return strip, detail
 }
 
 func searchQuery(text string) (history.Query, error) {
@@ -147,23 +158,72 @@ func (v views) entry(row history.Row) ui.Entry {
 	m := row.Metadata
 	created := "unknown"
 	if m.CreatedAtKnown {
-		created = m.CreatedAt.Format(time.RFC3339)
+		created = m.CreatedAt.UTC().Format(time.RFC3339)
 	}
-	state := "not observed"
-	if row.Observation != nil {
-		state = row.Observation.Publication.String() + " • " + row.Observation.Liveness.String()
+	cells := []ui.Cell{{Text: row.Handle()}, {Text: m.Provider}, {Text: "not observed"}, {Text: "not observed"}, {Text: "not observed"}, {Text: created}}
+	cells[0].Fault = row.Fault != ""
+	for i := 2; i <= 4; i++ {
+		cells[i].Fault = row.ObservationFault != ""
 	}
-	detail := fmt.Sprintf("Task: %s\nProvider: %s\nRequested model: %s\nRequested effort: %s\nWorking directory: %s\nWorkspace: %s\nTeam/member: %s/%s\nRemote device: %s\nCreated: %s\n",
-		row.Handle(), m.Provider, m.Model, m.Effort, m.Cwd, m.WorkspaceID, m.TeamID, m.MemberID, row.Device, created)
+	groups := []ui.DetailGroup{
+		{Title: "Identity", Fields: []ui.DetailField{{Label: "Task", Value: row.Handle()}, {Label: "Created", Value: created}, {Label: "Remote device", Value: row.Device}}},
+		{Title: "Request/context", Fields: []ui.DetailField{{Label: "Provider", Value: m.Provider}, {Label: "Requested model", Value: m.Model}, {Label: "Requested effort", Value: m.Effort}, {Label: "Working directory", Value: m.Cwd}, {Label: "Workspace", Value: m.WorkspaceID}, {Label: "Team/member", Value: m.TeamID + "/" + m.MemberID}}},
+	}
+	evidence := ui.DetailGroup{Title: "Evidence", Fields: []ui.DetailField{{Label: "Observation", Value: "not observed"}}}
 	if observed := row.Observation; observed != nil {
-		detail += fmt.Sprintf("\nAdmission: %s\nLiveness: %s\nPublication: %s\nStatus: %s\nFailure code: %s\nObserved: %s (%s)\n",
-			observed.Admission.String(), observed.Liveness.String(), observed.Publication.String(), observed.Status, observed.FailureCode, observed.At.Format(time.RFC3339), observed.Source)
+		cells[2].Text, cells[3].Text, cells[4].Text = observed.Admission.String(), observed.Liveness.String(), observed.Publication.String()
+		cells[2].Role, cells[3].Role, cells[4].Role = admissionRole(observed.Admission), livenessRole(observed.Liveness), publicationRole(observed.Publication)
+		// Current nonempty statuses are stop causes; publication carries committed/rejected outcomes.
+		failureRole := ui.RoleNeutral
+		if observed.Status != "" || observed.FailureCode != "" {
+			failureRole = ui.RoleNegative
+		}
+		evidence.Fields = []ui.DetailField{{Label: "Admission", Value: cells[2].Text, Role: cells[2].Role}, {Label: "Liveness", Value: cells[3].Text, Role: cells[3].Role}, {Label: "Publication", Value: cells[4].Text, Role: cells[4].Role}, {Label: "Status", Value: observed.Status, Role: failureRole}, {Label: "Failure code", Value: observed.FailureCode, Role: failureRole}, {Label: "Observed", Value: observed.At.Format(time.RFC3339)}, {Label: "Source", Value: observed.Source}}
 	}
+	groups = append(groups, evidence)
+	limitations := ui.DetailGroup{Title: "Faults/limitations"}
 	for _, fault := range []string{row.Fault, row.ObservationFault} {
 		if fault != "" {
-			detail += "\nFault: " + fault
+			limitations.Fields = append(limitations.Fields, ui.DetailField{Label: "Fault", Value: fault, Role: ui.RoleNegative})
 		}
 	}
-	detail += "\nCached rows grant no action authority. Inspect explicitly for live status; collect explicitly to recover publication."
-	return ui.Entry{ID: row.Handle(), Title: row.Handle(), Subtitle: m.Provider + " • " + state, Detail: detail, Actions: v.taskActions(row.Handle())}
+	limitations.Fields = append(limitations.Fields, ui.DetailField{Label: "Authority", Value: "Cached rows grant no action authority. Inspect explicitly for live status; collect explicitly to recover publication."})
+	groups = append(groups, limitations)
+	return ui.Entry{ID: row.Handle(), Title: row.Handle(), Cells: cells, Details: groups, Actions: v.taskActions(row.Handle())}
+}
+
+func admissionRole(value task.Admission) ui.DisplayRole {
+	switch value {
+	case task.AdmissionAdmitted:
+		return ui.RolePositive
+	case task.AdmissionNotAdmitted:
+		return ui.RoleNegative
+	case task.AdmissionUnknown:
+		return ui.RoleNeutral
+	}
+	return ui.RoleNeutral
+}
+
+func livenessRole(value task.Liveness) ui.DisplayRole {
+	switch value {
+	case task.LivenessRunning:
+		return ui.RoleWarning
+	case task.LivenessEnded, task.LivenessUndetermined:
+		return ui.RoleNeutral
+	}
+	return ui.RoleNeutral
+}
+
+func publicationRole(value task.Publication) ui.DisplayRole {
+	switch value {
+	case task.PublicationCommitted:
+		return ui.RolePositive
+	case task.PublicationRejected:
+		return ui.RoleNegative
+	case task.PublicationPending:
+		return ui.RoleWarning
+	case task.PublicationUnknown:
+		return ui.RoleNeutral
+	}
+	return ui.RoleNeutral
 }

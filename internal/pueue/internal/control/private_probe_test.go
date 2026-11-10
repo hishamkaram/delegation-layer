@@ -216,3 +216,30 @@ func TestPrivateClientReadyDoesNotCleanAfterVersionOverflows(t *testing.T) {
 		t.Fatalf("version overflow triggered successful-task cleanup: %v", err)
 	}
 }
+
+func TestPrivateStartRefusesMixedDaemonProvenance(t *testing.T) {
+	fixture := newPrivateSupervisorTestFixture(t)
+	original := bindPrivateForTest(t, fixture.stateRoot, fixture.clientPath, fixture.daemonPath)
+	before := readPrivateDaemonIdentity(t, fixture.stateRoot)
+	replacement := newPrivateSupervisorTestFixture(t)
+	mixed, err := NewClient(original.Binding(), original.options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ownPrivateMigrationTestClient(t, mixed)
+	mixed.runtimeBinding.DaemonExecutable = replacement.daemonPath
+	if err = original.Shutdown(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if err = original.WaitUnavailable(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	err = WithBootstrapLockContext(t.Context(), fixture.stateRoot, func(ctx context.Context) error { return mixed.startPrivate(ctx, fixture.stateRoot) })
+	if !errors.Is(err, ErrPrivateSupervisorMigrationRequired) {
+		t.Fatalf("mixed transport started with old daemon witness: %v", err)
+	}
+	if after := readPrivateDaemonIdentity(t, fixture.stateRoot); after != before {
+		t.Fatal("refused start changed daemon provenance")
+	}
+	assertPrivateDaemonStartCount(t, fixture.stateRoot, 1)
+}

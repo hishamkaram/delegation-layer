@@ -188,32 +188,29 @@ func (r ControlRuntime) probeSavedWith(ctx context.Context, store *taskdir.Store
 }
 
 func (r ControlRuntime) probeAdmission(ctx context.Context, store *taskdir.Store, pin taskdir.RootPin) (*pueue.Client, error) {
-	// This read selects transport only. The canonical probe revalidates the
-	// published generation and admission gate under its own shared lease.
-	published, found, readErr := pueue.ReadPrivateSupervisorBinding(store.Root)
-	needsPair := false
-	if readErr == nil && found {
-		missing, pairErr := pueue.PrivateSupervisorPairMissing(published)
-		needsPair = pairErr == nil && (missing || pueue.IsLegacyStateSupervisorClient(store.Root, published))
-	}
-	var client *pueue.Client
-	var err error
-	if needsPair {
-		clientExecutable, daemonExecutable, selectionErr := resolveCompatiblePrivatePair(ctx, r.Lookup)
-		if selectionErr != nil && !task.AllErrorCauses(selectionErr, func(cause error) bool { return errors.Is(cause, pueue.ErrCompatiblePairUnavailable) }) {
-			return nil, selectionErr
-		}
-		if selectionErr == nil {
-			client, err = ProbePrivateAdmissionSupervisor(ctx, store, clientExecutable, daemonExecutable, r.Options)
-		}
-	}
-	if err == nil && client == nil {
-		// Preserve existing cold/refused/incomplete routing and wrapped faults;
-		// an optional transport never authorizes a transition by itself.
-		client, err = ProbePrivateAdmissionSupervisor(ctx, store, "", "", r.Options)
-	}
+	probe, err := probePrivateAdmissionWithLookup(ctx, r.Lookup, store, r.Options)
 	if err != nil {
-		return client, err
+		return probe.client, err
 	}
-	return client, checkInfrastructureTarget(ctx, store, pin)
+	return probe.client, checkInfrastructureTarget(ctx, store, pin)
+}
+
+// ObserveAdmission reads the same canonical readiness used before submission.
+// It never contacts the resident, repairs scheduling, or changes task evidence.
+func (r ControlRuntime) ObserveAdmission(ctx context.Context, store *taskdir.Store) (AdmissionReadiness, error) {
+	if ctx == nil || store == nil {
+		return AdmissionNotReady, os.ErrInvalid
+	}
+	pin, err := store.PinRootContext(ctx)
+	if err != nil {
+		return AdmissionNotReady, err
+	}
+	probe, err := probePrivateAdmissionWithLookup(ctx, r.Lookup, store, r.Options)
+	if err != nil {
+		return AdmissionNotReady, err
+	}
+	if err = errors.Join(probe.client.Close(), checkInfrastructureTarget(ctx, store, pin)); err != nil {
+		return AdmissionNotReady, err
+	}
+	return probe.readiness, nil
 }

@@ -1,5 +1,6 @@
 """Private CLI upgrade workflow."""
 
+from contextlib import ExitStack
 from scripts.acceptance.private_cli.configuration import COLLECT_TIMEOUT_SECONDS
 from scripts.acceptance.private_cli.configuration import COLLECT_WATCH
 from scripts.acceptance.directories.operations import DirectoryOwner
@@ -16,6 +17,7 @@ from scripts.acceptance.private_cli.installation import install_package_layout
 from scripts.acceptance.private_cli.installation import install_supervisor_pair
 import json
 import os
+import stat
 from scripts.acceptance.private_cli.supervisor import predecessor_closed
 from scripts.acceptance.private_cli.supervisor import capture_predecessor_shutdown_target
 from scripts.acceptance.private_cli.capacity.ownership import prove_lifetime_owner_cohort
@@ -212,6 +214,10 @@ def run_supervisor_upgrade_recovery(
         remove_old_package=remove_old_package,
         state=state,
         workspace=workspace,
+        gate=gate,
+        waiter_directory=waiter_directory,
+        lease_nonce=lease_nonce,
+        evidence=evidence,
     )
     finish_upgrade_recovery(
         attempted_task_ids=attempted_task_ids,
@@ -483,18 +489,14 @@ def interrupt_pending_migration(
 
 
 def record_historical_package(
-    *, attempted_task_ids,
-    brief,
+    *, brief,
     capture_root,
-    client,
     collect,
-    config,
     dispatch,
     env,
     old_delegate,
     old_libexec,
     receipts,
-    remove_old_package,
     state,
     workspace,
 ):
@@ -514,12 +516,114 @@ def record_historical_package(
         "historical task did not retain installation-bound metadata",
     )
     history = snapshot(historical_directory)
-    shutdown_private_supervisor(
-        client, config, env, state=state, task_ids=tuple(attempted_task_ids), capture_root=capture_root
-    )
-    remove_old_package()
-    require(not old_libexec.exists(), "old package was not removed")
     return legacy_binding, historical, historical_directory, history
+
+
+def _warm_authority_records(state):
+    """Read provenance, including the absence of optional completed history."""
+    with private_fixture_transition(state) as supervisor:
+        records = {}
+        for name in ("supervisor.identity.json", "daemon.identity.json", "migration-history.json"):
+            path = supervisor / name
+            require(not path.is_symlink() and (not path.exists() or path.is_file()),
+                    "warm authority record is not a regular file: " + name)
+            records[name] = path.read_bytes() if path.exists() else None
+        return records
+
+
+def _upgrade_live_leases(state, responses, waiter_directory, lease_nonce):
+    def ready():
+        specifications = capacity_lease_specifications(state, responses, waiter_directory, lease_nonce)
+        if len(specifications) == len(responses) and all(item["path"].exists() for item in specifications):
+            return specifications
+        return False
+
+    return wait_until(ready, timeout=45, description="live package-upgrade provider leases")
+
+
+def _require_one_warm_queue_identity(state, response, client, config, env, capture_root):
+    task_id = response["task_id"]
+    receipt = read_json(state / "tasks" / task_id / "supervisor.ref.json")
+    require(isinstance(receipt, dict) and receipt.get("task_id") == task_id
+            and isinstance(receipt.get("label"), str) and bool(receipt["label"])
+            and type(receipt.get("numeric_task_id")) is int and receipt["numeric_task_id"] >= 0,
+            "warm dispatch has no exact durable supervisor receipt")
+    rows = pueue_snapshot(client, config, env, capture_root=capture_root).get("tasks")
+    require(isinstance(rows, dict), "warm dispatch queue snapshot is unavailable")
+    matches = [row for row in rows.values() if isinstance(row, dict) and row.get("label") == receipt.get("label")]
+    require(len(matches) == 1 and type(matches[0].get("id")) is int
+            and matches[0]["id"] == receipt["numeric_task_id"]
+            and pueue_state(matches[0]) == "Running",
+            "warm dispatch did not retain exactly one matching running queue identity")
+
+
+def prove_live_package_removal(
+    *, brief, capture_root, client, collect, config, delegate, dispatch, env, gate,
+    historical_directory, history, lease_nonce, old_delegate, old_libexec, receipts,
+    remove_old_package, state, waiter_directory,
+):
+    """Remove the old installation while its daemon and an admitted task stay live."""
+    waiting_brief = brief.with_name("upgrade-live-waiting.md")
+    waiting_brief.write_text("DELEGATE_PRIVATE_UPGRADE_WAIT\n")
+    with ExitStack() as cleanup:
+        release = LockedReleaseGate.acquire(gate)
+        cleanup.callback(release.release)
+        gate_identity = os.stat(gate, follow_symlinks=False)
+        original = dispatch(old_delegate, "upgrade-live-original", waiting_brief)
+        specifications = _upgrade_live_leases(state, [original], waiter_directory, lease_nonce)
+        original_cohort = LiveFIFOLeaseCohort.acquire(specifications, lease_nonce)
+        cleanup.callback(original_cohort.close)
+        original_directory = state / "tasks" / original["task_id"]
+        inputs = {name: (original_directory / name).read_bytes()
+                  for name in ("task.json", "meta.json", "submit.json", "supervisor.ref.json")}
+        authority = _warm_authority_records(state)
+        remove_old_package()
+        require(not old_libexec.exists() and not old_delegate.exists(), "live old package was not removed")
+        original_cohort.assert_live()
+        # Ordinary dispatch must perform the first recovery, without a prior
+        # ensure-owner preparing the missing helper or runtime receipt for it.
+        fresh = dispatch(delegate, "upgrade-live-fresh", waiting_brief)
+        fresh_specifications = _upgrade_live_leases(state, [fresh], waiter_directory, lease_nonce)
+        fresh_cohort = LiveFIFOLeaseCohort.acquire(fresh_specifications, lease_nonce)
+        cleanup.callback(fresh_cohort.close)
+        original_cohort.assert_live()
+        fresh_cohort.assert_live()
+        scheduling_path = state / ".supervisor" / "ordinary-scheduling.json"
+        scheduling_before = scheduling_path.read_bytes()
+        scheduling = read_json(scheduling_path)
+        runtime = scheduling.get("supervisor") if isinstance(scheduling, dict) else None
+        require(isinstance(runtime, dict) and runtime.get("client_executable") == str(client)
+                and runtime.get("daemon_executable") == str(client.parent / "pueued"),
+                "live dispatch did not select the current installed pair")
+        prepared = run_json(
+            delegate, env, ["--root", str(state), "supervisor", "ensure-owner", "--json"],
+            receipt=receipts / "upgrade-live-ensure-owner.json", capture_root=capture_root, capture_response=True,
+        )
+        require(prepared.get("status") == "owner_ready", "removed-package owner did not become ready")
+        require(scheduling_path.read_bytes() == scheduling_before,
+                "already-ready ensure-owner changed the runtime scheduling receipt")
+        original_cohort.assert_live()
+        fresh_cohort.assert_live()
+        _require_one_warm_queue_identity(state, fresh, client, config, env, capture_root)
+        require(_warm_authority_records(state) == authority, "warm repair changed daemon provenance or history")
+        require(snapshot(historical_directory) == history, "warm repair changed committed task history")
+        release.release()
+        collect(fresh, "upgrade-live-fresh")
+        collect(original, "upgrade-live-original")
+        require(all((original_directory / name).read_bytes() == data for name, data in inputs.items()),
+                "warm repair changed the original active task's immutable inputs")
+        require(_warm_authority_records(state) == authority, "warm task completion changed daemon provenance or history")
+        require(snapshot(historical_directory) == history, "warm task completion changed committed task history")
+    visible = os.stat(gate, follow_symlinks=False)
+    require(stat.S_ISREG(visible.st_mode) and visible.st_uid == os.getuid()
+            and (visible.st_dev, visible.st_ino) == (gate_identity.st_dev, gate_identity.st_ino),
+            "warm release gate was replaced before owned cleanup")
+    gate.unlink()
+    return {"original_task": original["task_id"], "fresh_task": fresh["task_id"],
+            "old_install_removed_while_active": True, "active_task_survived": True,
+            "runtime_receipt_refreshed": True, "first_recovery_by_dispatch": True,
+            "one_fresh_queue_identity": True,
+            "published_provenance_and_history_preserved": True}
 
 
 def finish_upgrade_recovery(
@@ -630,6 +734,10 @@ def prepare_upgrade_history(
     remove_old_package,
     state,
     workspace,
+    gate,
+    waiter_directory,
+    lease_nonce,
+    evidence,
 ):
     prove_warm_installation(
         attempted_task_ids=attempted_task_ids,
@@ -646,19 +754,25 @@ def prepare_upgrade_history(
         state=state,
     )
     legacy_binding, historical, historical_directory, history = record_historical_package(
-        attempted_task_ids=attempted_task_ids,
         brief=brief,
         capture_root=capture_root,
-        client=client,
         collect=collect,
-        config=config,
         dispatch=dispatch,
         env=env,
         old_delegate=old_delegate,
         old_libexec=old_libexec,
         receipts=receipts,
-        remove_old_package=remove_old_package,
         state=state,
         workspace=workspace,
+    )
+    evidence["live_package_removal"] = prove_live_package_removal(
+        brief=brief, capture_root=capture_root, client=client, collect=collect, config=config,
+        delegate=delegate, dispatch=dispatch, env=env, gate=gate, historical_directory=historical_directory,
+        history=history, lease_nonce=lease_nonce, old_delegate=old_delegate, old_libexec=old_libexec,
+        receipts=receipts, remove_old_package=remove_old_package, state=state, waiter_directory=waiter_directory,
+    )
+    # Retain the independent stopped-daemon migration case after the live proof.
+    shutdown_private_supervisor(
+        client, config, env, state=state, task_ids=tuple(attempted_task_ids), capture_root=capture_root
     )
     return legacy_binding, historical, historical_directory, history

@@ -71,12 +71,52 @@ func (a Action) Prepare(values []string) (app.Arguments, error) {
 type Entry struct {
 	ID, Title, Subtitle, Detail string
 	Actions                     []Action
+	Cells                       []Cell
+	Details                     []DetailGroup
 }
 
 type Page struct {
 	Entries       []Entry
 	Actions       []Action
 	Summary, Next string
+	Columns       []Column
+	Strip         string
+	Coverage      string
+}
+
+// Column and Cell describe display values, never task identity or authority.
+// Table entries have one cell per column; the first column keeps identity visible.
+type Column struct {
+	Title string
+	Width int
+}
+
+type Cell struct {
+	Text  string
+	Fault bool
+	Role  DisplayRole
+}
+
+// DisplayRole is adapter-supplied meaning within one displayed dimension.
+// Rendering never infers lifecycle meaning from arbitrary text.
+type DisplayRole uint8
+
+const (
+	RoleNeutral DisplayRole = iota
+	RolePositive
+	RoleWarning
+	RoleNegative
+)
+
+// DetailGroup is the single structured source for task detail presentations.
+type DetailGroup struct {
+	Title  string
+	Fields []DetailField
+}
+
+type DetailField struct {
+	Label, Value string
+	Role         DisplayRole
 }
 
 type PageRequest struct{ Search, After string }

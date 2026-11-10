@@ -12,6 +12,7 @@ import (
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/hishamkaram/delegation-layer/internal/tui/presentation"
 	"github.com/hishamkaram/delegation-layer/internal/tui/session"
 	"github.com/hishamkaram/delegation-layer/internal/tui/terminal"
 	"github.com/hishamkaram/delegation-layer/internal/tui/ui"
@@ -22,6 +23,7 @@ type (
 		generation uint64
 		section    int
 		page       ui.Page
+		search     string
 		err        error
 	}
 	actionMsg struct {
@@ -71,9 +73,13 @@ type model struct {
 	cancelLoad             context.CancelFunc
 	search                 textinput.Model
 	searching              bool
+	appliedSearch          string
+	pageSearch             string
+	tableOffset            int
 	after                  string
 	cursors                []string
 	detail                 bool
+	detailEntry            *ui.Entry
 	viewport               viewport.Model
 	form                   *formState
 	actions                []ui.Action
@@ -93,7 +99,9 @@ func newModel(sections []ui.Section, root, cwd, version string, tracker *session
 	search := textinput.New()
 	search.Placeholder = "Search metadata across history"
 	search.CharLimit = 1024
-	return &model{sections: sections, root: root, cwd: cwd, version: version, tracker: tracker, publish: publish, search: search, viewport: viewport.New(), busy: make(map[string]bool)}
+	detailViewport := viewport.New()
+	detailViewport.SoftWrap = true
+	return &model{sections: sections, root: root, cwd: cwd, version: version, tracker: tracker, publish: publish, search: search, viewport: detailViewport, busy: make(map[string]bool)}
 }
 
 func (m *model) Init() tea.Cmd { return func() tea.Msg { return initMsg{} } }
@@ -107,6 +115,7 @@ func (m *model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	default:
 		cmd = m.workerMessage(message)
 	}
+	m.sizeViewport()
 	if m.quitting && len(m.tracker.Pending()) == 0 {
 		return m, tea.Quit
 	}
@@ -169,9 +178,9 @@ func (m *model) addDiagnostic(msg diagnosticMsg) {
 
 func (m *model) resize(width, height int) {
 	m.width, m.height = width, height
-	m.search.SetWidth(max(10, width-5))
-	m.viewport.SetWidth(max(10, width-8))
-	m.viewport.SetHeight(max(3, height-9))
+	m.search.SetWidth(max(1, m.geometry().ContentWidth-2))
+	m.tableOffset = presentation.ClampOffset(m.page.Columns, m.geometry().ListWidth, m.tableOffset)
+	m.sizeViewport()
 }
 
 func (m *model) beginQuit() {
@@ -200,32 +209,57 @@ func (m *model) selectSection(index int) {
 	}
 	m.navigationEpoch++
 	m.selected = index
+	m.tableOffset = 0
 	m.cursor = 0
 	m.after = ""
 	m.cursors = nil
-	m.detail = false
+	m.closeDetail()
 	m.problem = ""
 	m.generation++
 	m.loading = false
 	m.page = ui.Page{}
+	m.pageSearch = ""
 	m.load()
 }
 
 func (m *model) openDetail() {
 	m.navigationEpoch++
 	if entry, ok := m.selectedEntry(); ok {
-		m.detail = true
-		m.message = ""
-		m.viewport.SetContent(terminal.Safe(entry.Detail))
-		m.viewport.GotoTop()
+		m.showDetail(&entry, "", presentation.DetailText(entry))
 	}
+}
+
+// showDetail owns the displayed snapshot and its optional row-action context.
+// Refreshes can replace page rows, but cannot change an open detail's targets.
+func (m *model) showDetail(entry *ui.Entry, message, content string) {
+	m.detailEntry = nil
+	if entry != nil {
+		snapshot := *entry
+		snapshot.Actions = append([]ui.Action(nil), entry.Actions...)
+		m.detailEntry = &snapshot
+	}
+	m.detail = true
+	m.message = message
+	m.sizeViewport()
+	m.viewport.SetContent(content)
+	m.viewport.GotoTop()
+}
+
+func (m *model) closeDetail() {
+	m.detail = false
+	m.detailEntry = nil
+	m.message = ""
 }
 
 func (m *model) openActions() {
 	m.navigationEpoch++
 	m.actions = append([]ui.Action(nil), m.sections[m.selected].Actions...)
 	m.actions = append(m.actions, m.page.Actions...)
-	if entry, ok := m.selectedEntry(); ok && (!m.detail || m.message == "") {
+	if m.detail {
+		if m.detailEntry != nil {
+			m.actions = append(m.actions, m.detailEntry.Actions...)
+		}
+	} else if entry, ok := m.selectedEntry(); ok {
 		m.actions = append(m.actions, entry.Actions...)
 	}
 	m.actionCursor = 0
@@ -256,15 +290,12 @@ func (m *model) actionDone(msg actionMsg) {
 	if msg.epoch != m.navigationEpoch || msg.section != m.selected || m.form != nil || m.actionMenu || m.searching || m.showHelp {
 		return
 	}
-	m.message = body
 	if msg.feedback.Err != nil {
 		m.problem = msg.feedback.Err.Error()
 	} else {
 		m.problem = ""
 	}
-	m.viewport.SetContent(terminal.Safe(m.message))
-	m.viewport.GotoTop()
-	m.detail = true
+	m.showDetail(nil, body, terminal.Safe(body))
 }
 
 func (m *model) applyDisposition(msg actionMsg) {

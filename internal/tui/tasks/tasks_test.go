@@ -109,7 +109,7 @@ func TestTaskContinuationDoesNotBroadenPermissionOrLoseSuccessorIdentity(t *test
 func TestTaskUnavailableHistoryKeepsExactIDActionsWithoutDuplicates(t *testing.T) {
 	section := NewSection(nil, app.Arguments{Root: t.TempDir()}, t.TempDir(), nil)
 	page, err := section.Load(t.Context(), ui.PageRequest{})
-	if err != nil || !strings.Contains(page.Summary, "Exact-ID actions remain available") || len(page.Entries) != 0 || len(page.Actions) != 0 {
+	if err != nil || !strings.Contains(page.Summary, "Exact-ID actions remain available") || len(page.Entries) != 0 || len(page.Actions) != 0 || len(page.Columns) != 0 {
 		t.Fatalf("degraded history misrepresented global results: %+v, %v", page, err)
 	}
 	found := map[string]bool{}
@@ -147,10 +147,18 @@ func TestTaskEntryPreservesIndependentEvidenceAndUnsupportedRemoteActions(t *tes
 		Observation: &history.Observation{At: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), Admission: task.AdmissionAdmitted, Liveness: task.LivenessUndetermined, Publication: task.PublicationCommitted, Source: "origin-cache"},
 	}
 	entry := v.entry(row)
-	for _, wanted := range []string{"Created: unknown", "Admission: admitted", "Liveness: undetermined", "Publication: committed", "origin-cache"} {
-		if !strings.Contains(entry.Detail, wanted) {
-			t.Fatalf("lost evidence %q: %s", wanted, entry.Detail)
+	want := map[string]string{"Identity/Created": "unknown", "Evidence/Admission": "admitted", "Evidence/Liveness": "undetermined", "Evidence/Publication": "committed", "Evidence/Source": "origin-cache"}
+	for field, value := range want {
+		if got := entryFields(entry)[field]; got != value {
+			t.Fatalf("lost evidence %s: got %q, want %q", field, got, value)
 		}
+	}
+	wantCells := []ui.Cell{{Text: row.Handle()}, {Text: "fixture:test"}, {Text: "admitted", Role: ui.RolePositive}, {Text: "undetermined"}, {Text: "committed", Role: ui.RolePositive}, {Text: "unknown"}}
+	if !slices.Equal(entry.Cells, wantCells) {
+		t.Fatalf("table merged independent evidence: %+v", entry.Cells)
+	}
+	if entry.ID != row.Handle() || entryFields(entry)["Identity/Task"] != row.Handle() || entry.Detail != "" {
+		t.Fatalf("task identity or structured detail authority changed: %+v", entry)
 	}
 	for _, action := range entry.Actions {
 		if (action.ID == "task-continue" || action.ID == "task-recheck") && action.Disabled == "" {
@@ -159,6 +167,107 @@ func TestTaskEntryPreservesIndependentEvidenceAndUnsupportedRemoteActions(t *tes
 		if action.ID == "task-status" && action.Kind != session.Effect {
 			t.Fatal("write-capable Inspect was classified as a cancellable passive read")
 		}
+	}
+}
+
+func entryFields(entry ui.Entry) map[string]string {
+	fields := map[string]string{}
+	for _, group := range entry.Details {
+		for _, field := range group.Fields {
+			fields[group.Title+"/"+field.Label] = field.Value
+		}
+	}
+	return fields
+}
+
+func TestTaskEntryDistinguishesAbsentObservationAndRetainedFaultedEvidence(t *testing.T) {
+	v := views{}
+	row := history.Row{Identity: history.Identity{Kind: taskdir.IndexLocal, TaskID: strings.Repeat("a", 32)}, Metadata: taskdir.IndexMetadata{
+		Provider: "claude:print", Model: "selected", Effort: "high", Cwd: "/chosen/work", WorkspaceID: "workspace", TeamID: "team", MemberID: "member",
+		CreatedAtKnown: true, CreatedAt: time.Date(2026, 1, 2, 10, 0, 0, 0, time.FixedZone("fixture", 7*60*60)),
+	}}
+	entry := v.entry(row)
+	for _, cell := range entry.Cells[2:5] {
+		if cell.Text != "not observed" || cell.Fault || cell.Role != ui.RoleNeutral {
+			t.Fatalf("missing observation became an observed enum: %+v", entry.Cells)
+		}
+	}
+	if entry.Cells[5].Text != "2026-01-02T03:00:00Z" || entryFields(entry)["Identity/Created"] != "2026-01-02T03:00:00Z" {
+		t.Fatalf("known creation instant was not retained in UTC: %+v", entry)
+	}
+	for field, value := range map[string]string{"Provider": "claude:print", "Requested model": "selected", "Requested effort": "high", "Working directory": "/chosen/work", "Workspace": "workspace", "Team/member": "team/member"} {
+		if got := entryFields(entry)["Request/context/"+field]; got != value {
+			t.Fatalf("lost request/context %s: got %q want %q", field, got, value)
+		}
+	}
+	row.Observation = &history.Observation{Admission: task.AdmissionUnknown, Liveness: task.LivenessUndetermined, Publication: task.PublicationPending, Status: "blocked", FailureCode: "fixture-failure", Source: "previous-evidence"}
+	row.Fault = "metadata read unavailable"
+	row.ObservationFault = "visible passive refresh unavailable; previous evidence retained"
+	entry = v.entry(row)
+	wantCells := []ui.Cell{{Text: row.Handle(), Fault: true}, {Text: "claude:print"}, {Text: "unknown", Fault: true}, {Text: "undetermined", Fault: true}, {Text: "pending", Fault: true, Role: ui.RoleWarning}, {Text: "2026-01-02T03:00:00Z"}}
+	if !slices.Equal(entry.Cells, wantCells) {
+		t.Fatalf("retained observation was hidden or presented as fresh: %+v", entry.Cells)
+	}
+	fields := entryFields(entry)
+	for field, want := range map[string]string{"Evidence/Status": "blocked", "Evidence/Failure code": "fixture-failure", "Evidence/Source": "previous-evidence"} {
+		if fields[field] != want {
+			t.Fatalf("retained evidence lost %s: %+v", field, fields)
+		}
+	}
+	if !strings.Contains(fields["Faults/limitations/Authority"], "no action authority") {
+		t.Fatalf("retained evidence lost qualification: %+v", fields)
+	}
+	if got := entryFaults(entry); !slices.Equal(got, []string{row.Fault, row.ObservationFault}) {
+		t.Fatalf("retained entry faults lost: %+v", got)
+	}
+}
+
+func entryFaults(entry ui.Entry) []string {
+	var faults []string
+	for _, group := range entry.Details {
+		for _, field := range group.Fields {
+			if field.Label == "Fault" {
+				faults = append(faults, field.Value)
+			}
+		}
+	}
+	return faults
+}
+
+func TestTaskDisplayRolesKeepLifecycleDimensionsIndependent(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		admission   task.Admission
+		liveness    task.Liveness
+		publication task.Publication
+		roles       [3]ui.DisplayRole
+	}{
+		{"unknown", task.AdmissionUnknown, task.LivenessUndetermined, task.PublicationUnknown, [3]ui.DisplayRole{ui.RoleNeutral, ui.RoleNeutral, ui.RoleNeutral}},
+		{"active", task.AdmissionAdmitted, task.LivenessRunning, task.PublicationPending, [3]ui.DisplayRole{ui.RolePositive, ui.RoleWarning, ui.RoleWarning}},
+		{"ended committed", task.AdmissionAdmitted, task.LivenessEnded, task.PublicationCommitted, [3]ui.DisplayRole{ui.RolePositive, ui.RoleNeutral, ui.RolePositive}},
+		{"rejected", task.AdmissionNotAdmitted, task.LivenessEnded, task.PublicationRejected, [3]ui.DisplayRole{ui.RoleNegative, ui.RoleNeutral, ui.RoleNegative}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			row := history.Row{Identity: history.Identity{Kind: taskdir.IndexLocal, TaskID: strings.Repeat("a", 32)}, Metadata: taskdir.IndexMetadata{Provider: "committed"}, Observation: &history.Observation{Admission: tc.admission, Liveness: tc.liveness, Publication: tc.publication}}
+			entry := (views{}).entry(row)
+			if entry.Cells[1].Role != ui.RoleNeutral {
+				t.Fatal("arbitrary provider name received lifecycle meaning")
+			}
+			groupIndex := slices.IndexFunc(entry.Details, func(group ui.DetailGroup) bool { return group.Title == "Evidence" })
+			if groupIndex < 0 {
+				t.Fatal("evidence group missing")
+			}
+			evidence := entry.Details[groupIndex].Fields
+			if len(evidence) < 3 {
+				t.Fatal("lifecycle evidence fields missing")
+			}
+			for i, role := range tc.roles {
+				cell := entry.Cells[i+2]
+				if cell.Role != role || evidence[i].Role != role || evidence[i].Value != cell.Text {
+					t.Fatalf("dimension %d diverged across table and detail: cell=%+v detail=%+v want role=%d", i, cell, evidence[i], role)
+				}
+			}
+		})
 	}
 }
 
@@ -263,6 +372,18 @@ func TestTaskSearchSelectsDeclaredHistoryOrder(t *testing.T) {
 	for _, text := range []string{"order:", "order:recent", "order:created order:observed"} {
 		if _, err := searchQuery(text); err == nil {
 			t.Fatalf("ambiguous history order accepted: %q", text)
+		}
+	}
+}
+
+func TestTaskCoverageKeepsIncompleteDiscoveryAndDatedOrderExplicit(t *testing.T) {
+	strip, detail := coverage(history.Progress{Incomplete: true, Indexed: 12, Observed: 8, Unobserved: 3, Faults: 1}, history.OrderObserved)
+	if strings.Contains(strip, "\n") || !strings.HasPrefix(strip, "Dated • discovery incomplete") || !strings.Contains(strip, "12 indexed • 8 observed • 3 unobserved • 1 faults") || !strings.Contains(strip, "order:observed") {
+		t.Fatalf("compact coverage lost qualification or counts: %q", strip)
+	}
+	for _, want := range []string{"last observed", "dated evidence, not creation time", "recent among indexed records", "not current global status"} {
+		if !strings.Contains(detail, want) {
+			t.Fatalf("coverage omitted %q: %s", want, detail)
 		}
 	}
 }

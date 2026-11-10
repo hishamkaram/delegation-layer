@@ -3,6 +3,7 @@ package installation
 import (
 	"errors"
 	"os"
+	"os/exec"
 
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
 	"github.com/hishamkaram/delegation-layer/internal/task"
@@ -34,6 +35,6 @@ func UnavailableBundledPair(err error) bool {
 
 func missingBundledPairCauses(err error) bool {
 	return errors.Is(err, os.ErrNotExist) && task.AllErrorCauses(err, func(cause error) bool {
-		return errors.Is(cause, os.ErrNotExist) || errors.Is(cause, pueue.ErrConfiguration)
+		return errors.Is(cause, os.ErrNotExist) || errors.Is(cause, exec.ErrNotFound) || errors.Is(cause, pueue.ErrConfiguration)
 	})
 }

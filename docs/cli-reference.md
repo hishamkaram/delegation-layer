@@ -301,6 +301,35 @@ See [required options](../skills/agent-integration/references/command-reference.
 The default supervisor is private to the state root. Normal dispatch adopts a
 reachable compatible generation and recovers the saved generation when its
 endpoint is absent and its recorded installed pair remains available.
+When an upgrade removes the old installed Pueue pair but its private daemon is
+still alive, admission selects a compatible current installed transport and the
+resident refreshes scheduling/capability evidence for that transport. This does
+not restart the daemon or rewrite its launch witness or historical task records.
+The saved executable paths remain provenance, not a request to execute deleted
+files. Repeated admission reuses the refreshed evidence. If the serving owner's
+installed helper was also removed, ordinary admission and `ensure-owner` use the
+existing serving-release/replacement lifecycle from an outside invocation. The
+old owner retains its daemon Wait custody; this does not cancel active work.
+Busy, uncertain or concurrent handoffs can refuse safely. Inspect that same
+root before another explicit attempt; do not replay a created or uncertain task.
+A nested invocation cannot replace this owner: perform recovery from a prepared
+persistent user context outside task-owned scope.
+
+Passive `supervisor status` can report `state: "unavailable"`,
+`reason_code: "scheduling_refresh_required"` and
+`next_action: "run_supervisor_ensure_owner"`. Run the current installation from
+a prepared persistent user context outside a task-owned scope:
+
+```sh
+delegate supervisor ensure-owner --json
+```
+
+Keep the same execution root (and its explicit `--root` if one was selected).
+Do not edit saved executable paths or downgrade the scheduler database to repair
+this condition. If the endpoint is stopped or cannot be verified, follow the
+reported migration/refusal guidance instead. A replacement transport cannot
+start a daemon while publishing the old daemon's launch witness.
+
 An interrupted historical restart keeps its recorded target. If that target
 cannot be verified or is not ready, recovery and explicit migration refuse
 while preserving the record. This ambiguous legacy state has no automatic
@@ -336,7 +365,13 @@ older inspection binding, whether that exact legacy endpoint is reachable, and
 whether any queued or running work prevents migration. It does not start or
 stop a supervisor. A completed migration reports `state: "migrated"` with
 `migration_phase: "complete"`; compatible live adoption reports `state: "ready"`
-with `migration_phase: "adopted"`. Both report `next_action: "none"`. The retained
+with `migration_phase: "adopted"`. Both report `next_action: "none"` only when
+current admission readiness is also verified. Explicit migration completes
+ordinary scheduling preparation before reporting readiness. If that preparation
+fails after migration has committed, the response retains `state: "migrated"`
+and `migration_phase: "complete"` alongside an error and `stop_and_report`.
+A completed `migration_phase` remains historical evidence even when current
+readiness requires repair. The retained
 legacy journal is historical evidence, not pending work. An inspection journal still bound to an external Pueue
 configuration reports `state: "external"` and
 `next_action: "run_supervisor_migrate"`. The repair changes Delegate's

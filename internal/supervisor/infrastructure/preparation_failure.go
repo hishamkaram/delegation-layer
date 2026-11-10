@@ -49,6 +49,7 @@ func (c PreparationCauses) Validate() error {
 type PreparationReason string
 
 const (
+	PreparationReasonSchedulingRefreshRequired    PreparationReason = "scheduling_refresh_required"
 	PreparationReasonIdentityConflict             PreparationReason = "identity_conflict"
 	PreparationReasonTransitionPending            PreparationReason = "transition_pending"
 	PreparationReasonPublishedPairUnavailableLive PreparationReason = "published_pair_unavailable_live"
@@ -63,7 +64,7 @@ const (
 
 func (r PreparationReason) Validate() error {
 	switch r {
-	case "", PreparationReasonIdentityConflict, PreparationReasonTransitionPending,
+	case "", PreparationReasonSchedulingRefreshRequired, PreparationReasonIdentityConflict, PreparationReasonTransitionPending,
 		PreparationReasonPublishedPairUnavailableLive, PreparationReasonActiveWork,
 		PreparationReasonStateUnreadable, PreparationReasonPredecessorPairUnavailable,
 		PreparationReasonObservationFailed, PreparationReasonEndpointOwnerUnknown,

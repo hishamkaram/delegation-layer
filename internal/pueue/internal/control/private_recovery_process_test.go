@@ -312,7 +312,12 @@ func TestStartPrivateRepublishesIdentityAfterGracefulShutdown(t *testing.T) {
 	}
 	ownPrivateMigrationTestClient(t, legacy)
 	legacyIdentity := readPrivateDaemonIdentity(t, stateRoot)
-	current, err := BindPrivate(t.Context(), clientPath, currentDaemonPath, stateRoot, options)
+	var current *Client
+	err = WithBootstrapLockContext(t.Context(), stateRoot, func(ctx context.Context) error {
+		var prepareErr error
+		current, prepareErr = PreparePrivateForMigrationWithLock(ctx, clientPath, currentDaemonPath, stateRoot, options)
+		return prepareErr
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -329,9 +334,12 @@ func TestStartPrivateRepublishesIdentityAfterGracefulShutdown(t *testing.T) {
 	if err = WithBootstrapLockContext(t.Context(), stateRoot, func(ctx context.Context) error {
 		return current.StartPrivate(ctx, stateRoot)
 	}); err != nil {
-		t.Fatal(err)
+		t.Fatalf("restart failed: %v binding=%+v runtime=%+v", err, current.Binding(), current.RuntimeBinding())
 	}
 	want := privateDaemonIdentityForBinding(current.Binding())
+	if want.Executable != currentDaemonPath {
+		t.Fatalf("migration preparation retained old daemon provenance: %+v", want)
+	}
 	if got := readPrivateDaemonIdentity(t, stateRoot); got != want {
 		t.Fatalf("migration did not atomically repin current identity: got=%+v want=%+v", got, want)
 	}

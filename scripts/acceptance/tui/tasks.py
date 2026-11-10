@@ -53,9 +53,9 @@ def _wait_path(path: Path, terminal: Terminal, timeout: float = 30) -> None:
 class Keyboard:
     """Own one terminal until the shared process registry observes exact Wait."""
 
-    def __init__(self, proof: TaskProof, root: Path, name: str):
+    def __init__(self, proof: TaskProof, root: Path, name: str, *, width: int = 140, height: int = 60):
         self.terminal = Terminal()
-        self.terminal.resize(140, 60)
+        self.terminal.resize(width, height)
         self.process: Process | None = None
         try:
             self.process = proof.book.start(name, [str(proof.binary), "tui", "--root", str(root),
@@ -216,7 +216,79 @@ class TaskProof:
             return [{"case": "ui-real-dispatch-double-enter-result", "task_id": first,
                      "provider_launches": 1, "canonical_result": "committed"},
                     {"case": "ui-real-continuation", "task_id": successor,
-                     "predecessor": first, "canonical_result": "committed", "predecessor_unchanged": True}]
+                     "predecessor": first, "canonical_result": "committed", "predecessor_unchanged": True},
+                    self.history_layout_case(first, successor)]
+        finally:
+            keyboard.close()
+
+    def history_layout_case(self, task_id: str, successor: str) -> dict[str, object]:
+        # Both committed tasks predate this TUI, so its first discovery pass can
+        # find them without depending on the periodic scan's timing.
+        before = {identity: task_snapshot(self.root, identity) for identity in (task_id, successor)}
+        launches = sorted(entry.name for entry in (self.runtime / "launches").iterdir())
+        for width, height in ((170, 40), (120, 35), (80, 24)):
+            self._history_table_case(task_id, width, height)
+        require(all(task_snapshot(self.root, identity) == evidence for identity, evidence in before.items()),
+                "passive history layout changed committed task evidence")
+        require(sorted(entry.name for entry in (self.runtime / "launches").iterdir()) == launches,
+                "passive history layout launched another provider turn")
+        return {"case": "ui-history-table-responsive", "task_id": task_id,
+                "initial_sizes": [[170, 40], [120, 35], [80, 24]],
+                "kernel_resize_case": "navigate-resize-paste",
+                "full_identity_retained": True, "task_evidence_unchanged": True,
+                "additional_provider_turns": 0, "termios_restored": True}
+
+    def _history_table_case(self, task_id: str, width: int, height: int) -> None:
+        # Keyboard borrows a PTY without claiming its controlling session.
+        # Set size before launch; kernel resize delivery is proved separately
+        # by navigate-resize-paste's existing controlling-terminal fixture.
+        keyboard = Keyboard(self, self.root, "tui-history-" + str(width), width=width, height=height)
+        terminal = keyboard.terminal
+        try:
+            terminal.wait_text("Task ID")
+            terminal.wait_text("Admission")
+            terminal.wait_text(task_id[:11])
+            start = len(terminal.data)
+            terminal.send(b"/" + task_id.encode() + b"\r")
+            # Search's unchanged prefix may be retained by the diff renderer.
+            # This suffix identifies the applied header, not an editor value
+            # or the previous-results header's "(/ edit request)" caption.
+            terminal.wait_text(task_id + "  (/ edit)", after=start)
+            # These initial-size checks intentionally include the fresh
+            # terminal's first table frame; task identity readback below uses
+            # explicit input/repaint barriers.
+            terminal.wait_text("Dated")
+            if width >= 155:
+                start = len(terminal.data)
+                terminal.send(b"?")
+                terminal.wait_text("Delegate terminal workbench", after=start)
+                # The diff renderer can retain unchanged detail captions.
+                # A different body establishes a fresh full-pane readback.
+                start = len(terminal.data)
+                terminal.send(b"\x1b")
+                terminal.wait_text("Request/context", after=start)
+                terminal.wait_text("Task: " + task_id, after=start)
+            elif width >= 110:
+                terminal.wait_text("Created")
+            else:
+                terminal.wait_text("▶")
+                start = len(terminal.data)
+                terminal.send(b"\x1b[C" * 4)
+                terminal.wait_text("◀", after=start)
+                terminal.wait_text("Created", after=start)
+                start = len(terminal.data)
+                terminal.send(b"\x1b[D" * 4)
+                terminal.wait_text("Provider", after=start)
+                start = len(terminal.data)
+                terminal.send(b"\r")
+                terminal.wait_text("Task: " + task_id, after=start)
+                start = len(terminal.data)
+                terminal.send(b"\x1b")
+                terminal.wait_text("Task ID", after=start)
+            terminal.send(b"q")
+            keyboard.wait(0)
+            require(keyboard.process is not None and keyboard.process.stderr_path.read_bytes() == b"",
+                    "history layout workbench leaked output to stderr")
         finally:
             keyboard.close()
 

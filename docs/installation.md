@@ -214,6 +214,11 @@ then update with the same installer you chose
 (`brew upgrade hishamkaram/tap/delegation-layer` for Homebrew).
 Restart the harness and review changed hooks as required.
 
-Keep existing task state. For an explicit migration response, follow
+Keep existing task state. Removing an old Homebrew keg must not require retaining
+its executables: the current installation can refresh a compatible live private
+supervisor through `delegate supervisor ensure-owner --json` when status requests
+it. Follow [supervisor recovery](cli-reference.md#supervisor-recovery); keeping an
+old keg or downgrading a migrated scheduler database is not the recovery path.
+For an explicit migration response, follow
 [result handling](../skills/agent-integration/references/result-handling.md#task-creation);
 general supervisor administration is in the [CLI reference](cli-reference.md#supervisor-recovery).

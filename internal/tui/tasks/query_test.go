@@ -3,6 +3,7 @@ package tasks
 import (
 	"encoding/json"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -50,14 +51,49 @@ func TestTaskPageObservedOrderUsesDatedRemoteEvidenceWithoutInventingCreation(t 
 		if err != nil || len(page.Entries) != 2 {
 			t.Fatalf("history page unavailable: %+v %v", page, err)
 		}
-		if page.Entries[0].ID != fixture.first || !strings.Contains(page.Summary, fixture.summary) {
+		if page.Entries[0].ID != fixture.first || !strings.Contains(page.Coverage, fixture.summary) {
 			t.Fatalf("order selector lost at actual page consumer: %+v", page)
 		}
 		for _, entry := range page.Entries {
-			if !strings.Contains(entry.Detail, "Created: unknown") {
-				t.Fatalf("observation time became creation time: %s", entry.Detail)
+			if got := entryFields(entry)["Identity/Created"]; got != "unknown" {
+				t.Fatalf("observation time became creation time: %q", got)
 			}
 		}
+	}
+}
+
+func TestTaskEmptyHistoryHasTableAndDatedCoverage(t *testing.T) {
+	store, err := taskdir.InitStore(filepath.Join(t.TempDir(), "state"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if closeErr := store.Close(); closeErr != nil {
+			t.Error(closeErr)
+		}
+	})
+	catalog, err := history.Open(t.Context(), history.Options{Root: store.Root, Environment: []string{"HOME=" + t.TempDir(), "XDG_CACHE_HOME=" + t.TempDir()}, Registry: predicate.Default()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if closeErr := catalog.Close(); closeErr != nil {
+			t.Error(closeErr)
+		}
+	})
+	if _, err = catalog.ScanAndObserve(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	page, err := NewSection(nil, app.Arguments{Root: store.Root}, "", catalog).Load(t.Context(), ui.PageRequest{})
+	if err != nil || len(page.Entries) != 0 {
+		t.Fatalf("empty history page failed: %+v %v", page, err)
+	}
+	want := []ui.Column{{Title: "Task ID", Width: 16}, {Title: "Provider", Width: 18}, {Title: "Admission", Width: 14}, {Title: "Liveness", Width: 14}, {Title: "Publication", Width: 14}, {Title: "Created", Width: 20}}
+	if !slices.Equal(page.Columns, want) {
+		t.Fatalf("empty available history lost the table contract: %+v", page.Columns)
+	}
+	if strings.Contains(page.Strip, "\n") || !strings.HasPrefix(page.Strip, "Dated • ") || !strings.Contains(page.Strip, "0 indexed") || !strings.Contains(page.Coverage, "Last full metadata scan:") || !strings.Contains(page.Coverage, "not current global status") || page.Summary != "" {
+		t.Fatalf("empty table lost dated scan qualification: %+v", page)
 	}
 }
 

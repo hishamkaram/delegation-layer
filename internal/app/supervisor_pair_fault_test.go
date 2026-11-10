@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/hishamkaram/delegation-layer/internal/admission"
@@ -203,9 +204,9 @@ func removePublishedDaemonBehindRetainedPair(t *testing.T, root string, original
 }
 
 // TestLivePublishedPairWithMissingMemberKeepsConsumerPolicy observes a live
-// endpoint whose published daemon member is missing. Admission reports
-// published_pair_unavailable_live; explicit migration keeps its existing
-// policy of continuing past that live state. Neither restarts the daemon.
+// endpoint whose published daemon member is missing. Admission refreshes
+// runtime scheduling; explicit migration retains its existing policy. Neither
+// operation restarts the daemon or replaces its launch provenance.
 func TestLivePublishedPairWithMissingMemberKeepsConsumerPolicy(t *testing.T) {
 	t.Run("admission", func(t *testing.T) {
 		store, deps, current := newSupervisorProbeTestFixture(t)
@@ -218,8 +219,16 @@ func TestLivePublishedPairWithMissingMemberKeepsConsumerPolicy(t *testing.T) {
 		err := dispatchPairFault(t, "live missing member", func(ctx context.Context) (*pueue.Client, error) {
 			return supervisor.PreparePrivateAdmissionTransition(ctx, deps.supervisorLookup(), store, deps.SupervisorOptions)
 		}, store.Root)
-		if pairFaultReason(err) != "published_pair_unavailable_live" {
-			t.Fatalf("live endpoint with a missing member was not reported: %v", err)
+		if err != nil {
+			t.Fatalf("live endpoint could not refresh runtime scheduling: %v", err)
+		}
+		recorded, recordErr := supervisor.OrdinarySchedulingRecorded(store.Root, func() task.SupervisorRef {
+			binding := current.Binding()
+			binding.DaemonExecutable = filepath.Join(installed, "pueued")
+			return binding
+		}())
+		if recordErr != nil || !recorded {
+			t.Fatalf("replacement runtime scheduling was not published: recorded=%t err=%v", recorded, recordErr)
 		}
 		testsupport.AssertPairFaultWitness(t, base, before)
 	})
@@ -283,4 +292,124 @@ func TestPairIdentityConflictStopsEveryConsumer(t *testing.T) {
 		}
 		testsupport.AssertPairFaultWitness(t, base, before)
 	})
+}
+
+// A surviving private daemon must admit through the upgraded installed transport,
+// not merely report owner_ready against a receipt for its removed installation.
+func TestSupervisorUpgradeRemovedPairReachesFreshSubmission(t *testing.T) {
+	for _, missing := range []string{"client", "daemon", "both"} {
+		t.Run(missing, func(t *testing.T) { testSupervisorUpgradeRemovedPairSubmission(t, missing) })
+	}
+}
+
+func testSupervisorUpgradeRemovedPairSubmission(t *testing.T, missing string) {
+	t.Helper()
+	f := newPublicContinuationFixture(t)
+	f.deps = withSupervisorProbeRouting(t, f.deps, f.owner)
+	f.deps.ResourceChecker = fixtureResources
+	f.deps.PublisherVersion = "upgrade-regression"
+	const freshID = "ffffffffffffffffffffffffffffffff"
+	// The finite CLI refuses enqueue unless the production commit has already
+	// persisted this task's exact receipt. It records both operations once.
+	script := strings.Replace(publicContinuationClient, `enqueue) [ "${4-}" != --help ] || printf '%s\n' 'Usage: pueue enqueue <TASK_IDS>...' ;;`, `enqueue) if [ "${4-}" = --help ]; then printf '%s\n' 'Usage: pueue enqueue <TASK_IDS>...'; else [ -f "$base/../tasks/`+freshID+`/supervisor.ref.json" ]; printf '%s\n' enqueue >> "$base/submissions"; fi ;;`, 1)
+	writeRunnerFixture(t, f.clientC, script)
+	writeRunnerFixture(t, f.clientD, script)
+	legacy := f.client.Binding()
+	legacy.ConfigDigest = task.ComputeSHA256([]byte("prior completed generation"))
+	writeSupervisorGenerationTestHistory(t, f.owner.store, legacy, f.client.Binding())
+	before := snapshotPublishedGenerationFiles(t, f.owner.root)
+	historyPath := filepath.Join(f.owner.root, ".supervisor", "migration-history.json")
+	before[historyPath] = readSupervisorProbeTestFile(t, historyPath)
+	selectedClient, selectedDaemon := f.clientC, f.daemonC
+	if missing != "daemon" {
+		if err := os.Remove(f.clientC); err != nil {
+			t.Fatal(err)
+		}
+		selectedClient = f.clientD
+	}
+	if missing != "client" {
+		if err := os.Remove(f.daemonC); err != nil {
+			t.Fatal(err)
+		}
+		selectedDaemon = f.daemonD
+	}
+	brief := filepath.Join(f.owner.base, "fresh-brief.md")
+	if err := os.WriteFile(brief, []byte("fresh upgrade admission"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	result := runCommand(Arguments{Command: "dispatch", Root: f.owner.root, TaskID: freshID, Provider: "fixture:test", Brief: brief, Cwd: filepath.Join(f.owner.base, "workspace"), Config: task.TaskConfig{Permission: "read-only", Budget: "1m0s"}}, f.deps)
+	f.workErr = result.err
+	if result.code != 0 || result.err != nil || result.response.Admission != task.AdmissionAdmitted.String() {
+		t.Fatalf("removed installation did not reach fresh staged submission: code=%d response=%+v err=%v", result.code, result.response, result.err)
+	}
+	f.assertSuccessorBinding(t, result.response.TaskID)
+	f.assertRuntimeScheduling(t, f.expectedRuntime(selectedClient, selectedDaemon))
+	if got := readSupervisorProbeTestFile(t, filepath.Join(f.owner.root, ".supervisor", "submissions")); string(got) != "add\nenqueue\n" {
+		t.Fatalf("fresh admission did not commit before exactly one enqueue: %q", got)
+	}
+	assertPublishedGenerationFilesUnchanged(t, before)
+	client, err := (supervisor.ControlRuntime{Options: f.deps.SupervisorOptions, Lookup: f.deps.supervisorLookup()}).PreparePrivateAdmission(t.Context(), f.owner.store)
+	settleSupervisorProbeTestClient(t, client, err)
+	if err != nil || client == nil {
+		t.Fatalf("authorized runtime did not stay passive: %v", err)
+	}
+	if err = client.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSupervisorUpgradeStatusReportsRuntimeSchedulingMiss(t *testing.T) {
+	f := newPublicContinuationFixture(t)
+	for _, path := range []string{f.clientC, f.daemonC} {
+		if err := os.Remove(path); err != nil {
+			t.Fatal(err)
+		}
+	}
+	before := readSupervisorProbeTestFile(t, privateOrdinarySchedulingTestPath(f.owner.root))
+	result := supervisorStatus(f.owner.root, f.deps, newSupervisorCommandResponse("status"))
+	control := result.response.SupervisorControl
+	if result.code != 1 || control.State != "unavailable" || control.ReasonCode != "scheduling_refresh_required" || control.NextAction != "run_supervisor_ensure_owner" {
+		t.Fatalf("status hid runtime scheduling miss: code=%d control=%+v err=%v", result.code, control, result.err)
+	}
+	if after := readSupervisorProbeTestFile(t, privateOrdinarySchedulingTestPath(f.owner.root)); !bytes.Equal(before, after) {
+		t.Fatal("status repaired runtime evidence")
+	}
+	if _, err := os.Stat(filepath.Join(f.owner.root, ".supervisor", "submissions")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("status submitted work: %v", err)
+	}
+}
+
+func TestSupervisorStatusDoesNotMistakeEndpointForCompleteAdmission(t *testing.T) {
+	f := newPublicContinuationFixture(t)
+	path := filepath.Join(f.owner.root, ".supervisor", "task-observation.lock")
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	result := supervisorStatus(f.owner.root, f.deps, newSupervisorCommandResponse("status"))
+	control := result.response.SupervisorControl
+	if result.code != 1 || control.State != "unavailable" || control.NextAction != "run_supervisor_ensure_owner" {
+		t.Fatalf("reachable endpoint hid incomplete admission: code=%d control=%+v err=%v", result.code, control, result.err)
+	}
+	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("status repaired observation authority: %v", err)
+	}
+}
+
+func TestSupervisorStatusKeepsConfigDriftMigrationGuidance(t *testing.T) {
+	f := newPublicContinuationFixture(t)
+	path := f.client.Binding().ConfigPath
+	before := readSupervisorProbeTestFile(t, path)
+	t.Cleanup(func() {
+		if err := os.WriteFile(path, before, 0o600); err != nil {
+			t.Error(err)
+		}
+	})
+	if err := os.WriteFile(path, append(before, '\n'), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	result := supervisorStatus(f.owner.root, f.deps, newSupervisorCommandResponse("status"))
+	control := result.response.SupervisorControl
+	if result.code != 0 || result.err != nil || control.State != "legacy_present" || control.NextAction != "run_supervisor_migrate" {
+		t.Fatalf("configuration drift lost migration guidance: code=%d control=%+v err=%v", result.code, control, result.err)
+	}
 }

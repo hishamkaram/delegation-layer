@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/hishamkaram/delegation-layer/internal/supervisor/infrastructure"
+	"github.com/hishamkaram/delegation-layer/internal/task"
 )
 
 // This finite effects fixture owns only call observations. Domain fixtures
@@ -108,10 +109,14 @@ func TestManualMigrationPreparationContactsAtMostOneOwner(t *testing.T) {
 			owner.InitialResultFor = owner.Owner
 			return infrastructure.InitialOperation{Kind: infrastructure.InitialMigrateOwn}
 		}, []string{"request:1"}, false},
-		{"ensure unchanged", func(f *manualMigrationEffects, _ *infrastructure.EstablishedOwner) infrastructure.InitialOperation {
+		{"ensure replaces missing helper without waiting for daemon custody", func(f *manualMigrationEffects, _ *infrastructure.EstablishedOwner) infrastructure.InitialOperation {
 			f.outcome.Report = infrastructure.ManualMigrationReport{}
 			return infrastructure.InitialOperation{}
-		}, []string{"request:1"}, false},
+		}, []string{"read:1", "release:1", "establish:0", "request:2"}, true},
+		{"explicit ensure replaces missing helper", func(f *manualMigrationEffects, _ *infrastructure.EstablishedOwner) infrastructure.InitialOperation {
+			f.outcome.Report = infrastructure.ManualMigrationReport{}
+			return infrastructure.InitialOperation{Kind: infrastructure.InitialEnsureOwn}
+		}, []string{"read:1", "release:1", "establish:0", "request:2"}, true},
 		{"recovery unchanged", func(f *manualMigrationEffects, _ *infrastructure.EstablishedOwner) infrastructure.InitialOperation {
 			f.outcome.Report = infrastructure.ManualMigrationReport{}
 			return infrastructure.InitialOperation{Kind: infrastructure.InitialRecoverSaved, Source: infrastructure.SavedBindingSource{
@@ -145,29 +150,34 @@ func TestManualMigrationPreparationContactsAtMostOneOwner(t *testing.T) {
 }
 
 func TestManualMigrationPreparationRefusesBeforeWork(t *testing.T) {
-	for _, test := range []struct {
-		name  string
-		setup func(*manualMigrationEffects)
-		want  error
-		calls []string
-	}{
-		{"unreadable artifacts", func(f *manualMigrationEffects) { f.readErr = os.ErrPermission }, os.ErrPermission, []string{"read:1"}},
-		{"missing artifacts are not missing helper", func(f *manualMigrationEffects) { f.readErr = os.ErrNotExist }, os.ErrNotExist, []string{"read:1"}},
-		{"busy", func(f *manualMigrationEffects) { f.released.State = infrastructure.OwnerStopBusy }, infrastructure.ErrOwnerBusy, []string{"read:1", "release:1"}},
-		{"unknown contact", func(f *manualMigrationEffects) { f.releaseErr = infrastructure.ErrOwnerRequest }, infrastructure.ErrOwnerRequest, []string{"read:1", "release:1"}},
-		{"changed selected owner", func(f *manualMigrationEffects) { f.released.Startup = f.replacement.Owner }, infrastructure.ErrIdentity, []string{"read:1", "release:1"}},
-		{"birth fault", func(f *manualMigrationEffects) { f.establishErr = os.ErrPermission }, os.ErrPermission, []string{"read:1", "release:1", "establish:0"}},
-		{"concurrent missing owner", func(f *manualMigrationEffects) {
-			f.replacement.InitialResultFor = infrastructure.StartupReference{}
-			f.artifacts[f.replacement.Owner] = infrastructure.Artifacts{Runner: filepath.Join(t.TempDir(), "missing-o2")}
-		}, os.ErrNotExist, []string{"read:1", "release:1", "establish:0", "read:2"}},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			effects, owner := newManualMigrationEffects(t)
-			test.setup(effects)
-			_, err := requestInfrastructurePreparation(t.Context(), infrastructure.InitialOperation{Kind: infrastructure.InitialMigrateOwn}, owner, effects)
-			if !errors.Is(err, test.want) || !slices.Equal(effects.calls, test.calls) || len(effects.requested) != 0 {
-				t.Fatalf("refusal delivered or repeated work: calls=%v err=%v", effects.calls, err)
+	for _, operation := range []infrastructure.InitialOperationKind{infrastructure.InitialMigrateOwn, infrastructure.InitialEnsureOwn, ""} {
+		t.Run(string(operation), func(t *testing.T) {
+			for _, test := range []struct {
+				name  string
+				setup func(*manualMigrationEffects)
+				want  error
+				calls []string
+			}{
+				{"unreadable artifacts", func(f *manualMigrationEffects) { f.readErr = os.ErrPermission }, os.ErrPermission, []string{"read:1"}},
+				{"missing artifacts are not missing helper", func(f *manualMigrationEffects) { f.readErr = os.ErrNotExist }, os.ErrNotExist, []string{"read:1"}},
+				{"busy", func(f *manualMigrationEffects) { f.released.State = infrastructure.OwnerStopBusy }, infrastructure.ErrOwnerBusy, []string{"read:1", "release:1"}},
+				{"unknown contact", func(f *manualMigrationEffects) { f.releaseErr = infrastructure.ErrOwnerRequest }, infrastructure.ErrOwnerRequest, []string{"read:1", "release:1"}},
+				{"concurrent release loser", func(f *manualMigrationEffects) { f.releaseErr = task.ErrLockBusy }, task.ErrLockBusy, []string{"read:1", "release:1"}},
+				{"changed selected owner", func(f *manualMigrationEffects) { f.released.Startup = f.replacement.Owner }, infrastructure.ErrIdentity, []string{"read:1", "release:1"}},
+				{"birth fault", func(f *manualMigrationEffects) { f.establishErr = os.ErrPermission }, os.ErrPermission, []string{"read:1", "release:1", "establish:0"}},
+				{"concurrent missing owner", func(f *manualMigrationEffects) {
+					f.replacement.InitialResultFor = infrastructure.StartupReference{}
+					f.artifacts[f.replacement.Owner] = infrastructure.Artifacts{Runner: filepath.Join(t.TempDir(), "missing-o2")}
+				}, os.ErrNotExist, []string{"read:1", "release:1", "establish:0", "read:2"}},
+			} {
+				t.Run(test.name, func(t *testing.T) {
+					effects, owner := newManualMigrationEffects(t)
+					test.setup(effects)
+					_, err := requestInfrastructurePreparation(t.Context(), infrastructure.InitialOperation{Kind: operation}, owner, effects)
+					if !errors.Is(err, test.want) || !slices.Equal(effects.calls, test.calls) || len(effects.requested) != 0 {
+						t.Fatalf("refusal delivered or repeated work: calls=%v err=%v", effects.calls, err)
+					}
+				})
 			}
 		})
 	}

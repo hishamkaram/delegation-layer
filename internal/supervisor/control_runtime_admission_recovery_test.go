@@ -22,7 +22,7 @@ import (
 
 // These production-store consumers prove admission selection and its durable
 // gate. The finite clients and owned socket do not model a native daemon.
-func TestControlRuntimeAdmissionRecoversInstalledTransport(t *testing.T) {
+func TestControlRuntimeAdmissionReusesAuthorizedInstalledTransport(t *testing.T) {
 	for _, damaged := range []string{"client", "daemon", "both", "historical-copy"} {
 		t.Run(damaged, func(t *testing.T) {
 			testControlRuntimeAdmissionInstalledTransport(t, damaged)
@@ -35,10 +35,8 @@ func testControlRuntimeAdmissionInstalledTransport(t *testing.T, damaged string)
 	fixture := newAdmissionRecoveryFixture(t, true)
 	transport := parentMigrationPair(t, fixture, "admission-transport")
 	prepareAdmissionRecoveryDamage(t, &fixture, damaged)
-	before := parentMigrationTree(t, fixture.store.Root)
-	calls := 0
-	runtime := ControlRuntime{Options: fixture.options, Lookup: installation.ExecutableLookup{InitialExecutable: transport.ClientExecutable}, Routing: admissionRecoveryNoRoute(&calls)}
-	client, err := runtime.PreparePrivateAdmission(t.Context(), fixture.store)
+	// Passive admission may reuse the replacement only after its runtime
+	// capabilities have been authorized. Stale receipts are covered separately.
 	want := fixture.target
 	if damaged == "client" || damaged == "both" || damaged == "historical-copy" {
 		want.ClientExecutable = transport.ClientExecutable
@@ -46,6 +44,14 @@ func testControlRuntimeAdmissionInstalledTransport(t *testing.T, damaged string)
 	if damaged != "client" {
 		want.DaemonExecutable = transport.DaemonExecutable
 	}
+
+	want.ExecutableIdentity = task.ExecutableIdentityInstalledPathV1
+	want.ClientSHA256, want.DaemonSHA256 = "", ""
+	writeAdmissionRecoveryScheduling(t, fixture, want)
+	before := parentMigrationTree(t, fixture.store.Root)
+	calls := 0
+	runtime := ControlRuntime{Options: fixture.options, Lookup: installation.ExecutableLookup{InitialExecutable: transport.ClientExecutable}, Routing: admissionRecoveryNoRoute(&calls)}
+	client, err := runtime.PreparePrivateAdmission(t.Context(), fixture.store)
 	requireCompatibleControlClient(t, client, err, fixture.target, want)
 	if calls != 0 {
 		t.Fatalf("passive recovery contacted owner %d times", calls)
@@ -145,7 +151,7 @@ func testControlRuntimeAdmissionPreliminaryFault(t *testing.T, fault string) {
 }
 
 func TestControlRuntimeAdmissionUnreadyTransportKeepsOriginalRefusal(t *testing.T) {
-	for _, state := range []string{"stopped-endpoint", "missing-observation-lock", "stale-scheduling"} {
+	for _, state := range []string{"stopped-endpoint", "missing-observation-lock"} {
 		t.Run(state, func(t *testing.T) {
 			fixture := newAdmissionRecoveryFixture(t, state != "stopped-endpoint")
 			transport := parentMigrationPair(t, fixture, "admission-transport")
@@ -153,8 +159,6 @@ func TestControlRuntimeAdmissionUnreadyTransportKeepsOriginalRefusal(t *testing.
 			switch state {
 			case "missing-observation-lock":
 				removeCompatibleControlExecutable(t, filepath.Join(fixture.store.Root, ".supervisor", "task-observation.lock"))
-			case "stale-scheduling":
-				writeAdmissionRecoveryScheduling(t, fixture, fixture.legacy)
 			}
 			calls := 0
 			before := parentMigrationTree(t, fixture.store.Root)
@@ -169,6 +173,29 @@ func TestControlRuntimeAdmissionUnreadyTransportKeepsOriginalRefusal(t *testing.
 				t.Fatal("unready fallback changed generation or scheduling evidence")
 			}
 		})
+	}
+}
+
+func TestControlRuntimeAdmissionRuntimeReceiptMissRoutesOwner(t *testing.T) {
+	fixture := newAdmissionRecoveryFixture(t, true)
+	transport := parentMigrationPair(t, fixture, "receipt-refresh")
+	prepareAdmissionRecoveryDamage(t, &fixture, "both")
+	calls := 0
+	stopped := errors.New("owned receipt refresh pending")
+	before := parentMigrationTree(t, fixture.store.Root)
+	routing := controlRoutingFunc(func(context.Context, *taskdir.Store) (infrastructure.Disposition, error) {
+		calls++
+		return infrastructure.Disposition{}, stopped
+	})
+	client, err := (ControlRuntime{Options: fixture.options, Lookup: installation.ExecutableLookup{InitialExecutable: transport.ClientExecutable}, Routing: routing}).PreparePrivateAdmission(t.Context(), fixture.store)
+	if client != nil {
+		t.Fatal(ClosePrivateAdmissionTransition(client, errors.New("owner refusal returned ready client")))
+	}
+	if calls != 1 || !errors.Is(err, stopped) {
+		t.Fatalf("runtime receipt miss lost its owner: calls=%d err=%v", calls, err)
+	}
+	if !maps.Equal(before, parentMigrationTree(t, fixture.store.Root)) {
+		t.Fatal("caller repaired scheduling instead of resident")
 	}
 }
 

@@ -57,7 +57,7 @@ func (r ControlRuntime) captureLaunchContext(pin taskdir.RootPin) (infrastructur
 	}
 	var client string
 	if found {
-		client, err = ResolveSavedSupervisorClient(pin.Root(), saved, r.Lookup)
+		client, _, err = ResolveRecoveryPrivateSupervisorExecutables(pin.Root(), saved, r.Lookup)
 	} else {
 		client, err = installation.ResolveInstalledSupervisorClient(r.Lookup)
 	}
