@@ -1,6 +1,6 @@
 {
   "name": "delegation-layer",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "Consult external AI harnesses and CCR-configured models for reviews, research, implementation, and debate through the resumable Delegate CLI.",
   "author": {
     "name": "Hesham Karam",
