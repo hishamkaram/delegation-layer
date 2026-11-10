@@ -44,12 +44,28 @@ options, and `Ctrl-S` to review. Review shows the exact resource, workspace,
 provider, requested model, permission and budget before `Enter` submits.
 `Esc` returns to editing. Text inputs keep `q` as text. Long previews scroll
 with arrow keys. Tasks use an aligned table with Task ID, Provider, Admission,
-Liveness, Publication and Created columns. At 108 columns the complete table
-fits; at 154 columns and at least 20 rows it shows a grouped detail pane.
+Liveness, Publication and Created columns. Rounded single-line borders frame
+each view, with a continuous divider beside the selected-task pane. At 110
+columns the table fits at its full column widths; at 155 columns and at least
+20 rows it shows a grouped detail pane.
 Narrower layouts keep a shortened Task ID column visible while Left/Right pans
 whole remaining columns. Indicators show hidden columns. Full IDs remain in
 details and action previews; display truncation never changes action targeting.
+Open row details retain their action target when history refreshes, even if
+that row leaves the current page. Returning to the list restores actions for
+the current list selection. Coverage and operation-feedback screens offer no
+row-specific actions.
 Below 38 columns or 12 rows, resize to continue.
+
+Colors follow the terminal's palette and background. Active tabs, pane titles
+and detail headings use cyan. Within each independent lifecycle dimension,
+admitted and committed are green, rejected/failure states are red, and running
+or pending are yellow. Unknown, not observed and ended stay neutral. Selection
+uses bold reverse video for contrast; labels, `>` and fault markers retain
+meaning without color. Below 16 rows, the optional status footer moves into the
+compact header strip so warnings, controls and task rows remain visible.
+Diagnostics/results counts come first, followed by pagination and refresh
+activity, ahead of coverage text.
 
 Task previews resolve effective Team defaults through the same resolver used
 by admission. If the selected Team changes before admission, the operation

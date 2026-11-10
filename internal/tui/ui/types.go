@@ -94,7 +94,19 @@ type Column struct {
 type Cell struct {
 	Text  string
 	Fault bool
+	Role  DisplayRole
 }
+
+// DisplayRole is adapter-supplied meaning within one displayed dimension.
+// Rendering never infers lifecycle meaning from arbitrary text.
+type DisplayRole uint8
+
+const (
+	RoleNeutral DisplayRole = iota
+	RolePositive
+	RoleWarning
+	RoleNegative
+)
 
 // DetailGroup is the single structured source for task detail presentations.
 type DetailGroup struct {
@@ -102,7 +114,10 @@ type DetailGroup struct {
 	Fields []DetailField
 }
 
-type DetailField struct{ Label, Value string }
+type DetailField struct {
+	Label, Value string
+	Role         DisplayRole
+}
 
 type PageRequest struct{ Search, After string }
 

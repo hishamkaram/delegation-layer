@@ -91,12 +91,20 @@ type nativeInfrastructureMigration struct{}
 func (nativeInfrastructureMigration) MigrateOwn(ctx context.Context, store *taskdir.Store, lookup installation.ExecutableLookup, options pueue.Options, observation *infrastructure.PreparationObservation) (infrastructure.ManualMigrationReport, error) {
 	state, migrationErr := inspectSupervisorMigration(ctx, store.Root, lookup, options, store)
 	result := manualSupervisorMigrationResult(state, migrationErr)
+	report, reportErr := infrastructureManualMigrationReport(result)
+	// The committed migration report survives an operational readiness fault.
+	// Preparation owns its own transition after migration released bootstrap.
+	var prepared *pueue.Client
+	var preparationErr error
 	if result.err == nil && state.current != nil {
+		prepared, preparationErr = supervisor.PreparePrivateAdmissionSupervisorContext(ctx, lookup, store, options)
+	}
+	preparationErr = supervisor.ClosePrivateAdmissionTransition(prepared, preparationErr)
+	if result.err == nil && reportErr == nil && preparationErr == nil && state.current != nil {
 		observation.RecordReady()
 	}
-	report, reportErr := infrastructureManualMigrationReport(result)
 	transitionErr := supervisor.ClosePrivateAdmissionTransition(state.current, result.err)
-	return report, errors.Join(transitionErr, reportErr)
+	return report, errors.Join(transitionErr, reportErr, preparationErr)
 }
 
 func manualSupervisorMigrationResult(state supervisorMigrationState, err error) commandResult {

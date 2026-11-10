@@ -365,9 +365,13 @@ older inspection binding, whether that exact legacy endpoint is reachable, and
 whether any queued or running work prevents migration. It does not start or
 stop a supervisor. A completed migration reports `state: "migrated"` with
 `migration_phase: "complete"`; compatible live adoption reports `state: "ready"`
-with `migration_phase: "adopted"`. Both report `next_action: "none"` only when current admission readiness is also
-verified. A completed `migration_phase` remains historical evidence even when
-current readiness requires repair. The retained
+with `migration_phase: "adopted"`. Both report `next_action: "none"` only when
+current admission readiness is also verified. Explicit migration completes
+ordinary scheduling preparation before reporting readiness. If that preparation
+fails after migration has committed, the response retains `state: "migrated"`
+and `migration_phase: "complete"` alongside an error and `stop_and_report`.
+A completed `migration_phase` remains historical evidence even when current
+readiness requires repair. The retained
 legacy journal is historical evidence, not pending work. An inspection journal still bound to an external Pueue
 configuration reports `state: "external"` and
 `next_action: "run_supervisor_migrate"`. The repair changes Delegate's

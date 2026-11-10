@@ -79,6 +79,7 @@ type model struct {
 	after                  string
 	cursors                []string
 	detail                 bool
+	detailEntry            *ui.Entry
 	viewport               viewport.Model
 	form                   *formState
 	actions                []ui.Action
@@ -177,8 +178,8 @@ func (m *model) addDiagnostic(msg diagnosticMsg) {
 
 func (m *model) resize(width, height int) {
 	m.width, m.height = width, height
-	m.search.SetWidth(max(10, width-5))
-	m.tableOffset = presentation.ClampOffset(m.page.Columns, width, m.tableOffset)
+	m.search.SetWidth(max(1, m.geometry().ContentWidth-2))
+	m.tableOffset = presentation.ClampOffset(m.page.Columns, m.geometry().ListWidth, m.tableOffset)
 	m.sizeViewport()
 }
 
@@ -212,7 +213,7 @@ func (m *model) selectSection(index int) {
 	m.cursor = 0
 	m.after = ""
 	m.cursors = nil
-	m.detail = false
+	m.closeDetail()
 	m.problem = ""
 	m.generation++
 	m.loading = false
@@ -224,19 +225,41 @@ func (m *model) selectSection(index int) {
 func (m *model) openDetail() {
 	m.navigationEpoch++
 	if entry, ok := m.selectedEntry(); ok {
-		m.detail = true
-		m.message = ""
-		m.sizeViewport()
-		m.viewport.SetContent(presentation.DetailText(entry))
-		m.viewport.GotoTop()
+		m.showDetail(&entry, "", presentation.DetailText(entry))
 	}
+}
+
+// showDetail owns the displayed snapshot and its optional row-action context.
+// Refreshes can replace page rows, but cannot change an open detail's targets.
+func (m *model) showDetail(entry *ui.Entry, message, content string) {
+	m.detailEntry = nil
+	if entry != nil {
+		snapshot := *entry
+		snapshot.Actions = append([]ui.Action(nil), entry.Actions...)
+		m.detailEntry = &snapshot
+	}
+	m.detail = true
+	m.message = message
+	m.sizeViewport()
+	m.viewport.SetContent(content)
+	m.viewport.GotoTop()
+}
+
+func (m *model) closeDetail() {
+	m.detail = false
+	m.detailEntry = nil
+	m.message = ""
 }
 
 func (m *model) openActions() {
 	m.navigationEpoch++
 	m.actions = append([]ui.Action(nil), m.sections[m.selected].Actions...)
 	m.actions = append(m.actions, m.page.Actions...)
-	if entry, ok := m.selectedEntry(); ok && (!m.detail || m.message == "") {
+	if m.detail {
+		if m.detailEntry != nil {
+			m.actions = append(m.actions, m.detailEntry.Actions...)
+		}
+	} else if entry, ok := m.selectedEntry(); ok {
 		m.actions = append(m.actions, entry.Actions...)
 	}
 	m.actionCursor = 0
@@ -267,15 +290,12 @@ func (m *model) actionDone(msg actionMsg) {
 	if msg.epoch != m.navigationEpoch || msg.section != m.selected || m.form != nil || m.actionMenu || m.searching || m.showHelp {
 		return
 	}
-	m.message = body
 	if msg.feedback.Err != nil {
 		m.problem = msg.feedback.Err.Error()
 	} else {
 		m.problem = ""
 	}
-	m.viewport.SetContent(terminal.Safe(m.message))
-	m.viewport.GotoTop()
-	m.detail = true
+	m.showDetail(nil, body, terminal.Safe(body))
 }
 
 func (m *model) applyDisposition(msg actionMsg) {

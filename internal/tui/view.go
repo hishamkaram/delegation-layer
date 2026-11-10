@@ -5,11 +5,11 @@ import (
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
-	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/hishamkaram/delegation-layer/internal/tui/presentation"
 	"github.com/hishamkaram/delegation-layer/internal/tui/terminal"
+	"github.com/hishamkaram/delegation-layer/internal/tui/ui"
 )
 
 func (m *model) View() tea.View {
@@ -45,6 +45,11 @@ func (m *model) header() string {
 	if m.page.Coverage != "" {
 		strip = "c info · " + strip
 	}
+	if m.height < 16 {
+		if status := m.statusText(); status != "" {
+			strip = status + " · " + strip
+		}
+	}
 	header += "\n" + oneLine(strip, m.width)
 	return header
 }
@@ -54,18 +59,13 @@ func (m *model) footer() string {
 	if m.width < 90 {
 		footer = "? help · q quit · a actions · Enter"
 	}
-	status := ""
-	if m.loading {
-		status = "Refreshing… "
+	// Compact terminals keep warning rows and one table row visible. Taller
+	// terminals reserve the status row even when its values are empty.
+	if m.height >= 16 {
+		footer = oneLine(m.statusText(), m.width) + "\n" + oneLine(footer, m.width)
+	} else {
+		footer = oneLine(footer, m.width)
 	}
-	if m.pageSearch == m.appliedSearch && (m.page.Next != "" || len(m.cursors) > 0) {
-		status += "n next page · p previous page "
-	}
-	if len(m.diagnostics) > 0 || len(m.operationResults) > 0 {
-		status += fmt.Sprintf("%d diagnostics (d) · %d results (o)", len(m.diagnostics), len(m.operationResults))
-	}
-	// Always reserve the status row, including when its values are empty.
-	footer = oneLine(status, m.width) + "\n" + oneLine(footer, m.width)
 	problem := ""
 	if m.problem != "" {
 		problem = "Error: " + m.problem
@@ -76,6 +76,20 @@ func (m *model) footer() string {
 		}
 	}
 	return footer
+}
+
+func (m *model) statusText() string {
+	var parts []string
+	if len(m.diagnostics) > 0 || len(m.operationResults) > 0 {
+		parts = append(parts, fmt.Sprintf("%d diagnostics (d) · %d results (o)", len(m.diagnostics), len(m.operationResults)))
+	}
+	if m.pageSearch == m.appliedSearch && (m.page.Next != "" || len(m.cursors) > 0) {
+		parts = append(parts, "n next page · p previous page")
+	}
+	if m.loading {
+		parts = append(parts, "Refreshing…")
+	}
+	return strings.Join(parts, " · ")
 }
 
 func restartWarning(required bool) string {
@@ -103,7 +117,7 @@ func (m *model) geometry() presentation.Layout {
 
 func (m *model) sizeViewport() {
 	layout := m.geometry()
-	m.viewport.SetWidth(max(1, m.width))
+	m.viewport.SetWidth(max(1, layout.ContentWidth))
 	m.viewport.SetHeight(max(1, layout.BodyHeight-1))
 }
 
@@ -113,8 +127,42 @@ func (m *model) render() string {
 	}
 	header, footer := m.chrome()
 	layout := m.geometry()
-	body := fitLines(m.body(layout), m.width, layout.BodyHeight)
+	content := m.body(layout)
+	var body string
+	if layout.Split && m.listVisible() {
+		entry, selected := m.selectedEntry()
+		if !selected {
+			entry = ui.Entry{Detail: "Select a task to inspect its evidence."}
+		}
+		details := presentation.Details(entry, layout.DetailWidth, layout.BodyHeight)
+		body = presentation.SplitPanel(m.paneTitle(), "Task details", content, details, layout)
+	} else {
+		body = presentation.Panel(m.paneTitle(), content, layout)
+	}
 	return fitLines(header+"\n"+body+"\n"+footer, m.width, m.height)
+}
+
+func (m *model) listVisible() bool {
+	return !m.quitting && m.form == nil && !m.searching && !m.actionMenu && !m.showHelp && !m.detail
+}
+
+func (m *model) paneTitle() string {
+	switch {
+	case m.quitting:
+		return "Closing"
+	case m.form != nil:
+		return m.form.action.Label
+	case m.searching:
+		return "Search"
+	case m.actionMenu:
+		return "Actions"
+	case m.showHelp:
+		return "Help"
+	case m.detail:
+		return "Details"
+	default:
+		return m.sections[m.selected].Name
+	}
 }
 
 func (m *model) body(layout presentation.Layout) string {
@@ -125,11 +173,11 @@ func (m *model) body(layout presentation.Layout) string {
 		}
 		return m.pendingText()
 	case m.form != nil:
-		return m.form.view(m.width-4, layout.BodyHeight)
+		return m.form.view(layout.ContentWidth, layout.BodyHeight)
 	case m.searching:
 		return "Search metadata (not prompts, results or logs)\n" + m.search.View() + "\nEnter apply · Esc back"
 	case m.actionMenu:
-		return m.actionView()
+		return m.actionView(layout)
 	case m.showHelp:
 		return helpView
 	case m.detail:
@@ -141,17 +189,10 @@ func (m *model) body(layout presentation.Layout) string {
 
 func (m *model) listView(layout presentation.Layout) string {
 	if len(m.page.Columns) > 0 {
-		list := presentation.Table(m.page, m.cursor, layout.ListWidth, layout.BodyHeight, m.tableOffset)
-		if layout.Split {
-			if entry, ok := m.selectedEntry(); ok {
-				detail := presentation.Details(entry, layout.DetailWidth, layout.BodyHeight)
-				list = lipgloss.JoinHorizontal(lipgloss.Top, lipgloss.NewStyle().Width(layout.ListWidth).Render(list), "│ ", detail)
-			}
-		}
-		return list
+		return presentation.Table(m.page, m.cursor, layout.ListWidth, layout.BodyHeight, m.tableOffset)
 	}
 	var out strings.Builder
-	summary := strings.TrimSpace(ansi.Wrap(terminal.Safe(m.page.Summary), max(1, m.width), ""))
+	summary := strings.TrimSpace(ansi.Wrap(terminal.Safe(m.page.Summary), max(1, layout.ContentWidth), ""))
 	summaryRows := 0
 	if summary != "" {
 		out.WriteString(summary + "\n")
@@ -161,14 +202,7 @@ func (m *model) listView(layout presentation.Layout) string {
 	start := max(0, m.cursor-count+1)
 	for i := start; i < len(m.page.Entries) && i < start+count; i++ {
 		entry := m.page.Entries[i]
-		prefix := "  "
-		if i == m.cursor {
-			prefix = "> "
-		}
-		line := oneLine(prefix+entry.Title+"  "+entry.Subtitle, m.width)
-		if i == m.cursor {
-			line = lipgloss.NewStyle().Bold(true).Reverse(true).Render(line)
-		}
+		line := presentation.ListRow(entry.Title, entry.Subtitle, layout.ContentWidth, i == m.cursor)
 		fmt.Fprintln(&out, line)
 	}
 	if len(m.page.Entries) == 0 {
@@ -177,10 +211,10 @@ func (m *model) listView(layout presentation.Layout) string {
 	return out.String()
 }
 
-func (m *model) actionView() string {
+func (m *model) actionView(layout presentation.Layout) string {
 	var out strings.Builder
 	out.WriteString("Actions — Enter open · Esc back\n\n")
-	visible := max(1, m.geometry().BodyHeight-2)
+	visible := max(1, layout.BodyHeight-2)
 	start := max(0, m.actionCursor-visible+1)
 	for i := start; i < len(m.actions) && i < start+visible; i++ {
 		action := m.actions[i]
@@ -192,7 +226,7 @@ func (m *model) actionView() string {
 		if action.Disabled != "" {
 			disabled = " [unavailable: " + action.Disabled + "]"
 		}
-		fmt.Fprintln(&out, oneLine(prefix+action.Label+disabled, m.width-4))
+		fmt.Fprintln(&out, oneLine(prefix+action.Label+disabled, layout.ContentWidth))
 	}
 	return out.String()
 }

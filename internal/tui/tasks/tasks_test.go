@@ -153,7 +153,7 @@ func TestTaskEntryPreservesIndependentEvidenceAndUnsupportedRemoteActions(t *tes
 			t.Fatalf("lost evidence %s: got %q, want %q", field, got, value)
 		}
 	}
-	wantCells := []ui.Cell{{Text: row.Handle()}, {Text: "fixture:test"}, {Text: "admitted"}, {Text: "undetermined"}, {Text: "committed"}, {Text: "unknown"}}
+	wantCells := []ui.Cell{{Text: row.Handle()}, {Text: "fixture:test"}, {Text: "admitted", Role: ui.RolePositive}, {Text: "undetermined"}, {Text: "committed", Role: ui.RolePositive}, {Text: "unknown"}}
 	if !slices.Equal(entry.Cells, wantCells) {
 		t.Fatalf("table merged independent evidence: %+v", entry.Cells)
 	}
@@ -188,7 +188,7 @@ func TestTaskEntryDistinguishesAbsentObservationAndRetainedFaultedEvidence(t *te
 	}}
 	entry := v.entry(row)
 	for _, cell := range entry.Cells[2:5] {
-		if cell.Text != "not observed" || cell.Fault {
+		if cell.Text != "not observed" || cell.Fault || cell.Role != ui.RoleNeutral {
 			t.Fatalf("missing observation became an observed enum: %+v", entry.Cells)
 		}
 	}
@@ -204,7 +204,7 @@ func TestTaskEntryDistinguishesAbsentObservationAndRetainedFaultedEvidence(t *te
 	row.Fault = "metadata read unavailable"
 	row.ObservationFault = "visible passive refresh unavailable; previous evidence retained"
 	entry = v.entry(row)
-	wantCells := []ui.Cell{{Text: row.Handle(), Fault: true}, {Text: "claude:print"}, {Text: "unknown", Fault: true}, {Text: "undetermined", Fault: true}, {Text: "pending", Fault: true}, {Text: "2026-01-02T03:00:00Z"}}
+	wantCells := []ui.Cell{{Text: row.Handle(), Fault: true}, {Text: "claude:print"}, {Text: "unknown", Fault: true}, {Text: "undetermined", Fault: true}, {Text: "pending", Fault: true, Role: ui.RoleWarning}, {Text: "2026-01-02T03:00:00Z"}}
 	if !slices.Equal(entry.Cells, wantCells) {
 		t.Fatalf("retained observation was hidden or presented as fresh: %+v", entry.Cells)
 	}
@@ -232,6 +232,43 @@ func entryFaults(entry ui.Entry) []string {
 		}
 	}
 	return faults
+}
+
+func TestTaskDisplayRolesKeepLifecycleDimensionsIndependent(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		admission   task.Admission
+		liveness    task.Liveness
+		publication task.Publication
+		roles       [3]ui.DisplayRole
+	}{
+		{"unknown", task.AdmissionUnknown, task.LivenessUndetermined, task.PublicationUnknown, [3]ui.DisplayRole{ui.RoleNeutral, ui.RoleNeutral, ui.RoleNeutral}},
+		{"active", task.AdmissionAdmitted, task.LivenessRunning, task.PublicationPending, [3]ui.DisplayRole{ui.RolePositive, ui.RoleWarning, ui.RoleWarning}},
+		{"ended committed", task.AdmissionAdmitted, task.LivenessEnded, task.PublicationCommitted, [3]ui.DisplayRole{ui.RolePositive, ui.RoleNeutral, ui.RolePositive}},
+		{"rejected", task.AdmissionNotAdmitted, task.LivenessEnded, task.PublicationRejected, [3]ui.DisplayRole{ui.RoleNegative, ui.RoleNeutral, ui.RoleNegative}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			row := history.Row{Identity: history.Identity{Kind: taskdir.IndexLocal, TaskID: strings.Repeat("a", 32)}, Metadata: taskdir.IndexMetadata{Provider: "committed"}, Observation: &history.Observation{Admission: tc.admission, Liveness: tc.liveness, Publication: tc.publication}}
+			entry := (views{}).entry(row)
+			if entry.Cells[1].Role != ui.RoleNeutral {
+				t.Fatal("arbitrary provider name received lifecycle meaning")
+			}
+			groupIndex := slices.IndexFunc(entry.Details, func(group ui.DetailGroup) bool { return group.Title == "Evidence" })
+			if groupIndex < 0 {
+				t.Fatal("evidence group missing")
+			}
+			evidence := entry.Details[groupIndex].Fields
+			if len(evidence) < 3 {
+				t.Fatal("lifecycle evidence fields missing")
+			}
+			for i, role := range tc.roles {
+				cell := entry.Cells[i+2]
+				if cell.Role != role || evidence[i].Role != role || evidence[i].Value != cell.Text {
+					t.Fatalf("dimension %d diverged across table and detail: cell=%+v detail=%+v want role=%d", i, cell, evidence[i], role)
+				}
+			}
+		})
+	}
 }
 
 type collectProbe struct {

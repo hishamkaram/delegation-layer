@@ -10,27 +10,33 @@ const (
 	frozenOverflowWidth = 12
 	minimumDetailWidth  = 44
 	minimumSplitHeight  = 20
+	panelBorderWidth    = 2
+	panelBorderHeight   = 2
+	panelDividerWidth   = 1
 )
 
 // Layout is one geometry calculation shared by rendering and viewport sizing.
 type Layout struct {
 	BodyHeight, ListWidth, DetailWidth int
+	FrameHeight, ContentWidth          int
 	Split                              bool
 }
 
 // Measure reserves actual chrome heights before allocating the content panes.
 func Measure(width, height, headerRows, footerRows int, columns []ui.Column) Layout {
 	result := Layout{
-		BodyHeight: max(0, height-max(0, headerRows)-max(0, footerRows)),
-		ListWidth:  max(0, width),
+		FrameHeight:  max(0, height-max(0, headerRows)-max(0, footerRows)),
+		ContentWidth: max(0, width-panelBorderWidth),
 	}
+	result.BodyHeight = max(0, result.FrameHeight-panelBorderHeight)
+	result.ListWidth = result.ContentWidth
 	natural, valid := naturalWidth(columns)
-	if !valid || width < natural+columnGap+minimumDetailWidth || height < minimumSplitHeight {
+	if !valid || result.ContentWidth < natural+panelDividerWidth+minimumDetailWidth || height < minimumSplitHeight {
 		return result
 	}
 	result.Split = true
 	result.ListWidth = natural
-	result.DetailWidth = width - natural - columnGap
+	result.DetailWidth = result.ContentWidth - natural - panelDividerWidth
 	return result
 }
 

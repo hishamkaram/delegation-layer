@@ -23,20 +23,7 @@ import (
 func TestExternalInspectionHandoffPublicConsumersPreserveActiveWork(t *testing.T) {
 	store, deps, current, owner := newOwnedSupervisorProbeTestFixture(t)
 	deps = withSupervisorProbeRouting(t, deps, owner)
-	// Binding a daemon alone does not establish ordinary admission authority.
-	// This case starts ready so its post-handoff status can prove readiness too.
-	prepared, err := preparePrivateAdmissionSupervisor(deps, store, deps.SupervisorOptions)
-	settleSupervisorProbeTestClient(t, prepared, err)
-	if err != nil || prepared == nil {
-		t.Fatalf("prepare ready private admission before external handoff: %v", err)
-	}
-	if err = prepared.Close(); err != nil {
-		t.Fatal(err)
-	}
-	readiness, err := (supervisorcore.ControlRuntime{Options: deps.SupervisorOptions, Lookup: deps.supervisorLookup()}).ObserveAdmission(t.Context(), store)
-	if err != nil || readiness != supervisorcore.AdmissionReady {
-		t.Fatalf("external handoff requires ready private admission: readiness=%v err=%v", readiness, err)
-	}
+	assertSupervisorProbeTestNoAdmissionAuthority(t, store)
 	external, legacy, externalLog := newExternalInspectionHandoffFixture(t, store)
 	externalCalls := readSupervisorProbeTestFile(t, externalLog)
 	operation := newInspectionPollTestOperation(t, store, external)
@@ -66,8 +53,18 @@ func TestExternalInspectionHandoffPublicConsumersPreserveActiveWork(t *testing.T
 	if migrated.response.SupervisorControl.ActiveWork != "unknown" || migrated.response.SupervisorControl.LegacyReachability != "not_managed" {
 		t.Fatalf("routing handoff claimed empty queues: %+v", migrated.response.SupervisorControl)
 	}
+	readiness, err := (supervisorcore.ControlRuntime{Options: deps.SupervisorOptions, Lookup: deps.supervisorLookup()}).ObserveAdmission(t.Context(), store)
+	if err != nil || readiness != supervisorcore.AdmissionReady {
+		t.Fatalf("migration did not complete private admission: readiness=%v err=%v", readiness, err)
+	}
+	if recorded, err := supervisorcore.OrdinarySchedulingRecorded(store.Root, current.RuntimeBinding()); err != nil || !recorded {
+		t.Fatalf("migration did not authorize runtime scheduling: recorded=%t err=%v", recorded, err)
+	}
+	schedulingPath := privateOrdinarySchedulingTestPath(store.Root)
+	schedulingBytes := readSupervisorProbeTestFile(t, schedulingPath)
 	after := supervisorCommand(Arguments{Root: store.Root, SupervisorAction: "status"}, deps)
 	assertHandoffSupervisorResult(t, after, "migrated", "none")
+	assertSupervisorProbeTestFile(t, schedulingPath, schedulingBytes)
 	assertExternalHandoffHead(t, store, legacy, current.Binding())
 	assertSupervisorProbeTestFile(t, requestPath, requestBytes)
 	assertSupervisorProbeTestFile(t, identityPath, identityBytes)
@@ -77,6 +74,25 @@ func TestExternalInspectionHandoffPublicConsumersPreserveActiveWork(t *testing.T
 		t.Fatal("routing handoff invoked a destructive supervisor control")
 	}
 	finishExternalHandoffInspection(t, store, requestBefore)
+}
+
+func TestExternalInspectionHandoffKeepsCommittedReportWhenAdmissionFails(t *testing.T) {
+	store, deps, current, owner := newOwnedSupervisorProbeTestFixture(t)
+	_, legacy, externalLog := newExternalInspectionHandoffFixture(t, store)
+	externalCalls := readSupervisorProbeTestFile(t, externalLog)
+	// Migration can commit independently of a later ordinary-admission read
+	// fault. A directory cannot serve as its scheduling evidence record.
+	if err := os.Mkdir(privateOrdinarySchedulingTestPath(store.Root), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	result := supervisorCommand(Arguments{Root: store.Root, SupervisorAction: "migrate"}, withSupervisorProbeRouting(t, deps, owner))
+	control := result.response.SupervisorControl
+	if result.code != 1 || result.err == nil || control == nil || control.State != "migrated" || control.MigrationPhase != "complete" || control.NextAction != "stop_and_report" {
+		t.Fatalf("post-commit admission failure lost migration facts: code=%d control=%+v err=%v", result.code, control, result.err)
+	}
+	assertExternalHandoffHead(t, store, legacy, current.Binding())
+	assertSupervisorProbeTestFile(t, externalLog, externalCalls)
+	assertSupervisorProbeTestDaemonStartCount(t, filepath.Dir(current.Binding().ConfigPath), 1)
 }
 
 func TestExternalInspectionHandoffRetryKeepsPublishedTarget(t *testing.T) {

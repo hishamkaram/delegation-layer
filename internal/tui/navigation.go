@@ -175,8 +175,7 @@ func (m *model) browseKey(key tea.KeyPressMsg) tea.Cmd {
 		m.openDetail()
 	case "esc":
 		m.navigationEpoch++
-		m.detail = false
-		m.message = ""
+		m.closeDetail()
 
 	}
 	return m.navigateBody(key)
@@ -190,11 +189,7 @@ func (m *model) openCoverage() {
 
 func (m *model) openText(title, text string) {
 	m.navigationEpoch++
-	m.message = title
-	m.sizeViewport()
-	m.viewport.SetContent(terminal.Safe(text))
-	m.viewport.GotoTop()
-	m.detail = true
+	m.showDetail(nil, title, terminal.Safe(text))
 }
 
 func (m *model) navigateBody(key tea.KeyPressMsg) tea.Cmd {

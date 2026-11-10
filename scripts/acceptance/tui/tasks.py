@@ -258,7 +258,7 @@ class TaskProof:
             # terminal's first table frame; task identity readback below uses
             # explicit input/repaint barriers.
             terminal.wait_text("Dated")
-            if width >= 154:
+            if width >= 155:
                 start = len(terminal.data)
                 terminal.send(b"?")
                 terminal.wait_text("Delegate terminal workbench", after=start)
@@ -268,7 +268,7 @@ class TaskProof:
                 terminal.send(b"\x1b")
                 terminal.wait_text("Request/context", after=start)
                 terminal.wait_text("Task: " + task_id, after=start)
-            elif width >= 108:
+            elif width >= 110:
                 terminal.wait_text("Created")
             else:
                 terminal.wait_text("▶")

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -250,15 +251,89 @@ func TestClosingDeliveredEffectKeepsErrorForPostTerminalWriter(t *testing.T) {
 }
 
 func TestFeedbackActionsNeverTargetThePreviouslySelectedRow(t *testing.T) {
-	m := fixtureModel(t)
-	m.sections[0].Actions = []ui.Action{{ID: "inspect-exact", Label: "Inspect exact ID"}}
-	m.page.Entries = []ui.Entry{{ID: "old-task", Actions: []ui.Action{{ID: "cancel-old", Label: "Cancel old"}}}}
-	m.detail = true
-	m.message = "Created new-task"
-	m.openActions()
-	if len(m.actions) != 1 || m.actions[0].ID != "inspect-exact" {
-		t.Fatalf("result reused unrelated row actions: %+v", m.actions)
+	for _, body := range []string{"Created new-task", ""} {
+		t.Run(body, func(t *testing.T) {
+			m := fixtureModel(t)
+			m.sections[0].Actions = []ui.Action{{ID: "inspect-exact", Label: "Inspect exact ID"}}
+			m.page.Entries = []ui.Entry{taskActionEntry("old-task")}
+			m.openDetail()
+			m.actionDone(actionMsg{epoch: m.navigationEpoch, section: m.selected, feedback: ui.Feedback{Body: body}})
+			m.openActions()
+			if len(m.actions) != 1 || m.actions[0].ID != "inspect-exact" {
+				t.Fatalf("result reused unrelated row actions: %+v", m.actions)
+			}
+		})
 	}
+}
+
+func taskActionEntry(id string) ui.Entry {
+	entry := ui.Entry{ID: id, Detail: "Task: " + id}
+	for _, command := range []string{"cancel", "continue", "collect"} {
+		entry.Actions = append(entry.Actions, ui.Action{ID: command, Arguments: app.Arguments{TaskID: id}})
+	}
+	return entry
+}
+
+func assertTaskActionTargets(t *testing.T, actions []ui.Action, want string) {
+	t.Helper()
+	if len(actions) != 3 {
+		t.Fatalf("task action count=%d, want 3", len(actions))
+	}
+	for _, action := range actions {
+		request, err := action.Prepare(nil)
+		if err != nil || request.TaskID != want {
+			t.Fatalf("%s targets %q, want %q: %v", action.ID, request.TaskID, want, err)
+		}
+	}
+}
+
+func TestDetailActionsKeepOpenedTaskWhenRefreshMovesOrRemovesIt(t *testing.T) {
+	for _, retain := range []bool{false, true} {
+		t.Run(fmt.Sprint("retain=", retain), func(t *testing.T) {
+			m := fixtureModel(t)
+			a, b := taskActionEntry(strings.Repeat("a", 32)), taskActionEntry(strings.Repeat("b", 32))
+			m.page.Entries = []ui.Entry{a, b}
+			m.openDetail()
+			snapshot := m.viewport.GetContent()
+			entries := []ui.Entry{b}
+			if retain {
+				entries = append(entries, a)
+			}
+			m.loaded(loadedMsg{generation: m.generation, section: m.selected, page: ui.Page{Entries: entries}})
+			if m.viewport.GetContent() != snapshot || !strings.Contains(snapshot, a.ID) {
+				t.Fatal("refresh changed the opened task details")
+			}
+			m.openActions()
+			assertTaskActionTargets(t, m.actions, a.ID)
+			m.actionKey("esc")
+			m.browseKey(tea.KeyPressMsg{Code: tea.KeyEscape})
+			m.openActions()
+			listTarget := b.ID
+			if retain {
+				listTarget = a.ID
+			}
+			assertTaskActionTargets(t, m.actions, listTarget)
+		})
+	}
+}
+
+func TestGenericDetailAndSectionChangeDoNotRetainTaskActions(t *testing.T) {
+	m := fixtureModel(t)
+	m.page.Entries = []ui.Entry{taskActionEntry(strings.Repeat("a", 32))}
+	m.openDetail()
+	m.openText("", "")
+	m.openActions()
+	if len(m.actions) != 0 {
+		t.Fatal("empty generic detail retained row actions")
+	}
+	m.actionKey("esc")
+	m.browseKey(tea.KeyPressMsg{Code: tea.KeyEscape})
+	m.openDetail()
+	m.selectSection(1)
+	b := taskActionEntry(strings.Repeat("b", 32))
+	m.page.Entries = []ui.Entry{b}
+	m.openActions()
+	assertTaskActionTargets(t, m.actions, b.ID)
 }
 
 func TestAdvancedFieldsStayEditableWithoutChangingHiddenDefaults(t *testing.T) {
@@ -480,12 +555,13 @@ func TestCoverageIsPassiveAndExcludesRowActions(t *testing.T) {
 func TestMinimumFrameKeepsRowsAndBlockingWarnings(t *testing.T) {
 	m := tableModel(t)
 	m.problem, m.restartRequired, m.sourceInvalid = "refresh failed", true, true
+	m.diagnostics, m.operationResults = []string{"diagnostic"}, []string{"result"}
 	m.resize(38, 12)
 	view := ansi.Strip(m.render())
 	if len(strings.Split(view, "\n")) > 12 {
 		t.Fatal("frame exceeds terminal height")
 	}
-	for _, required := range []string{"Task ID", "> ", "SOURCE CHANGED", "RESTART REQUIRED", "refresh failed", "? help", "q quit"} {
+	for _, required := range []string{"Task ID", "> ", "SOURCE CHANGED", "RESTART REQUIRED", "refresh failed", "? help", "q quit", "1 diagnostics (d)", "1 results (o)"} {
 		if !strings.Contains(view, required) {
 			t.Fatalf("minimum frame lost %q: %s", required, view)
 		}
@@ -497,6 +573,22 @@ func TestMinimumFrameKeepsRowsAndBlockingWarnings(t *testing.T) {
 	}
 }
 
+func TestCompactHeaderKeepsStatusAheadOfLongCoverage(t *testing.T) {
+	m := tableModel(t)
+	m.diagnostics, m.operationResults = []string{"diagnostic"}, []string{"result"}
+	m.page.Next, m.cursors, m.loading = "next-page", []string{"previous-page"}, true
+	m.page.Strip = strings.Repeat("Long coverage ", 20)
+	m.resize(80, 12)
+	lines := strings.Split(ansi.Strip(m.header()), "\n")
+	strip := lines[len(lines)-1]
+	if !strings.HasPrefix(strip, "1 diagnostics (d) · 1 results (o)") || !strings.Contains(strip, "n next page · p previous page") || !strings.Contains(strip, "Refreshing") {
+		t.Fatalf("compact status was hidden behind coverage: %q", strip)
+	}
+	if strings.Contains(m.footer(), "diagnostics") {
+		t.Fatal("compact view reserved a duplicate status row")
+	}
+}
+
 func TestActionWarningsKeepBottomDetailReachable(t *testing.T) {
 	m := fixtureModel(t)
 	m.resize(80, 24)
@@ -504,6 +596,41 @@ func TestActionWarningsKeepBottomDetailReachable(t *testing.T) {
 	m.viewport.GotoBottom()
 	if !strings.Contains(ansi.Strip(m.render()), "BOTTOM-SENTINEL") {
 		t.Fatal("new warning rows clipped the viewport's reachable bottom")
+	}
+}
+
+func TestEverySectionUsesBoundedPaneAndDetailSnapshotSurvivesResize(t *testing.T) {
+	m := tableModel(t)
+	m.cursor = 1
+	id := m.page.Entries[1].ID
+	m.resize(170, 40)
+	view := ansi.Strip(m.render())
+	if !strings.Contains(view, "╭─ Tasks ") || !strings.Contains(view, "┬─ Task details ") {
+		t.Fatalf("task split panes missing: %s", view)
+	}
+	m.openDetail()
+	snapshot := m.viewport.GetContent()
+	// A new catalog page must not replace the open detail snapshot on resize.
+	m.page.Entries[1].Details = []ui.DetailGroup{{Title: "Changed", Fields: []ui.DetailField{{Value: "unrelated refreshed row"}}}}
+	for _, width := range []int{38, 80, 120, 170} {
+		m.resize(width, 24)
+		if m.viewport.GetContent() != snapshot || !strings.Contains(snapshot, id) {
+			t.Fatal("resize replaced the selected detail snapshot")
+		}
+		m.viewport.GotoBottom()
+		if !strings.Contains(ansi.Strip(m.render()), "Esc: list") {
+			t.Fatal("border displaced full-detail navigation")
+		}
+	}
+	m.detail = false
+	m.page = ui.Page{Entries: []ui.Entry{{Title: "Selected record"}}}
+	m.cursor = 0
+	for i, section := range m.sections {
+		m.selected = i
+		view = ansi.Strip(m.render())
+		if !strings.Contains(view, "╭─ "+section.Name+" ") || !strings.Contains(view, "> Selected record") {
+			t.Fatalf("%s uses different pane or selection vocabulary: %s", section.Name, view)
+		}
 	}
 }
 

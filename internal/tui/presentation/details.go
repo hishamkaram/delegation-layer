@@ -17,9 +17,9 @@ func DetailText(entry ui.Entry) string {
 	}
 	groups := make([]string, 0, len(entry.Details))
 	for _, group := range entry.Details {
-		lines := []string{flat(group.Title)}
+		lines := []string{accent(flat(group.Title) + " ──")}
 		for _, field := range group.Fields {
-			value := terminal.Safe(field.Value)
+			value := semantic(terminal.Safe(field.Value), field.Role)
 			if field.Label != "" {
 				value = flat(field.Label) + ": " + value
 			}

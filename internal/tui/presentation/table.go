@@ -25,10 +25,13 @@ func Table(page ui.Page, cursor, width, height, offset int) string {
 	if height == 1 {
 		return lines[0]
 	}
+	if height >= 3 {
+		lines = append(lines, strings.Repeat("─", width))
+	}
 	if len(page.Entries) == 0 {
 		return strings.Join(append(lines, plainCell("No records in this view.", width)), "\n")
 	}
-	count := height - 1
+	count := height - len(lines)
 	cursor = min(max(0, cursor), len(page.Entries)-1)
 	start := max(0, cursor-count+1)
 	for i := start; i < len(page.Entries) && i < start+count; i++ {
@@ -43,7 +46,7 @@ func tableHeader(columns []ui.Column, visible []visibleColumn, width int) string
 		cells = append(cells, plainCell(columns[column.index].Title, column.width))
 	}
 	line := cells[0] + strings.Join(cells[1:], strings.Repeat(" ", columnGap))
-	return lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Cyan).Render(padLine(line, width))
+	return accent(padLine(line, width))
 }
 
 func tableRow(entry ui.Entry, columnCount int, visible []visibleColumn, width int, selected bool) string {
@@ -55,13 +58,24 @@ func tableRow(entry ui.Entry, columnCount int, visible []visibleColumn, width in
 		return selectionStyle(plainCell(marker+"Table row unavailable: cell count mismatch", width), selected)
 	}
 	cells := make([]string, 0, len(visible))
+	// Reverse selection inherits the terminal's contrast pair; foreground
+	// colors would turn into separate background bars on the selected row.
 	for _, column := range visible {
 		cell := entry.Cells[column.index]
-		text := cell.Text
+		cellWidth := column.width
+		prefix := ""
 		if cell.Fault {
-			text = "! " + text
+			prefix = plainCell("! ", min(2, cellWidth))
+			if !selected {
+				prefix = semantic(prefix, ui.RoleNegative)
+			}
+			cellWidth = max(0, cellWidth-2)
 		}
-		cells = append(cells, plainCell(text, column.width))
+		text := plainCell(cell.Text, cellWidth)
+		if !selected {
+			text = semantic(text, cell.Role)
+		}
+		cells = append(cells, prefix+text)
 	}
 	return selectionStyle(padLine(marker+strings.Join(cells, strings.Repeat(" ", columnGap)), width), selected)
 }

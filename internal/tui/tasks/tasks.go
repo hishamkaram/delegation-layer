@@ -10,6 +10,7 @@ import (
 
 	"github.com/hishamkaram/delegation-layer/internal/app"
 	"github.com/hishamkaram/delegation-layer/internal/history"
+	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 	"github.com/hishamkaram/delegation-layer/internal/tui/ui"
 )
@@ -171,16 +172,58 @@ func (v views) entry(row history.Row) ui.Entry {
 	evidence := ui.DetailGroup{Title: "Evidence", Fields: []ui.DetailField{{Label: "Observation", Value: "not observed"}}}
 	if observed := row.Observation; observed != nil {
 		cells[2].Text, cells[3].Text, cells[4].Text = observed.Admission.String(), observed.Liveness.String(), observed.Publication.String()
-		evidence.Fields = []ui.DetailField{{Label: "Admission", Value: observed.Admission.String()}, {Label: "Liveness", Value: observed.Liveness.String()}, {Label: "Publication", Value: observed.Publication.String()}, {Label: "Status", Value: observed.Status}, {Label: "Failure code", Value: observed.FailureCode}, {Label: "Observed", Value: observed.At.Format(time.RFC3339)}, {Label: "Source", Value: observed.Source}}
+		cells[2].Role, cells[3].Role, cells[4].Role = admissionRole(observed.Admission), livenessRole(observed.Liveness), publicationRole(observed.Publication)
+		// Current nonempty statuses are stop causes; publication carries committed/rejected outcomes.
+		failureRole := ui.RoleNeutral
+		if observed.Status != "" || observed.FailureCode != "" {
+			failureRole = ui.RoleNegative
+		}
+		evidence.Fields = []ui.DetailField{{Label: "Admission", Value: cells[2].Text, Role: cells[2].Role}, {Label: "Liveness", Value: cells[3].Text, Role: cells[3].Role}, {Label: "Publication", Value: cells[4].Text, Role: cells[4].Role}, {Label: "Status", Value: observed.Status, Role: failureRole}, {Label: "Failure code", Value: observed.FailureCode, Role: failureRole}, {Label: "Observed", Value: observed.At.Format(time.RFC3339)}, {Label: "Source", Value: observed.Source}}
 	}
 	groups = append(groups, evidence)
 	limitations := ui.DetailGroup{Title: "Faults/limitations"}
 	for _, fault := range []string{row.Fault, row.ObservationFault} {
 		if fault != "" {
-			limitations.Fields = append(limitations.Fields, ui.DetailField{Label: "Fault", Value: fault})
+			limitations.Fields = append(limitations.Fields, ui.DetailField{Label: "Fault", Value: fault, Role: ui.RoleNegative})
 		}
 	}
 	limitations.Fields = append(limitations.Fields, ui.DetailField{Label: "Authority", Value: "Cached rows grant no action authority. Inspect explicitly for live status; collect explicitly to recover publication."})
 	groups = append(groups, limitations)
 	return ui.Entry{ID: row.Handle(), Title: row.Handle(), Cells: cells, Details: groups, Actions: v.taskActions(row.Handle())}
+}
+
+func admissionRole(value task.Admission) ui.DisplayRole {
+	switch value {
+	case task.AdmissionAdmitted:
+		return ui.RolePositive
+	case task.AdmissionNotAdmitted:
+		return ui.RoleNegative
+	case task.AdmissionUnknown:
+		return ui.RoleNeutral
+	}
+	return ui.RoleNeutral
+}
+
+func livenessRole(value task.Liveness) ui.DisplayRole {
+	switch value {
+	case task.LivenessRunning:
+		return ui.RoleWarning
+	case task.LivenessEnded, task.LivenessUndetermined:
+		return ui.RoleNeutral
+	}
+	return ui.RoleNeutral
+}
+
+func publicationRole(value task.Publication) ui.DisplayRole {
+	switch value {
+	case task.PublicationCommitted:
+		return ui.RolePositive
+	case task.PublicationRejected:
+		return ui.RoleNegative
+	case task.PublicationPending:
+		return ui.RoleWarning
+	case task.PublicationUnknown:
+		return ui.RoleNeutral
+	}
+	return ui.RoleNeutral
 }
