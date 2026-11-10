@@ -1,10 +1,12 @@
 """The native component CI job executes required proofs and preserves their failures."""
 
+import json
 import os
 from pathlib import Path
 import re
 import shlex
 import subprocess
+import sys
 import tempfile
 import unittest
 
@@ -283,6 +285,53 @@ class IndependentStartupWorkflowTests(unittest.TestCase):
         self.assertIn("os: [ubuntu-24.04, macos-latest]", self.job)
         self.assertIn("DELEGATE_INDEPENDENT_EXPECTED_BACKEND: process-group", self.proof)
         self.assertNotIn("continue-on-error", self.job)
+
+    def test_nested_ci_selects_cpu_policy_only_for_positive_macos_admissions(self):
+        job = job_text(self.source, "nested-survival")
+        proof = steps(job)["Prove warm controls, cold nested survival and refused leader cleanup"]
+        self.assertIn("os: [ubuntu-24.04, macos-latest]", job)
+        self.assertIn(
+            "DELEGATE_NESTED_CPU_GUARD: ${{ matrix.os == 'macos-latest' && 'false' || 'true' }}",
+            proof)
+        self.assertIn("run: make acceptance-nested-survival", proof)
+        self.assertNotIn("continue-on-error", job)
+        self.assertNotIn("MEMORY_GUARD", proof)
+
+    def test_nested_make_propagates_default_and_explicit_cpu_policy_to_every_scenario(self):
+        source = (WORKFLOW.parents[2] / "Makefile").read_text()
+        recipe = source.split("acceptance-nested-survival: nested-survival-fixture\n", 1)[1].split("\n\n", 1)[0]
+        for policy in (None, "false"):
+            with self.subTest(policy=policy), tempfile.TemporaryDirectory(prefix="nested-policy-make-") as directory:
+                root = Path(directory)
+                (root / "bin").mkdir()
+                stub = root / "python3"
+                stub.write_text(
+                    f"#!{sys.executable}\nimport json, os, sys\n"
+                    "with open(os.environ['CAPTURE'], 'a') as capture:\n"
+                    "    capture.write(json.dumps(sys.argv[1:]) + '\\n')\n")
+                stub.chmod(0o700)
+                (root / "Makefile").write_text(
+                    "SHELL := /bin/bash\n.SHELLFLAGS := -euo pipefail -c\nBIN_DIR := bin\n"
+                    "acceptance-nested-survival:\n" + recipe + "\n")
+                capture = root / "calls.jsonl"
+                environment = {"PATH": str(root) + os.pathsep + os.defpath, "CAPTURE": str(capture)}
+                if policy is not None:
+                    environment["DELEGATE_NESTED_CPU_GUARD"] = policy
+                result = subprocess.run(
+                    ["make", "--no-print-directory", "acceptance-nested-survival"],
+                    cwd=root, env=environment, capture_output=True, text=True, check=False, timeout=10)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                calls = [json.loads(line) for line in capture.read_text().splitlines()]
+                self.assertEqual(len(calls), 4)
+                self.assertEqual(
+                    [(call[call.index("--scenario") + 1], call[call.index("--nested-topology") + 1])
+                     for call in calls],
+                    [("nested-survival", topology) for topology in ("shared-warm", "other-warm", "other-cold")]
+                    + [("nested-refused-leader", "shared-warm")])
+                for call in calls:
+                    self.assertEqual(call.count("--nested-cpu-guard"), 1, call)
+                    self.assertEqual(call[call.index("--nested-cpu-guard") + 1], policy or "true")
+                    self.assertNotIn("--memory-guard=false", call)
 
     def test_failed_make_is_not_hidden_by_successful_tee(self):
         shell = re.search(r"^        shell: (\S+)$", self.proof, re.M)

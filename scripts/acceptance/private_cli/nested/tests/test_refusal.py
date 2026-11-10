@@ -123,7 +123,7 @@ class RefusedLeaderControlTests(unittest.TestCase):
         write_json(self.state.directory / "root.json", {"schema_version": 1, "root_id": "a" * 32})
         self.case = RefusedLeaderCase.__new__(RefusedLeaderCase)
         self.case.a = self.state.directory
-        self.case.configuration = {"leader": "b" * 32}
+        self.case.configuration = {"leader": "b" * 32, "cpu_guard": True}
         self.case.injected = False
         self.case.commands = []
         self.case.responses = {}
@@ -211,10 +211,12 @@ class RefusedLeaderControlTests(unittest.TestCase):
         # The fixture is an actual finite child of the existing capture owner.
         # Any observation after its non-created reply would escape to this real
         # Delegate boundary and fail the test.
+        self.case.configuration["cpu_guard"] = False
         with patch.object(NestedCase, "command", side_effect=AssertionError("unexpected real task command")):
             with self.assertRaisesRegex(AcceptanceFailure, "never redispatch"):
                 self.dispatch()
         require_injected_refusal(self.case)
+        self.assertNotIn("--cpu-guard=false", self.case.commands[0]["arguments"])
         captured = json.loads((self.case.receipts / "leader.json").read_text())
         fixture_source = Path(__file__).resolve().parents[2] / "refusal_fixture.py"
         self.assertEqual(captured["arguments"], [str(fixture_source), "a" * 32, "b" * 32])
@@ -239,7 +241,7 @@ class RefusedLeaderControlTests(unittest.TestCase):
                ]}
         resource = {"status": "pressure", "diagnostics": {"host_cpu": cpu}}
         self.assertEqual(captured["response"]["resource_admission"], resource)
-        self.assertEqual(self.case.evidence["failed_admission"]["resource_admission"], resource)
+        self.assertEqual(object_at(self.case.evidence, "failed_admission")["resource_admission"], resource)
         self.assertEqual(self.case.lifetime.attempted_task_ids, ["b" * 32])
         self.assertEqual(self.case.responses, {})
         self.assertEqual(len(self.case.commands), 1)
@@ -247,10 +249,32 @@ class RefusedLeaderControlTests(unittest.TestCase):
         with self.assertRaisesRegex(AcceptanceFailure, "only the original leader dispatch"):
             self.dispatch()
 
+    def test_real_warmup_reads_cpu_policy_without_entering_synthetic_leader_injection(self):
+        self.case.configuration["cpu_guard"] = False
+        self.case.lifetime.old_install = self.state.directory.parent / "installed"
+        fault = RuntimeError("no real task may start in this test")
+        with patch("scripts.acceptance.private_cli.nested.case.run_json", side_effect=fault) as command:
+            with self.assertRaises(RuntimeError) as caught:
+                self.case.dispatch(self.state.directory, "c" * 32, self.state.directory / "brief", "2m", "warm-a")
+        self.assertIs(caught.exception, fault)
+        command.assert_called_once()
+        arguments = command.call_args.args[2]
+        self.assertEqual([argument for argument in arguments if argument.startswith("--cpu-guard")], ["--cpu-guard=false"])
+        self.assertFalse(any(argument.startswith("--memory-guard") for argument in arguments))
+        self.assertFalse(self.case.injected)
+
+    def test_synthetic_leader_rejects_cpu_opt_out_before_the_finite_fixture_runs(self):
+        with patch.object(self.case, "_dispatch_guard_arguments", return_value=["--cpu-guard=false"]), \
+                patch("scripts.acceptance.private_cli.nested.refusal.run_json") as command:
+            with self.assertRaisesRegex(AcceptanceFailure, "default CPU admission"):
+                self.dispatch()
+        command.assert_not_called()
+        self.assertFalse(self.case.injected)
+
     def test_warm_refusal_and_unrelated_failure_are_never_expected_negative(self):
         with self.assertRaisesRegex(AcceptanceFailure, "never redispatch"):
             self.dispatch()
-        original = dict(self.case.evidence["failed_admission"])
+        original = dict(object_at(self.case.evidence, "failed_admission"))
         for change in ({"name": "warm-a"}, {"task_record": "not_created"}, {"admission": "not-admitted"},
                        {"task_id": "c" * 32}, {"failure": {"code": "storage_failed"}}, {"resource_admission": {}}):
             with self.subTest(change=change):
@@ -267,7 +291,7 @@ class RefusedLeaderControlTests(unittest.TestCase):
         with patch("scripts.acceptance.private_cli.nested.refusal.run_json", return_value=response):
             with self.assertRaisesRegex(AcceptanceFailure, "never redispatch"):
                 self.dispatch()
-        public = self.case.evidence["failed_admission"]["resource_admission"]
+        public = object_at(self.case.evidence, "failed_admission")["resource_admission"]
         self.assertEqual(public, {"status": "pressure", "diagnostics": {"host_cpu": expected_cpu()}})
         self.assertNotIn("private-secret", json.dumps(self.case.evidence))
 

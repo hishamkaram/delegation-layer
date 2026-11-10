@@ -14,6 +14,12 @@ DESCENDANT_WINDOW_SECONDS = 30
 DESCENDANT_BACKSTOP_SECONDS = 60
 
 
+def positive_admission_guard_arguments(enabled: object) -> list[str]:
+    """Validate the required fixture policy before building a positive admission."""
+    require(type(enabled) is bool, "nested CPU guard must be a present boolean")
+    return [] if enabled else ["--cpu-guard=false"]
+
+
 def timestamp_ns(value):
     return _timestamp_unix_ns(_canonical_timestamp(value, "nested lifetime timestamp"))
 
