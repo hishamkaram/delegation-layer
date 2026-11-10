@@ -245,22 +245,45 @@ func TestOwnerStopClientBusyPreservesOwnerServing(t *testing.T) {
 
 func TestOwnerStopClientAcknowledgementDoesNotEstablishClosure(t *testing.T) {
 	f := newOwnerContactFixture(t)
-	ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
+	// The finite context is a watchdog. Wait for ACK and same-connection EOF
+	// before canceling; the held lease still forbids serving closure.
+	before := stopRecordSnapshot(t, f.reader)
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
 	defer cancel()
 	join := serveOwnerStopFixture(t, f, func(connection *net.UnixConn) error {
-		request, err := readOwnerFrame[ownerStopRequest](bufio.NewReader(connection))
+		reader := bufio.NewReader(connection)
+		request, err := readOwnerFrame[ownerStopRequest](reader)
 		if err != nil {
 			return err
 		}
-		return writeOwnerFrame(connection, ownerStopFixtureReply(request, ownerStopAccepted))
+		if err = writeOwnerFrame(connection, ownerStopFixtureReply(request, ownerStopAccepted)); err != nil {
+			return err
+		}
+		if _, err = reader.ReadByte(); !errors.Is(err, io.EOF) {
+			return errors.Join(ErrIdentity, err)
+		}
+		cancel()
+		return nil
 	})
 	result, err := StopOwnerServing(ctx, f.reader)
-	if !errors.Is(err, context.DeadlineExceeded) || result.State != OwnerStopUnknown || result.ProcessClosure != OwnerProcessPending {
-		t.Fatalf("ACK/held lease became closure: %+v %v", result, err)
+	if exchangeErr := join(); exchangeErr != nil {
+		t.Fatalf("ACK/EOF boundary not established: %v; result %+v %v", exchangeErr, result, err)
 	}
-	if err = join(); err != nil {
-		t.Fatal(err)
+	var contactErr ownerContactError
+	// Canceled snapshot reads add the generic evidence marker. A failed
+	// contact or any unrelated error still invalidates this ACK proof.
+	cancellationOnly := task.AllErrorCauses(err, func(cause error) bool {
+		return errors.Is(cause, context.Canceled) || errors.Is(cause, task.ErrEvidenceFault)
+	})
+	if !errors.Is(err, context.Canceled) || !cancellationOnly || errors.As(err, &contactErr) ||
+		result.State != OwnerStopUnknown || result.ProcessClosure != OwnerProcessPending ||
+		result.Startup != f.auth.request.Owner || result.Process != f.auth.assumption.Process {
+		t.Fatalf("verified ACK/held lease became closure or contact failure: %+v %v", result, err)
 	}
+	if !maps.Equal(before, stopRecordSnapshot(t, f.reader)) {
+		t.Fatal("ACK/cancellation changed canonical records")
+	}
+	assertAvailable(t, f.lease.path, false)
 	requireNoOwnerContactConnection(t, f.auth.listener)
 }
 
