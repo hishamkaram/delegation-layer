@@ -46,6 +46,8 @@ def parse_arguments():
     )
     parser.add_argument("--parallel-tasks", type=int, default=CAPACITY_TARGET_TASKS)
     parser.add_argument("--nested-topology", choices=("shared-warm", "other-warm", "other-cold"))
+    parser.add_argument("--nested-cpu-guard", choices=("true", "false"),
+                        help="check CPU pressure for positive nested fixture admissions (default: true)")
     parser.add_argument("--expected-backend", choices=("cgroup-v2", "process-group"))
     parser.add_argument("--native-fixture", type=Path, help="native lifetime test binary for nested acceptance")
     parser.add_argument(
@@ -65,6 +67,7 @@ def parse_arguments():
         parser.error("installed binary inputs are retired; select --source-root and optionally "
                      "--upgraded-source-root to build independent owned installations")
     _validate_scenario_arguments(args, parser)
+    args.nested_cpu_guard = args.nested_cpu_guard != "false"
     if args.dispatch_workers is not None and args.dispatch_workers <= 0:
         parser.error("--dispatch-workers must be positive")
     dispatch_workers = min(args.parallel_tasks, args.dispatch_workers or DEFAULT_DISPATCH_WORKERS)
@@ -84,8 +87,8 @@ def _validate_scenario_arguments(args, parser):
                          "runtime-only and the current installation")
         if args.scenario == "nested-refused-leader" and args.nested_topology != "shared-warm":
             parser.error("nested-refused-leader requires shared-warm topology")
-    elif any(option is not None for option in nested_options):
-        parser.error("nested topology/backend/native fixture options require a nested acceptance scenario")
+    elif any(option is not None for option in nested_options) or args.nested_cpu_guard is not None:
+        parser.error("nested topology/backend/native fixture/CPU guard options require a nested acceptance scenario")
     elif args.scenario == MODERN_CONTENTION_SCENARIO:
         if (args.parallel_tasks != MODERN_CONTENTION_TASK_COUNT
                 or args.upgraded_source_root is None):

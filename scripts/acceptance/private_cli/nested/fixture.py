@@ -13,6 +13,7 @@ from scripts.acceptance.private_cli.capture import borrow_capture_root
 from scripts.acceptance.private_cli.capture import run_captured_text_command
 from scripts.acceptance.private_cli.commands import run_json
 from scripts.acceptance.private_cli.nested.policy import timestamp_ns
+from scripts.acceptance.private_cli.nested.policy import positive_admission_guard_arguments
 
 
 def fixture_environment(configuration, **values):
@@ -78,6 +79,7 @@ def wait_gate(path, fence, deadline_ns, configuration, capture):
 
 
 def dispatch_worker(configuration, capture, role):
+    guard_arguments = positive_admission_guard_arguments(configuration.get("cpu_guard"))
     controls = Path(configuration["controls"])
     if (controls / "fence").exists():
         wait_gate(controls / "leader-release", controls / "fence", time.time_ns() + 180_000_000_000,
@@ -89,7 +91,7 @@ def dispatch_worker(configuration, capture, role):
                  ["--root", configuration["worker_state"], "dispatch", "--provider", "pi:json",
                   "--permission", "read-only", "--cwd", configuration["workspace"],
                   "--brief", configuration[role + "_brief"], "--id", configuration[role],
-                  "--budget", "10m", "--json"], expected=(0, 1), timeout=45,
+                  "--budget", "10m", "--json", *guard_arguments], expected=(0, 1), timeout=45,
                  receipt=controls / (role + "-dispatch.json"), capture_root=capture,
                  phase="nested-fixture-control", capture_response=True)
     finally:

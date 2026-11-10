@@ -30,9 +30,15 @@ class RefusedLeaderCase(NestedCase):
         self.commands = []
         self.injected = False
 
+    def _dispatch_guard_arguments(self, name):
+        if name == "leader":
+            return []
+        return super()._dispatch_guard_arguments(name)
+
     def command(self, state, arguments, name, *, expected=(0,), deadline=None):
         self.commands.append({"state": str(state), "arguments": list(arguments), "name": name})
         if name == "leader":
+            require("--cpu-guard=false" not in arguments, "synthetic leader must keep default CPU admission")
             require(not self.injected and state == self.a and arguments[0] == "dispatch"
                     and arguments[arguments.index("--id") + 1] == self.configuration["leader"],
                     "refusal fixture may replace only the original leader dispatch")

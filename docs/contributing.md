@@ -473,13 +473,29 @@ This proves the fixture integration, not an upstream account's availability.
 The fixture defaults to CPU and memory checks. CI passes `--cpu-guard=false`
 for macOS positive admissions in both fixture modes, including the refusal
 control's real warm-up; memory remains enabled and the injected negative is
-unchanged. This isolates provider-lifecycle coverage from unowned runner CPU
+unchanged. This isolates provider-lifecycle coverage from uncontrolled runner CPU
 load. The platform gate retains default-on guard coverage. Revisit this choice
 if runners provide controlled CPU isolation; it does not establish the cause of
 a historical CPU refusal or prove that CPU accounting was defective.
 
-Nested-survival acceptance keeps its default resource guards. After a completed
-host-CPU refusal, its receipt includes one bounded, failure-only `ps` projection:
+Nested-survival acceptance defaults to CPU and memory checks. CI temporarily
+sets `DELEGATE_NESTED_CPU_GUARD=false` only on macOS for positive admissions,
+including the refused-leader control's real warm-up. The Make target passes
+`--nested-cpu-guard` explicitly to all three topologies and the refusal control;
+the selected boolean travels through fixture configuration to both nested workers.
+Local and Linux runs retain CPU-on; memory stays on everywhere. The synthetic
+refused leader retains default CPU arguments and unchanged negative assertions.
+Before admission, the receipt records `admission_guards`, its positive-only
+scope and, when CPU is off, the unproven host-load source and fixture-descendant
+closure. This proves lifecycle behavior under that policy, not default CPU
+admission. The nested-survival CI job owns this temporary selection; it may hide
+fixture-descendant load. Remove it when host CPU is controlled and fixture
+descendants have proven closure. Platform checks and the remaining native
+acceptance checks keep default-on CPU coverage, apart from the macOS CCR,
+candidate-install and nested selections described here.
+
+After a completed host-CPU refusal, the nested receipt includes one bounded,
+failure-only `ps` projection:
 allowlisted role hints, counts and up to eight native historical CPU percentages.
 These hints cannot identify owned processes or establish causality, and the
 post-refusal snapshot does not match the admission sampling intervals. Capture
@@ -580,8 +596,10 @@ Linux and the shared private-CLI caller retain that default. Memory stays on.
 The receipt records `admission_guards` before bootstrap execution and discloses
 that the host-load source and installer-descendant closure are unproven. This
 proves installed bootstrap behavior under the recorded policy, not default CPU
-admission. Platform and nested-survival gates keep their default-on guard
-coverage. The distribution install job owns this selection; remove it when
+admission. Platform checks and the remaining native acceptance checks keep
+default-on CPU coverage, apart from the macOS CCR, candidate-install and nested
+selections described above.
+The distribution install job owns its selection; remove it when
 host CPU is controlled and installer descendants have proven closure. Failed
 or uncertain attempts still retain their evidence; the proof tool never retries them.
 

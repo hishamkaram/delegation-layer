@@ -555,6 +555,10 @@ jobs:
       - name: Prove warm controls, cold nested survival and refused leader cleanup
         env:
           DELEGATE_NESTED_EXPECTED_BACKEND: process-group
+          # Temporary, owned by this job: CPU-off may hide fixture-descendant load.
+          # Proves positive lifecycle behavior, not default CPU admission. Remove when
+          # host CPU is controlled and fixture descendants have proven closure.
+          DELEGATE_NESTED_CPU_GUARD: ${{ matrix.os == 'macos-latest' && 'false' || 'true' }}
         run: make acceptance-nested-survival
       - name: Retain allowlisted nested survival receipts
         if: always()

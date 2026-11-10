@@ -254,6 +254,7 @@ acceptance-nested-survival: nested-survival-fixture
 			--pueue "$${DELEGATE_TEST_PUEUE:-$(BIN_DIR)/test-supervisor/pueue}" \
 			--pueued "$${DELEGATE_TEST_PUEUED:-$(BIN_DIR)/test-supervisor/pueued}" \
 			--scenario nested-survival --nested-topology "$$topology" \
+			--nested-cpu-guard "$${DELEGATE_NESTED_CPU_GUARD:-true}" \
 			--expected-backend "$${DELEGATE_NESTED_EXPECTED_BACKEND:-process-group}" \
 			--native-fixture "$(BIN_DIR)/nested-lifetime-fixture" \
 			--parallel-tasks 3 --dispatch-workers 1 --runtime-only \
@@ -266,6 +267,7 @@ acceptance-nested-survival: nested-survival-fixture
 		--pueue "$${DELEGATE_TEST_PUEUE:-$(BIN_DIR)/test-supervisor/pueue}" \
 		--pueued "$${DELEGATE_TEST_PUEUED:-$(BIN_DIR)/test-supervisor/pueued}" \
 		--scenario nested-refused-leader --nested-topology shared-warm \
+		--nested-cpu-guard "$${DELEGATE_NESTED_CPU_GUARD:-true}" \
 		--expected-backend "$${DELEGATE_NESTED_EXPECTED_BACKEND:-process-group}" \
 		--native-fixture "$(BIN_DIR)/nested-lifetime-fixture" \
 		--parallel-tasks 3 --dispatch-workers 1 --runtime-only \

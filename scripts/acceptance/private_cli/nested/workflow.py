@@ -7,6 +7,7 @@ import uuid
 
 from scripts.acceptance.evidence.files import write_json
 from scripts.acceptance.evidence.records import _read_control_record
+from scripts.acceptance.evidence.validation import AcceptanceFailure
 from scripts.acceptance.evidence.validation import require
 from scripts.acceptance.private_cli.capacity.ownership import prove_lifetime_owner_cohort
 from scripts.acceptance.private_cli.nested.case import NestedCase
@@ -32,6 +33,9 @@ from scripts.acceptance.private_cli.wrappers import wrapper_call_records
 
 def run_nested_survival(args, lifetime, fixture, receipts, receipt):
     case = NestedCase(args, lifetime, fixture, receipts, receipt)
+    actors = case.evidence["actors"]
+    if not isinstance(actors, dict):
+        raise AcceptanceFailure("nested actor evidence is not an object")
     receipt.phase("nested_setup")
     require(not os.environ.get("DELEGATION_LAYER_PROCESS_SCOPE"), "driver carries a managed scope marker")
     driver = case.native(os.getpid())
@@ -54,14 +58,14 @@ def run_nested_survival(args, lifetime, fixture, receipts, receipt):
     leader_launch = case.match_launch(case.a, leader, leader_identity)
     leader_spec = actor_specification(case.a, leader, case.configuration, args.expected_backend)
     require(leader_spec["pid"] == leader_launch["pid"], "leader specification selected a different command")
-    case.evidence["actors"]["leader"] = compact_spec(leader_spec)
+    actors["leader"] = compact_spec(leader_spec)
     w1 = case.nested_response("w1")
     # Only now may the observer contact B. No external setup or discovery can
     # accidentally turn the cold target into the warm control.
     first_spec = actor_specification(case.b, w1, case.configuration, args.expected_backend, live=True)
     require_worker_deadline(read_lifetime(case.b, w1, "intent.json"), 0, 0)
     first_lease = case.leases.enter_context(acquire_actor_lease(first_spec, case.configuration))
-    case.evidence["actors"]["w1"] = compact_spec(first_spec)
+    actors["w1"] = compact_spec(first_spec)
     scope = read_lifetime(case.a, leader, "intent.json")["scope_plan"]
     before = supervisor_continuity(case.b, case.configuration, lifetime.capture_token, scope)
     case.evidence["supervisor_before"] = before

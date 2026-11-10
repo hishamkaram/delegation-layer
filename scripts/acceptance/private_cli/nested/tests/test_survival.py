@@ -8,6 +8,9 @@ import fcntl
 import os
 import sys
 import unittest
+import io
+from contextlib import redirect_stderr
+from functools import partial
 from copy import deepcopy
 from pathlib import Path
 from unittest.mock import patch, Mock
@@ -42,6 +45,106 @@ from scripts.acceptance.processes.contracts import BoundedCommandResult
 from scripts.acceptance.processes.contracts import BoundedCommandError
 from scripts.acceptance.processes.contracts import CommandFailure
 from scripts.acceptance.testing.record_fixtures import object_at
+from scripts.acceptance.private_cli.arguments import parse_arguments
+
+
+class NestedGuardArgumentTests(unittest.TestCase):
+    def parse(self, *extra, scenario="nested-survival"):
+        arguments = ["acceptance-private-cli", "--pueue", sys.executable, "--pueued", sys.executable,
+                     "--output", "/unused-nested-parser-receipt.json"]
+        if scenario is not None:
+            arguments.extend(["--scenario", scenario, "--nested-topology", "shared-warm",
+                              "--expected-backend", "process-group", "--native-fixture", sys.executable,
+                              "--parallel-tasks", "3", "--dispatch-workers", "1", "--runtime-only"])
+        with patch.object(sys, "argv", [*arguments, *extra]):
+            return parse_arguments()[0]
+
+    def test_only_explicit_false_disables_nested_cpu_admission(self):
+        self.assertIs(self.parse("--nested-cpu-guard", "false").nested_cpu_guard, False)
+        self.assertIs(self.parse().nested_cpu_guard, True)
+        self.assertIs(self.parse("--nested-cpu-guard", "true").nested_cpu_guard, True)
+
+    def test_refusal_scenario_accepts_policy_but_other_scenarios_reject_every_explicit_selection(self):
+        self.assertIs(self.parse("--nested-cpu-guard", "false", scenario="nested-refused-leader").nested_cpu_guard, False)
+        self.assertIs(self.parse(scenario=None).nested_cpu_guard, True)
+        for value, scenario in (("0", "nested-survival"), ("true", None), ("false", None)):
+            with self.subTest(value=value, scenario=scenario), redirect_stderr(io.StringIO()):
+                with self.assertRaises(SystemExit) as caught:
+                    self.parse("--nested-cpu-guard", value, scenario=scenario)
+                self.assertEqual(caught.exception.code, 2)
+
+
+class NestedAdmissionPolicyTests(unittest.TestCase):
+    def make_case(self, enabled):
+        parent = Path(self.enterContext(tempfile.TemporaryDirectory(prefix="nested-policy-")))
+        owner = DirectoryOwner()
+        self.addCleanup(lambda: rollback_owned_directories(owner.transfer()))
+        base = owner.create("nested policy fixture", parent / "fixture", parent)
+        state = owner.create("nested policy state", base.directory / "state", base.directory)
+        capture = owner.create("nested policy captures", base.directory / "captures", base.directory)
+        workspace = owner.create("nested policy workspace", base.directory / "workspace", base.directory)
+        lifetime = FixtureLifetime(ownership=owner, base=base.directory, base_token=base, state_token=state,
+                                   capture_token=capture, old_install=base.directory / "installed",
+                                   old_libexec=base.directory / "libexec")
+        args = SimpleNamespace(nested_topology="other-warm", expected_backend="process-group",
+                               native_fixture=Path(sys.executable), nested_cpu_guard=enabled)
+        fixture = SimpleNamespace(state=state.directory, workspace=workspace.directory,
+                                  waiter_directory=base.directory / "waiters", lease_nonce="policy-case")
+        receipt = AcceptanceReceipt(parent / "receipt.json", 3, 1, {})
+        return NestedCase(args, lifetime, fixture, parent, receipt)
+
+    def assert_request(self, invoke, owner_path, expected_flags):
+        fault = RuntimeError("no task may start in this test")
+        with patch(owner_path, side_effect=fault) as command:
+            with self.assertRaises(RuntimeError) as caught:
+                invoke()
+        self.assertIs(caught.exception, fault)
+        command.assert_called_once()
+        arguments = command.call_args.args[2]
+        self.assertEqual([argument for argument in arguments if argument.startswith("--cpu-guard")], expected_flags)
+        self.assertFalse(any(argument.startswith("--memory-guard") for argument in arguments))
+
+    def test_parent_and_worker_requests_read_the_same_serialized_policy_before_admission(self):
+        for enabled in (True, False):
+            with self.subTest(enabled=enabled):
+                case = self.make_case(enabled)
+                configuration = json.loads((case.controls.directory / "configuration.json").read_text())
+                self.assertIs(configuration["cpu_guard"], enabled)
+                self.assertEqual(case.lifetime.attempted_task_ids, [])
+                case.receipt.write("FAIL", {"status": "not-required"}, RuntimeError("provider-free test"))
+                evidence = json.loads(case.receipt.output.read_text())["nested_survival"]
+                self.assertEqual(evidence["admission_guards"], {
+                    "cpu": "enabled" if enabled else "disabled-by-caller", "memory": "enabled"})
+                self.assertEqual(evidence["admission_guard_scope"], "positive-fixture-admissions")
+                if enabled:
+                    self.assertNotIn("admission_guard_limit", evidence)
+                else:
+                    self.assertEqual(evidence["admission_guard_limit"],
+                                     "CPU admission disabled by caller; host load source and fixture-descendant closure are unproven.")
+                flags = [] if enabled else ["--cpu-guard=false"]
+                for name, state, task_id in (("warm-a", case.a, "a" * 32), ("warm-b", case.b, "b" * 32),
+                                             ("leader", case.a, configuration["leader"])):
+                    with self.subTest(parent=name):
+                        self.assert_request(partial(case.dispatch, state, task_id, Path(configuration["leader_brief"]), "3m", name),
+                                            "scripts.acceptance.private_cli.nested.case.run_json", flags)
+                for role in ("w1", "w2"):
+                    with self.subTest(worker=role):
+                        self.assert_request(partial(dispatch_worker, configuration, None, role),
+                                            "scripts.acceptance.private_cli.nested.fixture.run_json", flags)
+
+    def test_worker_requires_present_exact_boolean_before_intent_or_invocation(self):
+        case = self.make_case(True)
+        configuration = json.loads((case.controls.directory / "configuration.json").read_text())
+        for invalid in ({}, {"cpu_guard": None}, {"cpu_guard": 0}, {"cpu_guard": "false"}):
+            with self.subTest(invalid=invalid):
+                changed = {key: value for key, value in configuration.items() if key != "cpu_guard"}
+                changed.update(invalid)
+                with patch("scripts.acceptance.private_cli.nested.fixture.run_json") as command:
+                    with self.assertRaisesRegex(AcceptanceFailure, "present boolean"):
+                        dispatch_worker(changed, None, "w1")
+                command.assert_not_called()
+                self.assertFalse((case.controls.directory / "w1-intent.json").exists())
+                self.assertFalse((case.controls.directory / "w1-control-ended.json").exists())
 
 
 class NestedSurvivalOracleTests(unittest.TestCase):
@@ -109,7 +212,7 @@ class NestedSurvivalOracleTests(unittest.TestCase):
     def assert_fenced_dispatch(self, *, after_first):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            configuration = {"controls": directory, "nonce": "case-nonce", "delegate": "delegate",
+            configuration = {"controls": directory, "nonce": "case-nonce", "delegate": "delegate", "cpu_guard": True,
                              "worker_state": "state", "workspace": directory, "w1_brief": "one.md",
                              "w2_brief": "two.md", "w1": "a" * 32, "w2": "b" * 32}
             results, failures = [], []
@@ -344,6 +447,7 @@ class NestedAdmissionReceiptTests(unittest.TestCase):
         self.case.lifetime = FixtureLifetime(old_install=self.root / "installed")
         self.case.fixture = SimpleNamespace(workspace=self.root)
         self.case.responses = {}
+        self.case.configuration = {"cpu_guard": True}
         self.case.evidence = {}
         self.case.receipts = self.root
         self.receipt = AcceptanceReceipt(self.root / "receipt.json", 3, 1, {})
@@ -414,7 +518,7 @@ class NestedBootstrapCleanupTests(unittest.TestCase):
                                    old_install=self.base.directory / "installed",
                                    old_libexec=self.base.directory / "libexec")
         self.receipt = AcceptanceReceipt(self.receipts / "receipt.json", 3, 1, {})
-        self.args = SimpleNamespace(nested_topology="other-warm", expected_backend="process-group",
+        self.args = SimpleNamespace(nested_topology="other-warm", expected_backend="process-group", nested_cpu_guard=True,
                                     native_fixture=Path(sys.executable))
         fixture = SimpleNamespace(state=self.state.directory, workspace=workspace.directory,
                                   waiter_directory=self.base.directory / "waiters", lease_nonce="fixture-nonce")
@@ -610,7 +714,7 @@ class NestedBootstrapCleanupTests(unittest.TestCase):
                           side_effect=fault, return_value=result) as snapshot_owner:
                 self.case._record_failed_admission("probe", self.task_id, response, capture=capture)
             snapshot_owner.assert_called_once()
-            projected = self.case.evidence["failed_admission"]
+            projected = object_at(self.case.evidence, "failed_admission")
             self.assertEqual(projected["failure"], self.failure)
             snapshot = object_at(projected, "host_cpu_snapshot")
             self.assertEqual(snapshot["status"], "unavailable")
@@ -678,7 +782,7 @@ class NestedBootstrapCleanupTests(unittest.TestCase):
         state, _primary = self.refuse("leader")
         self.case.cleanup_deadline = time.monotonic() + 3
         raw = list(self.case.lifetime.attempted_task_ids)
-        failed = dict(self.case.evidence["failed_admission"])
+        failed = dict(object_at(self.case.evidence, "failed_admission"))
         for fault in ("unfenced", "wrong-state", "wrong-configured-leader", "wrong-returned-id", "not-last",
                       "created", "reconciled", "response-key-without-value", "w1-in-b", "w2-in-a"):
             with self.subTest(fault=fault):
@@ -739,7 +843,7 @@ class NestedBootstrapCleanupTests(unittest.TestCase):
                                    private_config=self.state.directory / ".supervisor" / "pueue.yml",
                                    old_install=self.base.directory / "installed",
                                    old_libexec=self.base.directory / "libexec")
-        args = SimpleNamespace(nested_topology="other-cold", expected_backend="process-group",
+        args = SimpleNamespace(nested_topology="other-cold", expected_backend="process-group", nested_cpu_guard=True,
                                native_fixture=Path(sys.executable))
         fixture = SimpleNamespace(state=self.state.directory, workspace=self.parent,
                                   waiter_directory=self.base.directory / "waiters", lease_nonce="cold-nonce")
@@ -849,7 +953,7 @@ class NestedBootstrapCleanupTests(unittest.TestCase):
         state, _primary = self.refuse()
         self.case.creator_fenced = True
         self.case.cleanup_deadline = time.monotonic() + 3
-        self.case.evidence["failed_admission"]["task_record"] = "created"
+        object_at(self.case.evidence, "failed_admission")["task_record"] = "created"
         with self.assertRaisesRegex(AcceptanceFailure, "owned setup task is not a regular record"):
             cancel_owned_setup(self.case, state, [self.task_id], self.case.cleanup_deadline)
         self.native.assert_not_called()

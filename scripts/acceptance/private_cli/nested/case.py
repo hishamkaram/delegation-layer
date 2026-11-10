@@ -28,6 +28,7 @@ from scripts.acceptance.private_cli.nested.observation import observe_bootstrap_
 from scripts.acceptance.lifetime.closure import validate_managed_lifetime_closure
 from scripts.acceptance.private_cli.supervisor import pueue_snapshot
 from scripts.acceptance.private_cli.nested.policy import queue_ended_evidence
+from scripts.acceptance.private_cli.nested.policy import positive_admission_guard_arguments
 from scripts.acceptance.private_cli.receipt import resource_admission_evidence
 from scripts.acceptance.processes.operations import run_bounded_command
 from scripts.acceptance.processes.contracts import command_closure_unproven
@@ -39,6 +40,7 @@ class NestedCase:
     def __init__(self, args, lifetime, fixture, receipts, receipt):
         self.args, self.lifetime, self.fixture = args, lifetime, fixture
         self.receipts, self.receipt = receipts, receipt
+        guard_arguments = positive_admission_guard_arguments(args.nested_cpu_guard)
         self.controls = lifetime.ownership.create("nested controls", lifetime.base / "nested-controls", lifetime.base)
         captures = lifetime.ownership.create("nested command captures", lifetime.base / "nested-captures", lifetime.base)
         self.a = fixture.state
@@ -53,6 +55,7 @@ class NestedCase:
             "leader_state": str(self.a), "worker_state": str(self.b),
             "waiters": str(fixture.waiter_directory), "nonce": fixture.lease_nonce,
             "observer_environment": dict(lifetime.env),
+            "cpu_guard": args.nested_cpu_guard,
             **{role: uuid.uuid4().hex for role in ("leader", "w1", "w2")},
         }
         self.responses = {}
@@ -61,7 +64,13 @@ class NestedCase:
         self.cleanup_deadline = None
         self.leases = ExitStack()
         self.evidence = {"topology": args.nested_topology, "expected_backend": args.expected_backend,
-                         "actors": {}, "milestones": {}, "cleanup": {"status": "pending"}}
+                         "actors": {}, "milestones": {}, "cleanup": {"status": "pending"},
+                         "admission_guard_scope": "positive-fixture-admissions",
+                         "admission_guards": {"cpu": "disabled-by-caller" if guard_arguments else "enabled",
+                                              "memory": "enabled"}}
+        if guard_arguments:
+            self.evidence["admission_guard_limit"] = (
+                "CPU admission disabled by caller; host load source and fixture-descendant closure are unproven.")
         receipt.add_details(nested_survival=self.evidence)
         lifetime.prepare_cleanup = self.cleanup
         lifetime.closure_reader = self.read_closure
@@ -155,6 +164,10 @@ class NestedCase:
                 snapshot["closure_unproven"] = True
         return snapshot
 
+    def _dispatch_guard_arguments(self, name):
+        """Build flags for a real positive admission."""
+        return positive_admission_guard_arguments(self.configuration["cpu_guard"])
+
     def dispatch(self, state, task_id, brief, budget, name):
         if name == "warm-b":
             require(self.args.nested_topology == "other-warm" and state == self.b and self.b != self.a
@@ -164,7 +177,8 @@ class NestedCase:
         ids.append(task_id)
         response = self.command(state, ["dispatch", "--provider", "pi:json", "--permission", "read-only",
                                 "--cwd", str(self.fixture.workspace), "--brief", str(brief),
-                                "--id", task_id, "--budget", budget], name, expected=(0, 1))
+                                "--id", task_id, "--budget", budget, *self._dispatch_guard_arguments(name)],
+                                name, expected=(0, 1))
         if response.get("task_id") == task_id and response.get("task_record") == "created":
             self.responses[name] = response
         else:
@@ -291,7 +305,10 @@ class NestedCase:
                                             failed.get("root_id"), candidate, token,
                                             deadline=self.cleanup_deadline)
         require(proof["entry_exists"] is False, "refused bootstrap task entry is present; retain root")
-        self.evidence["cleanup"]["refused_not_created"] = proof
+        cleanup = self.evidence["cleanup"]
+        if not isinstance(cleanup, dict):
+            raise AcceptanceFailure("nested cleanup evidence is not an object")
+        cleanup["refused_not_created"] = proof
         return tuple(task_id for task_id in requested if task_id != candidate)
 
     def cleanup(self, deadline, disposal):
