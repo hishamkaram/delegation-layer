@@ -335,7 +335,7 @@ real account; a cross-build or a different kernel is not native runtime proof.
 | `make acceptance-private-cli-default-stop` | User, wall-budget and opt-in output-silence stops through the real guardian. |
 | `make acceptance-scheduler` | Native ticks and stop isolation with finite fixtures. The driver defaults to `--hosting managed-host` for foreground `scheduler serve`, without an OS service manager. Optional `--hosting service` retains the legacy `scheduler run` service path. |
 | `make acceptance-supervisor-handoff` | Inspection handoff while existing external work continues. |
-| `make acceptance-supervisor-upgrade-recovery` | Private-supervisor upgrade recovery. |
+| `make acceptance-supervisor-upgrade-recovery` | Private-supervisor upgrade recovery, including removal of the old install while a task and daemon remain live. |
 | `make acceptance-workspaces` | Managed workspace lifecycle, lineage and checkpoint fixtures. |
 | `make acceptance-native-lifetime` | Selected native lifetime backend behavior. |
 | `make acceptance-nested-survival` | Running and queued worker survival across leader budget expiry, with shared-warm, separate-warm and separate-cold private supervisors. |

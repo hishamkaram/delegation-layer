@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"strings"
 	"sync"
 
 	tea "charm.land/bubbletea/v2"
@@ -70,12 +71,7 @@ func historySection(backend *app.Workbench, a app.Arguments, cwd string, source 
 	section.Load = func(ctx context.Context, request ui.PageRequest) (ui.Page, error) {
 		c, cacheErr := source.Catalog()
 		page, err := tasks.NewSection(backend, a, cwd, c).Load(ctx, request)
-		if cacheErr != nil {
-			page.Summary = "History unavailable: " + cacheErr.Error() + "\n" + page.Summary
-		}
-		if description := source.Description(); description != "" {
-			page.Summary = description + "\n" + page.Summary
-		}
+		historyNotices(&page, cacheErr, source.Description())
 		return page, err
 	}
 	section.Actions = append(section.Actions,
@@ -89,6 +85,28 @@ func historySection(backend *app.Workbench, a app.Arguments, cwd string, source 
 		}},
 	)
 	return section
+}
+
+// historyNotices projects session-owned availability/provenance without changing
+// the adapter's coverage semantics or its rows.
+func historyNotices(page *ui.Page, cacheErr error, description string) {
+	var notices []string
+	if description != "" {
+		notices = append(notices, description)
+	}
+	if cacheErr != nil {
+		notices = append(notices, "History unavailable: "+cacheErr.Error())
+	}
+	if len(notices) == 0 {
+		return
+	}
+	notice := strings.Join(notices, "\n")
+	if len(page.Columns) > 0 {
+		page.Strip = strings.Join(strings.Fields(notice), " ") + " · " + page.Strip
+		page.Coverage = notice + "\n" + page.Coverage
+		return
+	}
+	page.Summary = notice + "\n" + page.Summary
 }
 
 // diagnosticSink has one invocation owner. Late callbacks never write to the

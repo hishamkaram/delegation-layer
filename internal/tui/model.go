@@ -12,6 +12,7 @@ import (
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/hishamkaram/delegation-layer/internal/tui/presentation"
 	"github.com/hishamkaram/delegation-layer/internal/tui/session"
 	"github.com/hishamkaram/delegation-layer/internal/tui/terminal"
 	"github.com/hishamkaram/delegation-layer/internal/tui/ui"
@@ -22,6 +23,7 @@ type (
 		generation uint64
 		section    int
 		page       ui.Page
+		search     string
 		err        error
 	}
 	actionMsg struct {
@@ -71,6 +73,9 @@ type model struct {
 	cancelLoad             context.CancelFunc
 	search                 textinput.Model
 	searching              bool
+	appliedSearch          string
+	pageSearch             string
+	tableOffset            int
 	after                  string
 	cursors                []string
 	detail                 bool
@@ -93,7 +98,9 @@ func newModel(sections []ui.Section, root, cwd, version string, tracker *session
 	search := textinput.New()
 	search.Placeholder = "Search metadata across history"
 	search.CharLimit = 1024
-	return &model{sections: sections, root: root, cwd: cwd, version: version, tracker: tracker, publish: publish, search: search, viewport: viewport.New(), busy: make(map[string]bool)}
+	detailViewport := viewport.New()
+	detailViewport.SoftWrap = true
+	return &model{sections: sections, root: root, cwd: cwd, version: version, tracker: tracker, publish: publish, search: search, viewport: detailViewport, busy: make(map[string]bool)}
 }
 
 func (m *model) Init() tea.Cmd { return func() tea.Msg { return initMsg{} } }
@@ -107,6 +114,7 @@ func (m *model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	default:
 		cmd = m.workerMessage(message)
 	}
+	m.sizeViewport()
 	if m.quitting && len(m.tracker.Pending()) == 0 {
 		return m, tea.Quit
 	}
@@ -170,8 +178,8 @@ func (m *model) addDiagnostic(msg diagnosticMsg) {
 func (m *model) resize(width, height int) {
 	m.width, m.height = width, height
 	m.search.SetWidth(max(10, width-5))
-	m.viewport.SetWidth(max(10, width-8))
-	m.viewport.SetHeight(max(3, height-9))
+	m.tableOffset = presentation.ClampOffset(m.page.Columns, width, m.tableOffset)
+	m.sizeViewport()
 }
 
 func (m *model) beginQuit() {
@@ -200,6 +208,7 @@ func (m *model) selectSection(index int) {
 	}
 	m.navigationEpoch++
 	m.selected = index
+	m.tableOffset = 0
 	m.cursor = 0
 	m.after = ""
 	m.cursors = nil
@@ -208,6 +217,7 @@ func (m *model) selectSection(index int) {
 	m.generation++
 	m.loading = false
 	m.page = ui.Page{}
+	m.pageSearch = ""
 	m.load()
 }
 
@@ -216,7 +226,8 @@ func (m *model) openDetail() {
 	if entry, ok := m.selectedEntry(); ok {
 		m.detail = true
 		m.message = ""
-		m.viewport.SetContent(terminal.Safe(entry.Detail))
+		m.sizeViewport()
+		m.viewport.SetContent(presentation.DetailText(entry))
 		m.viewport.GotoTop()
 	}
 }

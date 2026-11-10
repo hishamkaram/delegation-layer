@@ -18,8 +18,9 @@ type infrastructurePreparationContact struct {
 	selection infrastructureRoutingSelection
 }
 
-// The application owns the one-refresh decision. Effects retain their existing
-// record, serving, producer, request and process-observation owners.
+// The application owns one missing-helper refresh for admission or explicit
+// migration. Serving release retains the old owner's daemon Wait custody;
+// effects keep their existing record, producer and process-observation owners.
 type infrastructurePreparationEffects interface {
 	ReadArtifacts(context.Context, infrastructure.StartupReference) (infrastructure.Artifacts, error)
 	ReleaseServing(context.Context, infrastructure.StartupReference) (infrastructure.OwnerStopResult, error)
@@ -30,9 +31,10 @@ type infrastructurePreparationEffects interface {
 
 func requestInfrastructurePreparation(ctx context.Context, initial infrastructure.InitialOperation, established infrastructure.EstablishedOwner, effects infrastructurePreparationEffects) (infrastructure.PreparationOutcome, error) {
 	var retired infrastructure.StartupReference
-	if initial.Kind == infrastructure.InitialMigrateOwn && established.InitialResultFor == (infrastructure.StartupReference{}) {
+	refreshable := initial.Kind == "" || initial.Kind == infrastructure.InitialEnsureOwn || initial.Kind == infrastructure.InitialMigrateOwn
+	if refreshable && established.InitialResultFor == (infrastructure.StartupReference{}) {
 		var err error
-		established, retired, err = refreshInfrastructureMigrationOwner(ctx, established, effects)
+		established, retired, err = refreshInfrastructurePreparationOwner(ctx, established, effects)
 		if err != nil {
 			return infrastructure.PreparationOutcome{}, err
 		}
@@ -46,7 +48,7 @@ func requestInfrastructurePreparation(ctx context.Context, initial infrastructur
 	return outcome, errors.Join(infrastructurePreparationOutcomeError(outcome), err)
 }
 
-func refreshInfrastructureMigrationOwner(ctx context.Context, established infrastructure.EstablishedOwner, effects infrastructurePreparationEffects) (infrastructure.EstablishedOwner, infrastructure.StartupReference, error) {
+func refreshInfrastructurePreparationOwner(ctx context.Context, established infrastructure.EstablishedOwner, effects infrastructurePreparationEffects) (infrastructure.EstablishedOwner, infrastructure.StartupReference, error) {
 	missing, helperErr := infrastructureOwnerHelperMissing(ctx, established.Owner, effects)
 	if !missing {
 		if helperErr != nil {

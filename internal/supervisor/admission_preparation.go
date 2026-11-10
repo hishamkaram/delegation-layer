@@ -22,8 +22,9 @@ func PreparePrivateAdmissionSupervisorContext(ctx context.Context, lookup instal
 		return nil, errors.New("missing inspection state store")
 	}
 	for {
-		if supervisor, err := ProbePrivateAdmissionSupervisor(ctx, store, "", "", options); err != nil || supervisor != nil {
-			return supervisor, err
+		probe, err := probePrivateAdmissionWithLookup(ctx, lookup, store, options)
+		if err != nil || probe.client != nil {
+			return probe.client, err
 		}
 		supervisor, acquired, transitionErr := electPrivateAdmissionTransition(ctx, lookup, store, options)
 		if transitionErr != nil {
@@ -45,7 +46,8 @@ func electPrivateAdmissionTransition(ctx context.Context, lookup installation.Ex
 	var supervisor *pueue.Client
 	acquired, err := pueue.TryWithPrivateTransition(ctx, store.Root, func() error {
 		var probeErr error
-		supervisor, probeErr = ProbePrivateAdmissionSupervisor(ctx, store, "", "", options)
+		probe, probeErr := probePrivateAdmissionWithLookup(ctx, lookup, store, options)
+		supervisor = probe.client
 		if probeErr != nil || supervisor != nil {
 			return probeErr
 		}
@@ -66,10 +68,25 @@ func PreparePrivateAdmissionTransition(ctx context.Context, lookup installation.
 	if err = pueue.EnsurePrivateTaskObservationWithBootstrapLock(store.Root); err != nil {
 		return nil, err
 	}
+	// Preserve the canonical recovery owner's classification of unreadable
+	// publication, witness and transition records before any live refresh.
+	if _, err = pueue.ObservePublishedPrivatePairWithLock(ctx, store.Root, options); err != nil {
+		return nil, err
+	}
+	// A live transport refresh owns no generation replacement. Completed history
+	// can forbid replacing this binding without forbidding runtime capability evidence.
+	clientExecutable, daemonExecutable, _, err := privateAdmissionTransport(ctx, lookup, store.Root)
+	if err != nil {
+		return nil, err
+	}
+	supervisor, ready, err := repairLivePrivateAdmissionTransition(ctx, store, options, configExisted, clientExecutable, daemonExecutable)
+	if err != nil || ready {
+		return supervisor, err
+	}
 	if err = ReconcilePublishedSupervisorWithLock(ctx, store, options, lookup, false); err != nil {
 		return nil, err
 	}
-	supervisor, ready, err := repairLivePrivateAdmissionTransition(ctx, store, options, configExisted)
+	supervisor, ready, err = repairLivePrivateAdmissionTransition(ctx, store, options, configExisted, clientExecutable, daemonExecutable)
 	if err != nil || ready {
 		return supervisor, err
 	}
@@ -83,15 +100,15 @@ func PreparePrivateAdmissionTransition(ctx context.Context, lookup installation.
 	return bootstrapPrivateAdmission(ctx, lookup, store, options, configExisted)
 }
 
-func repairLivePrivateAdmissionTransition(ctx context.Context, store *taskdir.Store, options pueue.Options, configExisted bool) (*pueue.Client, bool, error) {
-	supervisor, groups, ready, err := pueue.ProbePrivateGroupsWithBootstrapLock(ctx, "", "", store.Root, options)
+func repairLivePrivateAdmissionTransition(ctx context.Context, store *taskdir.Store, options pueue.Options, configExisted bool, clientExecutable, daemonExecutable string) (*pueue.Client, bool, error) {
+	supervisor, groups, ready, err := pueue.ProbePrivateGroupsWithBootstrapLock(ctx, clientExecutable, daemonExecutable, store.Root, options)
 	if err != nil || !ready {
 		return supervisor, ready, err
 	}
 	if err = resolvePrivateAdmissionMigrationWithBootstrapLock(ctx, store, supervisor, configExisted, true); err != nil {
 		return supervisor, true, err
 	}
-	configured, err := OrdinarySchedulingConfiguredGroups(store.Root, supervisor.Binding(), groups)
+	configured, err := OrdinarySchedulingConfiguredGroups(store.Root, supervisor.RuntimeBinding(), groups)
 	if err != nil || configured {
 		return supervisor, true, err
 	}
@@ -143,7 +160,27 @@ func ClosePrivateAdmissionTransition(supervisor *pueue.Client, err error) error 
 // Healthy admission observes a published generation under a shared lease.
 // Missing or incomplete bootstrap falls through to the exclusive transition,
 // which rechecks all state before any start or identity publication.
+// AdmissionReadiness is a passive projection; only the resident may repair a miss.
+type AdmissionReadiness uint8
+
+const (
+	AdmissionNotReady AdmissionReadiness = iota
+	AdmissionReady
+	AdmissionSchedulingRefreshRequired
+)
+
+type admissionProbe struct {
+	client    *pueue.Client
+	readiness AdmissionReadiness
+}
+
 func ProbePrivateAdmissionSupervisor(ctx context.Context, store *taskdir.Store, clientExecutable, daemonExecutable string, options pueue.Options) (*pueue.Client, error) {
+	probe, err := probePrivateAdmissionSupervisor(ctx, store, clientExecutable, daemonExecutable, options)
+	return probe.client, err
+}
+
+func probePrivateAdmissionSupervisor(ctx context.Context, store *taskdir.Store, clientExecutable, daemonExecutable string, options pueue.Options) (admissionProbe, error) {
+	state := AdmissionNotReady
 	client, ready, err := pueue.ProbePrivateEndpointWithGate(ctx, clientExecutable, daemonExecutable, store.Root, options, func(checkContext context.Context, current *pueue.Client) (bool, error) {
 		if err := rejectPrivateAdmissionMigrationAfterEndpointProbe(checkContext, store, current, true); err != nil {
 			if errors.Is(err, ErrExternalInspectionHandoffRequired) {
@@ -155,15 +192,54 @@ func ProbePrivateAdmissionSupervisor(ctx context.Context, store *taskdir.Store, 
 		if err != nil || !observationReady {
 			return false, err
 		}
-		return OrdinarySchedulingRecorded(store.Root, current.Binding())
+		recorded, err := OrdinarySchedulingRecorded(store.Root, current.RuntimeBinding())
+		if err == nil && !recorded {
+			state = AdmissionSchedulingRefreshRequired
+		}
+		return recorded, err
 	})
 	if err != nil {
-		return nil, err
+		return admissionProbe{}, err
 	}
 	if !ready {
-		return nil, client.Close()
+		return admissionProbe{readiness: state}, client.Close()
 	}
-	return client, nil
+	return admissionProbe{client: client, readiness: AdmissionReady}, nil
+}
+
+// Preliminary selection never supplies authority. Canonical probes retain faults
+// from malformed records or unavailable selections and revalidate under their lease.
+func privateAdmissionTransport(ctx context.Context, lookup installation.ExecutableLookup, root string) (string, string, bool, error) {
+	published, found, readErr := pueue.ReadPrivateSupervisorBinding(root)
+	needsPair := false
+	if readErr == nil && found {
+		missing, pairErr := pueue.PrivateSupervisorPairMissing(published)
+		needsPair = pairErr == nil && (missing || pueue.IsLegacyStateSupervisorClient(root, published))
+	}
+	if !needsPair {
+		// Record and metadata faults belong to the canonical probe, which
+		// retains their exact wrapped cause instead of replacing it with lookup.
+		return "", "", false, nil
+	}
+	client, daemon, err := resolveCompatiblePrivatePair(ctx, lookup)
+	if err != nil && task.AllErrorCauses(err, func(cause error) bool { return errors.Is(cause, pueue.ErrCompatiblePairUnavailable) }) {
+		return "", "", false, nil
+	}
+	return client, daemon, err == nil, err
+}
+
+func probePrivateAdmissionWithLookup(ctx context.Context, lookup installation.ExecutableLookup, store *taskdir.Store, options pueue.Options) (admissionProbe, error) {
+	client, daemon, selected, err := privateAdmissionTransport(ctx, lookup, store.Root)
+	if err != nil {
+		return admissionProbe{}, err
+	}
+	if selected {
+		probe, err := probePrivateAdmissionSupervisor(ctx, store, client, daemon, options)
+		if err != nil || probe.readiness != AdmissionNotReady {
+			return probe, err
+		}
+	}
+	return probePrivateAdmissionSupervisor(ctx, store, "", "", options)
 }
 
 func privateSupervisorConfigExisted(root string) (bool, error) {

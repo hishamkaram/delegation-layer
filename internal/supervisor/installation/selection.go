@@ -119,10 +119,9 @@ func ResolvePrivateSupervisorExecutables(lookup ExecutableLookup) (client, daemo
 
 	pathClient, pathErr := lookup.lookPath("pueue")
 	if pathErr != nil {
-		if !errors.Is(pathErr, exec.ErrNotFound) && !errors.Is(pathErr, os.ErrNotExist) {
-			return "", "", errors.Join(clientErr, pathErr)
-		}
-		return "", "", clientErr
+		// Preserve closed-scope PATH diagnostics alongside bundle absence.
+		// The absence classifier, not this lookup, owns optional recovery.
+		return "", "", errors.Join(clientErr, pathErr)
 	}
 	client, err = ResolveSupervisorExecutable(pathClient, "pueue")
 	if err != nil {

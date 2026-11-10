@@ -101,6 +101,7 @@ cache or transfer receipt grants another launch or renews the execution budget.
 | `internal/app` | Compose commands, capture caller context and project CLI/typed workbench responses. |
 | `internal/app/command` | Typed command syntax, routing and generated help; application callbacks bind actual flags and validation. |
 | `internal/tui` and its feature packages | Terminal rendering, forms and consumer-owned ports over the application owners. |
+| `internal/tui/presentation` | Pure terminal layout, table/column rendering and grouped detail presentation; no observation or mutation authority. |
 | `internal/tui/session` / `internal/tui/browse` | Invocation operation/quit ownership / history handle and refresh scheduling. |
 | `internal/history` | Disposable metadata search, dated observations and elected cache writer; source stores stay authoritative. |
 | `internal/teams/contract` / `internal/teams` | Pure Team definitions/default merging / the authoritative SQLite catalog, project identity and optional project-default references. |

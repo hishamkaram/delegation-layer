@@ -22,6 +22,21 @@ import (
 
 func TestExternalInspectionHandoffPublicConsumersPreserveActiveWork(t *testing.T) {
 	store, deps, current, owner := newOwnedSupervisorProbeTestFixture(t)
+	deps = withSupervisorProbeRouting(t, deps, owner)
+	// Binding a daemon alone does not establish ordinary admission authority.
+	// This case starts ready so its post-handoff status can prove readiness too.
+	prepared, err := preparePrivateAdmissionSupervisor(deps, store, deps.SupervisorOptions)
+	settleSupervisorProbeTestClient(t, prepared, err)
+	if err != nil || prepared == nil {
+		t.Fatalf("prepare ready private admission before external handoff: %v", err)
+	}
+	if err = prepared.Close(); err != nil {
+		t.Fatal(err)
+	}
+	readiness, err := (supervisorcore.ControlRuntime{Options: deps.SupervisorOptions, Lookup: deps.supervisorLookup()}).ObserveAdmission(t.Context(), store)
+	if err != nil || readiness != supervisorcore.AdmissionReady {
+		t.Fatalf("external handoff requires ready private admission: readiness=%v err=%v", readiness, err)
+	}
 	external, legacy, externalLog := newExternalInspectionHandoffFixture(t, store)
 	externalCalls := readSupervisorProbeTestFile(t, externalLog)
 	operation := newInspectionPollTestOperation(t, store, external)

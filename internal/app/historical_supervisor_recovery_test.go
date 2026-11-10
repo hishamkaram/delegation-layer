@@ -220,10 +220,31 @@ func TestCompletedPrivateMigrationRecoversPendingInspectionEdgeWithoutGeneration
 	t.Parallel()
 	scenario := newHistoricalInspectionMigrationScenario(t)
 	fixture := scenario.fixture
+	// Model the read-side coordination that ordinary bootstrap establishes,
+	// before planting the interrupted inspection edge. Do not reconcile it here.
+	if err := pueue.WithBootstrapLockContext(t.Context(), fixture.root, func(context.Context) error {
+		return pueue.EnsurePrivateTaskObservationWithBootstrapLock(fixture.root)
+	}); err != nil {
+		t.Fatal(err)
+	}
 	recovery := prepareHistoricalInspectionRecovery(t, scenario)
-	rebound := assertHistoricalInspectionRecoverySelectsSuccessor(t, scenario, recovery.deps)
-
 	listenSupervisorProbeTestEndpoint(t, fixture.successor.Endpoint)
+	if ready, err := pueue.PrivateTaskObservationReady(fixture.root); err != nil || !ready {
+		t.Fatalf("completed successor lacks ordinary task observation: ready=%t err=%v", ready, err)
+	}
+	if recorded, err := supervisor.OrdinarySchedulingRecorded(fixture.root, fixture.successor); err != nil || !recorded {
+		t.Fatalf("completed successor lacks runtime scheduling: recorded=%t err=%v", recorded, err)
+	}
+	groupMigrationPath := filepath.Join(fixture.root, "inspection-group", "migration.json")
+	groupMigrationBefore := readHistoricalSupervisorBytes(t, groupMigrationPath)
+	rebound := assertHistoricalInspectionRecoverySelectsSuccessor(t, scenario, recovery.deps)
+	if !bytes.Equal(groupMigrationBefore, readHistoricalSupervisorBytes(t, groupMigrationPath)) {
+		t.Fatal("passive successor status changed the pending inspection edge")
+	}
+	if complete, err := inspection.GroupMigrationComplete(t.Context(), fixture.store, scenario.legacyGroup, scenario.successorGroup); err != nil || complete {
+		t.Fatalf("passive successor status completed the inspection edge: complete=%t err=%v", complete, err)
+	}
+
 	admitted, err := preparePrivateAdmissionSupervisor(recovery.deps, fixture.store, recovery.deps.SupervisorOptions)
 	if err != nil {
 		supervisor.CloseMaintenance(admitted, err)

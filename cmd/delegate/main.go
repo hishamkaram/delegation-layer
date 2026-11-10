@@ -29,5 +29,6 @@ func run(args []string, stdout, stderr io.Writer) int {
 }
 
 func main() {
+	tui.HoldHangupUntilExit(os.Args[1:])
 	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
 }

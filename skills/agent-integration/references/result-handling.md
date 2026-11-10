@@ -148,6 +148,22 @@ summary, then collect validated results as needed. Exit `1` carries typed
 `task_not_found` or an observation fault; `2` is invalid input; `3` is expiry.
 An undetermined task without canonical terminal evidence remains pending.
 
+A passive `supervisor status` may report `scheduling_refresh_required` with
+`next_action: "run_supervisor_ensure_owner"` after an installation upgrade.
+`migration_phase: "complete"` describes history, not current admission readiness.
+Run `delegate supervisor ensure-owner --json` only from a prepared persistent
+user context outside task-owned scope, retaining the same root selection. That
+owner refreshes the live transport's scheduling evidence; observation itself
+never repairs it. Ordinary admission can also refresh a missing installed
+infrastructure helper through the existing outside-owner handoff. Busy or
+concurrent handoffs remain explicit refusals; nested invocations cannot perform
+that replacement. Recover from the prepared outside context, without replaying
+created or uncertain work. Preserve failed task creation/admission evidence and follow
+the original task's next action; this is not permission to replay created or
+uncertain tasks. A cold or incompatible supervisor retains its reported
+migration or stop-and-report guidance. See the repository CLI recovery guide
+for operator details.
+
 ## Failure diagnosis
 
 Investigate a failed delegation before reporting back; no separate generic

@@ -31,6 +31,8 @@ check `delegate help tui` in your installed build before using it.
 | `a` | Open available actions for the view and selected row. |
 | `/`, then `Enter` | Apply metadata search; `Esc` cancels editing. |
 | `n` / `p` | Next / previous page, when available. |
+| Left / Right | Pan whole Tasks columns when the table overflows; Task ID stays visible. |
+| `c` in the Tasks list | Show full history coverage and dated-evidence limitations. |
 | `r` | Refresh the current view. |
 | `d` / `o` | Show invocation diagnostics / completed operation results. |
 | `?` | Show key help; another key closes it. |
@@ -41,9 +43,13 @@ Forms use `Tab` / `Shift-Tab` to change field, `Ctrl-O` to show advanced
 options, and `Ctrl-S` to review. Review shows the exact resource, workspace,
 provider, requested model, permission and budget before `Enter` submits.
 `Esc` returns to editing. Text inputs keep `q` as text. Long previews scroll
-with arrow keys. Terminals narrower than 110 columns use list/detail navigation;
-wider terminals show a split view. Below 38 columns or 12 rows, resize to
-continue.
+with arrow keys. Tasks use an aligned table with Task ID, Provider, Admission,
+Liveness, Publication and Created columns. At 108 columns the complete table
+fits; at 154 columns and at least 20 rows it shows a grouped detail pane.
+Narrower layouts keep a shortened Task ID column visible while Left/Right pans
+whole remaining columns. Indicators show hidden columns. Full IDs remain in
+details and action previews; display truncation never changes action targeting.
+Below 38 columns or 12 rows, resize to continue.
 
 Task previews resolve effective Team defaults through the same resolver used
 by admission. If the selected Team changes before admission, the operation
@@ -119,7 +125,14 @@ does not certify that every record is healthy. A consumer cleanup failure before
 database closure keeps the handles and allows retrying that cleanup. A physical SQLite close failure instead retains custody
 and requires process restart; a second close cannot prove the driver retried.
 
-The display reports indexed, observed, unobserved and fault counts. While
+The compact coverage bar reports indexed, observed, unobserved and fault counts.
+Press `c` for scan time, ordering and complete limitations. The search bar shows
+the applied query; cancelling an edit leaves both that query and its page cursor
+unchanged. While a changed search is loading, or if it fails, retained rows are
+marked `Previous results` and keep their previous query label. A row with no observation says `not observed`, separately from an
+observed `unknown` state. A `!` marks a fault, including retained observations
+whose visible refresh failed. Details group identity, request/context, evidence
+and faults/limitations without opening provider payloads automatically. While
 metadata discovery is incomplete, ordering means recent **among indexed
 records**, not globally newest. Records without a validated creation time stay
 explicitly unknown rather than borrowing filesystem or observation times.
@@ -190,7 +203,7 @@ there is no suspend key.
 | `1` | Runtime, terminal or cleanup error. |
 | `2` | Invalid arguments or non-terminal input/output. |
 | `3` | Forced exit with unresolved UI operations; inspect printed references. |
-| `128 + signal` | Signal-triggered exit (`130`, `143`, `129` for INT, TERM, HUP). |
+| `128 + signal` | Signal-triggered exit (`130`, `143`, `129` for INT, TERM, HUP). A verified terminal disconnection also exits `129`. |
 
 These are TUI exits, separate from [collect's pending/rejected
 exits](../skills/agent-integration/references/result-handling.md#exit-codes).

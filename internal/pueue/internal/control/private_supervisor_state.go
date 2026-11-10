@@ -556,6 +556,11 @@ func (c *Client) startPrivate(ctx context.Context, stateRoot string) error {
 	if c.runtimeBinding.DaemonExecutable == "" {
 		return ErrBinding
 	}
+	// A transport may observe an old generation, but must never launch a new
+	// daemon and publish the old daemon's provenance as its witness.
+	if c.runtimeBinding.DaemonExecutable != c.binding.DaemonExecutable {
+		return privateRecoveryFailure("predecessor_pair_unavailable", ErrBinding)
+	}
 	private := IsPrivateConfig(stateRoot, c.binding.ConfigPath)
 	if !private && c.binding.ConfigPath != privateRecoveryConfigPath(stateRoot) {
 		return ErrConfiguration

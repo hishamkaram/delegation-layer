@@ -10,6 +10,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/hishamkaram/delegation-layer/internal/app"
 	"github.com/hishamkaram/delegation-layer/internal/testutil/goroutinecheck"
@@ -179,7 +180,7 @@ func TestFinishedEffectAfterRendererStopRetainsReferenceAndCleanupWarning(t *tes
 	m.exitCode = 3
 	var output bytes.Buffer
 	closed := false
-	code := finishRun(Options{Error: &output, Close: func() error { closed = true; return nil }}, m, m.tracker, nil)
+	code := finishRun(Options{Error: &output, Close: func() error { closed = true; return nil }}, m, m.tracker, nil, shutdownEvidence{})
 	if code != 0 || !closed {
 		t.Fatalf("settled force-exit race did not cleanly close: code%d closed%t", code, closed)
 	}
@@ -215,7 +216,7 @@ func TestShutdownJoinsCancelledObservationBeforeClosingCache(t *testing.T) {
 		default:
 			return errors.New("cache closed before observation joined")
 		}
-	}}, m, m.tracker, nil)
+	}}, m, m.tracker, nil, shutdownEvidence{})
 	if code != 0 || !closed || output.Len() != 0 {
 		t.Fatalf("cancelled observation misreported as uncertain effect: code%d closed%t output%q", code, closed, output.String())
 	}
@@ -240,7 +241,7 @@ func TestClosingDeliveredEffectKeepsErrorForPostTerminalWriter(t *testing.T) {
 		t.Fatal("completion was not delivered")
 	}
 	var output bytes.Buffer
-	if code := finishRun(Options{Error: &output}, m, m.tracker, nil); code != 0 {
+	if code := finishRun(Options{Error: &output}, m, m.tracker, nil, shutdownEvidence{}); code != 0 {
 		t.Fatalf("settled operation quit code%d", code)
 	}
 	if strings.Count(output.String(), "Operation returned while closing: Cancel task=task-id") != 1 || !strings.Contains(output.String(), "Operation error: bounded cancellation fault") {
@@ -363,5 +364,184 @@ func TestLastRefreshTimerCompletionWakesQuit(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("last timer exited without waking the terminal to complete quit")
+	}
+}
+
+func TestCancelledSearchDoesNotReachRefreshOrReusePageCursor(t *testing.T) {
+	m := fixtureModel(t)
+	requests := make(chan ui.PageRequest, 1)
+	m.sections[0].Load = func(_ context.Context, request ui.PageRequest) (ui.Page, error) {
+		requests <- request
+		return ui.Page{}, nil
+	}
+	m.after = "saved-page"
+	m.search.SetValue("cancelled edit")
+	m.searching = true
+	m.searchKey(tea.KeyPressMsg{Code: tea.KeyEscape})
+	m.refreshTick()
+	select {
+	case request := <-requests:
+		if request.Search != "" || request.After != "saved-page" {
+			t.Fatalf("cancelled edit changed active query/page: %+v", request)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("refresh request not delivered")
+	}
+}
+
+func TestAppliedSearchResetsPagingAndCancelledDraftRestoresIt(t *testing.T) {
+	m := fixtureModel(t)
+	requests := make(chan ui.PageRequest, 2)
+	m.sections[0].Load = func(_ context.Context, request ui.PageRequest) (ui.Page, error) {
+		requests <- request
+		return ui.Page{}, nil
+	}
+	m.after, m.cursors = "old-page", []string{"old"}
+	m.search.SetValue("provider publication:committed")
+	m.searchKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+	select {
+	case request := <-requests:
+		if request.Search != "provider publication:committed" || request.After != "" || len(m.cursors) != 0 {
+			t.Fatalf("applied request=%+v", request)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("applied search not loaded")
+	}
+	m.loading = false
+	m.search.SetValue("discarded")
+	m.searchKey(tea.KeyPressMsg{Code: tea.KeyEscape})
+	if m.search.Value() != m.appliedSearch {
+		t.Fatal("cancelled editor does not show active query")
+	}
+	m.refreshTick()
+	select {
+	case request := <-requests:
+		if request.Search != "provider publication:committed" {
+			t.Fatalf("refresh adopted draft: %+v", request)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("refresh not loaded")
+	}
+}
+
+func tableModel(t *testing.T) *model {
+	t.Helper()
+	m := fixtureModel(t)
+	m.page.Columns = []ui.Column{{Title: "Task ID", Width: 16}, {Title: "Provider", Width: 18}, {Title: "Admission", Width: 14}, {Title: "Liveness", Width: 14}, {Title: "Publication", Width: 14}, {Title: "Created", Width: 20}}
+	m.page.Strip, m.page.Coverage = "Dated · discovery incomplete", "Full coverage: dated observations"
+	for _, suffix := range []string{"a", "b"} {
+		id := strings.Repeat("a", 31) + suffix
+		m.page.Entries = append(m.page.Entries, ui.Entry{ID: id, Cells: []ui.Cell{{Text: id}, {Text: "claude:print"}, {Text: "admitted"}, {Text: "undetermined"}, {Text: "committed"}, {Text: "unknown"}}, Details: []ui.DetailGroup{{Title: "Identity", Fields: []ui.DetailField{{Label: "Task", Value: id}}}}})
+	}
+	return m
+}
+
+func TestTableResizeAndRefreshPreserveFullSelectedIdentity(t *testing.T) {
+	m := tableModel(t)
+	m.cursor = 1
+	selected := m.page.Entries[1].ID
+	m.resize(80, 24)
+	m.listKey("right")
+	if m.tableOffset == 0 {
+		t.Fatal("narrow columns did not pan")
+	}
+	m.resize(170, 40)
+	if m.tableOffset != 0 {
+		t.Fatal("expanded table retained obsolete pan")
+	}
+	m.resize(38, 12)
+	m.openDetail()
+	if !strings.Contains(m.viewport.GetContent(), selected) {
+		t.Fatal("details lost full task identity")
+	}
+	m.detail = false
+	m.loaded(loadedMsg{section: 0, generation: m.generation, page: ui.Page{Columns: m.page.Columns, Entries: []ui.Entry{m.page.Entries[1], m.page.Entries[0]}}})
+	entry, ok := m.selectedEntry()
+	if !ok || entry.ID != selected || m.cursor != 0 {
+		t.Fatal("refresh selection followed display position instead of full identity")
+	}
+}
+
+func TestCoverageIsPassiveAndExcludesRowActions(t *testing.T) {
+	m := tableModel(t)
+	m.page.Entries[0].Actions = []ui.Action{{ID: "cancel", Label: "Cancel row"}}
+	m.browseKey(tea.KeyPressMsg{Code: 'c'})
+	if !m.detail || m.message != "History coverage" || !strings.Contains(m.viewport.GetContent(), "dated observations") {
+		t.Fatal("coverage view missing")
+	}
+	m.openActions()
+	for _, action := range m.actions {
+		if action.ID == "cancel" {
+			t.Fatal("coverage inherited selected task action")
+		}
+	}
+}
+
+func TestMinimumFrameKeepsRowsAndBlockingWarnings(t *testing.T) {
+	m := tableModel(t)
+	m.problem, m.restartRequired, m.sourceInvalid = "refresh failed", true, true
+	m.resize(38, 12)
+	view := ansi.Strip(m.render())
+	if len(strings.Split(view, "\n")) > 12 {
+		t.Fatal("frame exceeds terminal height")
+	}
+	for _, required := range []string{"Task ID", "> ", "SOURCE CHANGED", "RESTART REQUIRED", "refresh failed", "? help", "q quit"} {
+		if !strings.Contains(view, required) {
+			t.Fatalf("minimum frame lost %q: %s", required, view)
+		}
+	}
+	for _, line := range strings.Split(view, "\n") {
+		if ansi.StringWidth(line) > 38 {
+			t.Fatalf("line exceeds terminal width: %q", line)
+		}
+	}
+}
+
+func TestActionWarningsKeepBottomDetailReachable(t *testing.T) {
+	m := fixtureModel(t)
+	m.resize(80, 24)
+	m.Update(actionMsg{section: 0, feedback: ui.Feedback{Title: "Result", Body: strings.Repeat("line\n", 40) + "BOTTOM-SENTINEL", Err: errors.New("operation failed"), RestartRequired: true}})
+	m.viewport.GotoBottom()
+	if !strings.Contains(ansi.Strip(m.render()), "BOTTOM-SENTINEL") {
+		t.Fatal("new warning rows clipped the viewport's reachable bottom")
+	}
+}
+
+func TestFailedSearchLabelsRetainedResults(t *testing.T) {
+	m := tableModel(t)
+	m.appliedSearch = "admission:not-a-state"
+	m.loaded(loadedMsg{generation: m.generation, section: 0, err: errors.New("invalid admission filter")})
+	if !strings.Contains(ansi.Strip(m.render()), "Previous results") {
+		t.Fatal("failed requested filter mislabeled retained task rows")
+	}
+}
+
+func TestNonTableViewKeepsMultilineContextAndDiagnostics(t *testing.T) {
+	m := fixtureModel(t)
+	m.page.Summary = "Optional scoped Teams\nTeam project: /project\nNon-Git root: /parent\nDiagnostic: catalog unavailable"
+	m.page.Entries = []ui.Entry{{ID: "team", Title: "Team one"}}
+	m.resize(80, 24)
+	for _, expected := range strings.Split(m.page.Summary, "\n") {
+		if !strings.Contains(ansi.Strip(m.render()), expected) {
+			t.Fatalf("view hid context %q", expected)
+		}
+	}
+	if !strings.Contains(ansi.Strip(m.render()), "> Team one") {
+		t.Fatal("summary displaced visible row")
+	}
+}
+
+func TestRetainedSearchPageCannotSupplyAnotherQueryCursor(t *testing.T) {
+	m := tableModel(t)
+	m.appliedSearch = "invalid:filter"
+	m.page.Next = "previous-query-cursor"
+	m.cursors = []string{"previous-page"}
+	m.listKey("n")
+	m.listKey("p")
+	if m.after != "" || m.loading {
+		t.Fatal("retained page navigated with the requested query")
+	}
+	if strings.Contains(m.footer(), "next page") {
+		t.Fatal("retained page offered invalid pagination")
 	}
 }
