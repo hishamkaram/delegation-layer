@@ -65,7 +65,7 @@ type retainedShutdownScope struct {
 // this fixture; reacquiring EX joins their native lock release before removal.
 func retainedShutdownContext(t *testing.T, fixture privateSupervisorTestFixture, client *Client, beforeReturn func(context.Context)) retainedShutdownScope {
 	t.Helper()
-	pending := transport.NewPending(nil)
+	pending := transport.NewPending(nil, nil)
 	complete := sync.OnceFunc(func() { transport.CompletePending(pending, CommandResult{}) })
 	var retained retainedShutdownScope
 	var original *bootstrapLock

@@ -25,7 +25,7 @@ PASSED_CASES=0
 assert_case() {
     local name="$1"
     local expected_code="$2"
-    local stdout_mode="$3" # "empty", "usage", "version", "providers", "capabilities"
+    local stdout_mode="$3" # "empty", "usage", "dispatch_usage", "version", "providers", "capabilities"
     local stderr_mode="$4" # "empty", "error"
     local expected_err_substr="$5"
     shift 5
@@ -59,6 +59,12 @@ assert_case() {
         usage)
             if ! grep -q "Usage: delegate" "${stdout_file}"; then
                 echo "FAIL [${name}]: stdout missing usage text. Got: $(cat "${stdout_file}")" >&2
+                exit 1
+            fi
+            ;;
+        dispatch_usage)
+            if ! grep -Fxq "Usage: delegate dispatch [flags]" "${stdout_file}"; then
+                echo "FAIL [${name}]: stdout missing scoped dispatch usage. Got: $(cat "${stdout_file}")" >&2
                 exit 1
             fi
             ;;
@@ -103,7 +109,7 @@ assert_case() {
     esac
 
     PASSED_CASES=$((PASSED_CASES + 1))
-    echo "PASS [${PASSED_CASES}/13]: ${name}"
+    echo "PASS [${PASSED_CASES}/14]: ${name}"
 }
 
 # 1. No arguments: exit 0, usage on stdout, empty stderr
@@ -136,8 +142,8 @@ assert_case "unknown command" 2 empty error 'error: unknown command or flag "unk
 # 10. unknown flag: exit 2, error+usage on stderr, empty stdout
 assert_case "unknown flag" 2 empty error 'error: unknown command or flag "--invalid-flag"' --invalid-flag
 
-# 11. extra argument to help: exit 2, error+usage on stderr, empty stdout
-assert_case "extra argument to help" 2 empty error 'unexpected extra argument "extra-arg" for help' help extra-arg
+# 11. unknown help target: exit 2, error+usage on stderr, empty stdout
+assert_case "unknown help target" 2 empty error 'error: unknown help command "extra-arg"' help extra-arg
 
 # 12. extra argument to version: exit 2, error+usage on stderr, empty stdout
 assert_case "extra argument to version" 2 empty error 'unexpected extra argument "extra-arg" for version' version extra-arg
@@ -145,9 +151,12 @@ assert_case "extra argument to version" 2 empty error 'unexpected extra argument
 # 13. extra argument to providers: exit 2, error+usage on stderr, empty stdout
 assert_case "extra argument to providers" 2 empty error 'unexpected extra argument "extra-arg" for providers' providers extra-arg
 
-if [[ "${PASSED_CASES}" -ne 13 ]]; then
-    echo "FAIL: Expected 13 smoke test cases to execute, but only ${PASSED_CASES} passed." >&2
+# 14. scoped command help: exit 0, dispatch usage on stdout, empty stderr
+assert_case "scoped dispatch help" 0 dispatch_usage empty "" help dispatch
+
+if [[ "${PASSED_CASES}" -ne 14 ]]; then
+    echo "FAIL: Expected 14 smoke test cases to execute, but only ${PASSED_CASES} passed." >&2
     exit 1
 fi
 
-echo "All smoke tests passed (${PASSED_CASES}/13 cases executed)."
+echo "All smoke tests passed (${PASSED_CASES}/14 cases executed)."

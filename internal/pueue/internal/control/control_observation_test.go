@@ -12,7 +12,7 @@ import (
 
 func TestSettlePendingControlObservationReconcilesAfterPendingStatus(t *testing.T) {
 	client := &Client{options: Options{ObservationTimeout: time.Second}}
-	pending := transport.NewPending(nil)
+	pending := transport.NewPending(nil, nil)
 	firstObservation := make(chan struct{})
 	complete := sync.OnceFunc(func() {
 		transport.CompletePending(pending, CommandResult{Started: true, ExitCode: 0})
@@ -52,7 +52,7 @@ func TestSettlePendingControlObservationReconcilesAfterPendingStatus(t *testing.
 
 func TestSettlePendingControlObservationRetainsUnsettledStatus(t *testing.T) {
 	client := &Client{options: Options{ObservationTimeout: time.Hour}}
-	pending := transport.NewPending(nil)
+	pending := transport.NewPending(nil, nil)
 	t.Cleanup(func() { transport.CompletePending(pending, CommandResult{}) })
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()

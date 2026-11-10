@@ -30,6 +30,8 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--github-auth", choices=GITHUB_AUTH_MODES, default="environment")
     parser.add_argument("--bootstrap-parent", type=Path,
                         help="existing short directory for the bootstrap probe's private root (default: HOME)")
+    parser.add_argument("--bootstrap-cpu-guard", choices=("true", "false"), default="true",
+                        help="check CPU pressure for the installed bootstrap task (default: true)")
     return parser
 
 
@@ -37,7 +39,8 @@ def main(argv: list[str] | None = None) -> int:
     arguments = _parser().parse_args(argv)
     request = ProofRequest(
         artifact_id=arguments.artifact_id, channel=CHANNELS[arguments.channel], output_dir=arguments.output_dir,
-        checkout=CHECKOUT, github_auth=arguments.github_auth, bootstrap_parent=arguments.bootstrap_parent)
+        checkout=CHECKOUT, github_auth=arguments.github_auth, bootstrap_parent=arguments.bootstrap_parent,
+        bootstrap_cpu_guard=arguments.bootstrap_cpu_guard == "true")
     try:
         return prove_candidate_install(request)
     except VerificationError as error:

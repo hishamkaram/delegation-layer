@@ -177,7 +177,7 @@ func validateRemoteReplay(ctx context.Context, a originRequest, intent remote.In
 	}
 	a.Config = config
 
-	brief, err := tasklifecycle.ReadBrief(a.Brief)
+	brief, err := tasklifecycle.ReadBriefInput(a.Brief, a.BriefBytes)
 	if err != nil {
 		return err
 	}
@@ -304,7 +304,7 @@ func (c Client) prepareRemoteIntent(ctx context.Context, a originRequest, store 
 	if err != nil {
 		return remote.Intent{}, nil, err
 	}
-	brief, err := tasklifecycle.ReadBrief(a.Brief)
+	brief, err := tasklifecycle.ReadBriefInput(a.Brief, a.BriefBytes)
 	if err != nil {
 		return remote.Intent{}, nil, err
 	}

@@ -108,6 +108,20 @@ func TestTeamReplayUsesPersistedRequestWithoutCatalog(t *testing.T) {
 	}
 }
 
+func TestTeamSelectionPinCannotRetargetReplayOrUnboundTask(t *testing.T) {
+	fixture := newTeamDispatchFixture(t)
+	request := fixture.replay()
+	request.ExpectedTeamSelection = &teamcontract.Selection{Execution: teamcontract.Execution{Provider: "other:run"}}
+	resolved, err := resolveDispatchTeam(request, DispatchOptions{}, fixture.store, request.TaskID, request.Cwd)
+	if err != nil || resolved.Provider != fixture.request.Provider {
+		t.Fatalf("preview pin retargeted recorded task: %+v, %v", resolved, err)
+	}
+	request.TeamTarget = nil
+	if _, err = resolveDispatchTeam(request, DispatchOptions{}, fixture.store, request.TaskID, request.Cwd); !errors.Is(err, teamcontract.ErrTeamSelectionChanged) {
+		t.Fatalf("pin without target: %v", err)
+	}
+}
+
 func TestTeamReplayRejectsDifferentExplicitIntentWithoutCatalog(t *testing.T) {
 	changes := []struct {
 		name string

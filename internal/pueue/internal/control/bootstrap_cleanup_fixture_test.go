@@ -63,7 +63,7 @@ func newBootstrapCleanupFixture(t *testing.T) *bootstrapCleanupFixture {
 }
 
 func (f *bootstrapCleanupFixture) pending() *Pending {
-	handle := transport.NewPending(nil)
+	handle := transport.NewPending(nil, nil)
 	f.handles = append(f.handles, handle)
 	return handle
 }

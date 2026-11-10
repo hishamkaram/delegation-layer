@@ -39,17 +39,9 @@ type ModelsResponse struct {
 }
 
 func runModels(a Arguments, stdout io.Writer, deps Dependencies) int {
-	catalog, err := discoverModels(a, deps)
-	errorCode := 0
-	var failure *DispatchFailureResponse
-	var publicError string
-	if err != nil {
-		operational := dispatchFailure(err, "not_created")
-		failure = &operational
-		publicError = modelDiscoveryPublicError(err, operational)
-		catalog, errorCode = modelDiscoveryFailureCatalog(err, operational)
-	}
-	response := ModelsResponse{SchemaVersion: OutputSchemaVersion, Command: "models", Provider: a.Provider, ObservedAt: time.Now().UTC().Format(time.RFC3339Nano), ModelCatalog: catalog, Failure: failure, Error: publicError}
+	observed := observeModels(a, deps)
+	response, errorCode := observed.response, observed.code
+	catalog := response.ModelCatalog
 	data, err := json.Marshal(response)
 	if err != nil || len(data)+1 > MaxJSONResponseBytes {
 		return 1
@@ -73,6 +65,27 @@ func runModels(a Arguments, stdout io.Writer, deps Dependencies) int {
 	default:
 		return 1
 	}
+}
+
+type modelObservation struct {
+	response ModelsResponse
+	code     int
+	err      error
+}
+
+func observeModels(a Arguments, deps Dependencies) modelObservation {
+	catalog, err := discoverModels(a, deps)
+	errorCode := 0
+	var failure *DispatchFailureResponse
+	var publicError string
+	if err != nil {
+		operational := dispatchFailure(err, "not_created")
+		failure = &operational
+		publicError = modelDiscoveryPublicError(err, operational)
+		catalog, errorCode = modelDiscoveryFailureCatalog(err, operational)
+	}
+	response := ModelsResponse{SchemaVersion: OutputSchemaVersion, Command: "models", Provider: a.Provider, ObservedAt: time.Now().UTC().Format(time.RFC3339Nano), ModelCatalog: catalog, Failure: failure, Error: publicError}
+	return modelObservation{response: response, code: errorCode, err: err}
 }
 
 // modelDiscoveryFailureCatalog keeps a supervisor safety refusal distinct from

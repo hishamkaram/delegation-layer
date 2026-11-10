@@ -33,6 +33,10 @@ type WaitTask struct {
 }
 
 func waitTasks(a Arguments, deps storeDependencies) (result commandResult) {
+	return waitTasksContext(context.Background(), a, deps)
+}
+
+func waitTasksContext(parent context.Context, a Arguments, deps storeDependencies) (result commandResult) {
 	response := newResponse("wait")
 	if err := validateWaitArguments(a); err != nil {
 		return failed(response, err, 2)
@@ -45,7 +49,7 @@ func waitTasks(a Arguments, deps storeDependencies) (result commandResult) {
 	if duration == 0 {
 		duration = 5 * time.Second // One passive sample still has a finite I/O bound.
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), duration)
+	ctx, cancel := context.WithTimeout(parent, duration)
 	defer cancel()
 	reader, err := taskdir.OpenReadOnlyStoreContext(ctx, root, deps.registry())
 	if err != nil {

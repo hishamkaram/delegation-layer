@@ -83,6 +83,7 @@ class ProofRequest:
 
     ``bootstrap_parent`` is an existing directory short enough to hold the bootstrap probe's
     isolated HOME and its private supervisor endpoint; None selects the operator's HOME.
+    ``bootstrap_cpu_guard`` selects CPU admission for that fixture task; memory remains enabled.
     """
 
     artifact_id: int
@@ -92,6 +93,7 @@ class ProofRequest:
     repository: str = "hishamkaram/delegation-layer"
     github_auth: str = "environment"
     bootstrap_parent: Path | None = None
+    bootstrap_cpu_guard: bool = True
 
 
 def require_output_dir(request: ProofRequest) -> None:
@@ -153,6 +155,9 @@ def _new_proof_receipt(request: ProofRequest, gate: str) -> dict:
         "This receipt records the installation test result.",
         *_LIMITS[request.channel],
     ]
+    if not request.bootstrap_cpu_guard:
+        receipt["unresolved_limits"].append(
+            "CPU admission disabled by caller; host load source and installer-descendant closure are unproven.")
     return receipt
 
 
@@ -249,7 +254,8 @@ def _prove(request: ProofRequest, ports: ConsumerPorts, receipt: dict, owner: Di
         skill=skill)
     layout = open_workspace(owner=owner, parent=workspace, receipt=receipt)
     receipt["candidate_install"]["bootstrap_parent"] = str(bootstrap_parent)
-    probe = InstalledBootstrapProbe(receipt=receipt, locations=locations, parent=bootstrap_parent)
+    probe = InstalledBootstrapProbe(receipt=receipt, locations=locations, parent=bootstrap_parent,
+                                    cpu_guard=request.bootstrap_cpu_guard)
     facts = verify_candidate_install(install_request, ports=ports, probe=probe, receipt=receipt, layout=layout,
                                      info=info, channels=(request.channel.value,), onboarding=True)
     if tuple(observation.channel for observation in facts.installs) != (request.channel.value,):

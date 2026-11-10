@@ -291,8 +291,14 @@ func TestPrivateSupervisorNativeRefusedEndpointRepair(t *testing.T) {
 	if err != nil || !present || successor == process {
 		t.Fatalf("repair did not start a new recorded daemon: process=%+v present=%t err=%v", successor, present, err)
 	}
-	if info, statErr := os.Lstat(refused.socketPath); statErr != nil || os.SameFile(info, refused.socket) {
-		t.Fatalf("refused socket inode was not replaced: %v", statErr)
+	// Device/inode values may be reused after unlink; readiness and the new
+	// daemon identity above prove repair, while this checks the endpoint type.
+	info, statErr := os.Lstat(refused.socketPath)
+	if statErr != nil {
+		t.Fatalf("repaired endpoint could not be inspected: %v", statErr)
+	}
+	if info.Mode()&os.ModeSocket == 0 {
+		t.Fatalf("repaired endpoint is not a Unix socket: mode=%s", info.Mode())
 	}
 }
 

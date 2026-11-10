@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"strconv"
 	"strings"
 
@@ -492,7 +491,7 @@ func (c *Client) addInspectionWorkerWithIdentityLease(ctx context.Context, permi
 		// A terminal-event ticket is an optimization, never a second
 		// submission authority. Terminal evidence falls back to conservative
 		// queue reconciliation when its durable write is unavailable.
-		log.Printf("delegate: terminal event registration deferred: %v", eventErr)
+		c.ReportDiagnostic(fmt.Errorf("delegate: terminal event registration deferred: %w", eventErr))
 		return id, false, terminalEventRegistrationKnown, nil
 	}
 	if !enabled {
@@ -502,7 +501,7 @@ func (c *Client) addInspectionWorkerWithIdentityLease(ctx context.Context, permi
 		// A terminal-event ticket is an optimization, never a second
 		// submission authority. Terminal evidence falls back to conservative
 		// queue reconciliation when its durable write is unavailable.
-		log.Printf("delegate: terminal event registration deferred: %v", eventErr)
+		c.ReportDiagnostic(fmt.Errorf("delegate: terminal event registration deferred: %w", eventErr))
 		return id, false, terminalEventRegistrationKnown, nil
 	}
 	return id, true, terminalEventRegistrationKnown, nil

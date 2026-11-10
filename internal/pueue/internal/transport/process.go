@@ -33,13 +33,13 @@ func StartOwned(cmd *exec.Cmd) *Pending {
 }
 
 func StartOwnedObserved(cmd *exec.Cmd, commandID string, observer func(CommandEvent)) *Pending {
-	return StartOwnedCaptured(cmd, commandID, observer, "")
+	return StartOwnedCaptured(cmd, commandID, observer, "", nil)
 }
 
 // statusVersion selects streaming status projection while preserving the same
 // Start/Wait owner and pending-command lifetime as every other control command.
-func StartOwnedCaptured(cmd *exec.Cmd, commandID string, observer func(CommandEvent), statusVersion string) *Pending {
-	p := NewPending(cmd.Args)
+func StartOwnedCaptured(cmd *exec.Cmd, commandID string, observer func(CommandEvent), statusVersion string, report func(error)) *Pending {
+	p := NewPending(cmd.Args, report)
 	go func() {
 		emitCommand(observer, commandID, "entry", cmd, CommandResult{ExitCode: -1})
 		result := exactStartWait(cmd, statusVersion, func(started CommandResult) {

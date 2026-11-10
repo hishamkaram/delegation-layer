@@ -1,7 +1,7 @@
 package supervisor
 
 import (
-	"log"
+	"fmt"
 
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
 )
@@ -16,6 +16,6 @@ func CloseMaintenance(client *pueue.Client, cause error) {
 		return
 	}
 	if err := client.CloseAfterPending(cause); err != nil {
-		log.Printf("delegate: supervisor cleanup deferred: %v", err)
+		client.ReportDiagnostic(fmt.Errorf("delegate: supervisor cleanup deferred: %w", err))
 	}
 }

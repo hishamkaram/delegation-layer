@@ -205,7 +205,7 @@ func TestBindingReadyProbeCompletedFailureRemainsBinding(t *testing.T) {
 }
 
 func TestBindingProbeErrorPreservesGenuineFailureWithPending(t *testing.T) {
-	pending := transport.NewPending(nil)
+	pending := transport.NewPending(nil, nil)
 	inFlight := &InFlightError{Pending: pending}
 	bindingFailure := errors.Join(ErrBinding, errors.New("fixture configuration digest changed"))
 	for _, tc := range []struct {

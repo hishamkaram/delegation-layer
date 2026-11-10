@@ -222,6 +222,30 @@ class SuccessTests(ProbeCase):
         self.assertEqual((self.facts()["status"], self.facts()["task_id"]), ("verified", TASK_ID))
 
 
+class AdmissionGuardTests(ProbeCase):
+    def test_explicit_cpu_policy_reaches_the_one_real_dispatch_and_is_recorded_before_it(self):
+        for cpu_guard, expected_flag, cpu_fact in (
+                (None, [], "enabled"), (False, ["--cpu-guard=false"], "disabled-by-caller")):
+            with self.subTest(cpu_guard=cpu_guard):
+                self.commands.clear()
+                self.spawns.clear()
+                if cpu_guard is not None:
+                    self.probe = bootstrap.InstalledBootstrapProbe(
+                        receipt=self.receipt, locations=self.locations, parent=self.parent, cpu_guard=cpu_guard)
+                expected = {"cpu": cpu_fact, "memory": "enabled"}
+                self.on_spawn = lambda _env: self.assertEqual(self.facts()["admission_guards"], expected)
+                error = self.call(VerificationError)
+                self.assertEqual(error.code, "candidate_bootstrap_unresolved")
+                (command,) = self.commands
+                self.assertEqual(command[:2], [str(self.target.delegate), "dispatch"])
+                self.assertEqual([argument for argument in command if argument.startswith("--cpu-guard")], expected_flag)
+                self.assertFalse(any(argument.startswith("--memory-guard") for argument in command))
+                self.assertEqual(self.facts()["admission_guards"], expected)
+                self.assertEqual(self.facts()["root_disposition"], "retained")
+                self.assertEqual(len(self.facts()["unresolved_ownership"]), 1)
+                self.assertTrue(self.locations["bootstrap_root"].is_dir())
+
+
 class OwnershipTests(ProbeCase):
     """One local owner lifetime: failures retain and release every pin; only a verified turn removes."""
 

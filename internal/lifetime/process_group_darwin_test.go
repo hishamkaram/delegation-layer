@@ -20,13 +20,6 @@ const (
 	darwinNestedPIDFile    = "DELEGATE_DARWIN_NESTED_PID_FILE"
 )
 
-func TestMain(m *testing.M) {
-	if code, handled := RunProcessGroupPinMode(os.Args[1:]); handled {
-		os.Exit(code)
-	}
-	os.Exit(m.Run())
-}
-
 func TestDarwinProcessGroupRegistrationUsesPlanAndPrivateSession(t *testing.T) {
 	plan := processGroupPlan("root", "task", "darwin-session-registration")
 	scope, err := CreatePrepared(plan)

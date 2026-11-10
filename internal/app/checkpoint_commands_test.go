@@ -51,7 +51,7 @@ func (f checkpointRuntimeFixture) cli(t *testing.T, argv ...string) (int, Respon
 func (f checkpointRuntimeFixture) admit(t *testing.T, a Arguments) commandResult {
 	t.Helper()
 	a.Command, a.Root = "checkpoint", f.lineage.store.Root
-	return runCheckpointCommand(a, f.deps.storeDependencies(), f.options)
+	return runCheckpointCommandContext(t.Context(), a, f.deps.storeDependencies(), f.options)
 }
 
 // requireCheckpoint asserts the exit, IDs and command guidance of a result.
@@ -228,21 +228,69 @@ func TestCheckpointManagedCreationRefusesBusyUseOwner(t *testing.T) {
 }
 
 func TestCheckpointHelpListsCommandFamily(t *testing.T) {
-	var stdout, stderr bytes.Buffer
-	if code := Run([]string{"help"}, &stdout, &stderr, Dependencies{}); code != 0 {
-		t.Fatalf("help exit = %d", code)
+	root := filepath.Join(t.TempDir(), "not-initialized")
+	assertCheckpointHelpCommand(t, checkpointHelpOutput(t, root, "help"), "checkpoint")
+	group := checkpointHelpOutput(t, root, "checkpoint", "--help")
+	if !strings.Contains(group, "Usage: delegate checkpoint COMMAND [flags]") {
+		t.Fatalf("checkpoint family routing is not discoverable: %s", group)
 	}
-	for _, synopsis := range []string{
-		"checkpoint create --cwd ABS [--budget DURATION] --json",
-		"checkpoint create --workspace ID [--budget DURATION] --json",
-		"checkpoint status CHECKPOINT_ID [--operation OP] [--watch DURATION] --json",
-		"checkpoint list [--after CHECKPOINT_ID] [--limit 50] --json",
-		"checkpoint remove CHECKPOINT_ID [--budget DURATION] --json",
+	for _, fixture := range []struct {
+		action, usage string
+		facts         []string
+	}{
+		{"create", "Usage: delegate checkpoint create [flags]", []string{
+			"Required: exactly one of --cwd ABS or --workspace ID", "--cwd", "absolute ordinary Git checkout",
+			"--workspace", "managed workspace ID", "--budget", "finite helper budget (default: 5m)",
+			"3 no final creation receipt", "reason_code", "next_action",
+		}},
+		{"status", "Usage: delegate checkpoint status CHECKPOINT_ID [flags]", []string{
+			"--operation", "acknowledged removal operation ID", "--watch", "finite checkpoint observation bound",
+			"default: 0s", "3 checkpoint observation pending",
+		}},
+		{"list", "Usage: delegate checkpoint list [flags]", []string{
+			"--after", "checkpoint cursor from a previous page", "--limit", "checkpoints per page", "default: 50",
+		}},
+		{"remove", "Usage: delegate checkpoint remove CHECKPOINT_ID [flags]", []string{
+			"--budget", "finite helper budget (default: 5m)", "3 no final removal receipt", "acknowledged IDs",
+		}},
 	} {
-		if !strings.Contains(stdout.String(), synopsis) {
-			t.Fatalf("help omits %q", synopsis)
+		assertCheckpointHelpCommand(t, group, fixture.action)
+		t.Run(fixture.action, func(t *testing.T) {
+			help := checkpointHelpOutput(t, root, "checkpoint", fixture.action, "--help")
+			for _, fact := range append([]string{fixture.usage, "--root", "--json"}, fixture.facts...) {
+				if !strings.Contains(help, fact) {
+					t.Errorf("checkpoint %s help omits %q: %s", fixture.action, fact, help)
+				}
+			}
+			if strings.Contains(help, "TASK_ID") {
+				t.Fatalf("checkpoint help borrowed task identity: %s", help)
+			}
+		})
+	}
+	if _, err := os.Lstat(root); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("help initialized execution state: %v", err)
+	}
+}
+
+func checkpointHelpOutput(t *testing.T, root string, argv ...string) string {
+	t.Helper()
+	var stdout, stderr bytes.Buffer
+	code := Run(append([]string{"--root", root}, argv...), &stdout, &stderr, Dependencies{})
+	if code != 0 || stderr.Len() != 0 {
+		t.Fatalf("help %v: exit=%d stderr=%q", argv, code, stderr.String())
+	}
+	return stdout.String()
+}
+
+func assertCheckpointHelpCommand(t *testing.T, text, command string) {
+	t.Helper()
+	for _, line := range strings.Split(text, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) > 1 && fields[0] == command {
+			return
 		}
 	}
+	t.Fatalf("help does not list command %s: %s", command, text)
 }
 
 func TestCheckpointCommandsRefuseMissingRootWithoutInitializing(t *testing.T) {

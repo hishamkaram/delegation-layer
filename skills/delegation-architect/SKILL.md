@@ -30,7 +30,9 @@ exception to that rule.
    boundary. Keep interfaces consumer-owned and dependencies inward.
 2. Compare reuse and the smallest correction before adding an abstraction.
    Use [module organization](../../agents/_data/maintainability-contract.md#module-organization)
-   to distinguish a real owner boundary from a cosmetic file split.
+   before adding files: choose a cohesive capability package and distinguish
+   a real owner boundary from a cosmetic file split. Any owner-local exception
+   needs a concrete private-state or dependency reason for final review.
    Disclose any new guarantee, dependency, state or compatibility cost. Resolve
    expanded product scope with Root before dependent work.
 3. Keep provider behavior local and reuse shared launch, capture, lifecycle and

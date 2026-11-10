@@ -9,6 +9,7 @@ exact-session continuation.
 · [Example](#ask-naturally)
 · [Providers](https://github.com/hishamkaram/delegation-layer/blob/main/docs/providers.md)
 · [Remote tasks](docs/remote-delegation.md)
+· [Terminal workbench](docs/terminal-workbench.md)
 · [Teams](https://github.com/hishamkaram/delegation-layer/blob/main/docs/teams.md)
 · [Start recurring tasks](docs/getting-started.md#recurring-tasks)
 · [Docs](https://github.com/hishamkaram/delegation-layer/blob/main/docs/README.md)
@@ -21,6 +22,7 @@ exact-session continuation.
 
 | Capability | Benefit | Status | Reference |
 | --- | --- | --- | --- |
+| Terminal workbench | Browse Tasks, Teams, Schedules and System; review explicit actions before submitting them. | Available | [TUI guide](docs/terminal-workbench.md) |
 | Supervised agent tasks | Track one bounded turn through a provider-neutral interface. | Available | [Task commands](skills/agent-integration/references/command-reference.md) |
 | Budgets and cancellation | Bound execution time, opt into output-silence limits and request an explicit stop. | Available | [Result handling](skills/agent-integration/references/result-handling.md) |
 | Durable results | Passively wait for several tasks and collect validated evidence after each turn ends. | Available | [Results](skills/agent-integration/references/result-handling.md) |
@@ -53,6 +55,11 @@ These docs describe current main; published npm and CLI releases can lag.
 Setup needs a matching CLI release when installing an absent bundle. See
 [installation](docs/installation.md) for availability, the integrated Codex/Claude
 plugin route, and advanced installation options.
+
+For a keyboard interface, run `delegate tui` in a terminal. It uses the same
+execution root and operation owners as the CLI; browsing starts no task or
+scheduler. See the [workbench guide](docs/terminal-workbench.md) for controls,
+dated history and safe shutdown.
 
 ## Ask naturally
 

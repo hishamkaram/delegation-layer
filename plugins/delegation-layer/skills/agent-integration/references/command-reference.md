@@ -6,6 +6,8 @@ The main skill owns [root selection](../SKILL.md#3-prepare-separate-paths-and-a-
 
 | Command | Purpose | Provider execution |
 | --- | --- | --- |
+| `delegate help [COMMAND [ACTION...]]` | Read scoped syntax, flags, defaults and examples | None |
+| `tui` | Human terminal workbench; terminal stdin/stdout required, no JSON mode | Explicit actions call existing operation owners; browsing launches no task |
 | `delegate --version` | Check the control CLI | None |
 | `providers --json` | List compiled profiles | None |
 | `capabilities --provider ID --json` | Read a compiled contract | None |
@@ -33,6 +35,23 @@ The commands below use the CLI default and omit `--root`. The advanced override
 syntax is `delegate --root ABS COMMAND ...`; use it only for an explicitly
 supplied or already recorded custom or historical root, preserved exactly under
 the main skill's [root rule](../SKILL.md#3-prepare-separate-paths-and-a-finite-brief).
+
+## Help and terminal use
+
+Use `delegate help dispatch`, `delegate schedule create --help` or a group's
+`--help` for the installed build's syntax. Help writes stdout, exits `0` and
+performs no state initialization or provider checks. Lexically invalid options
+still fail with exit `2`; option values and tokens after `--` are not reinterpreted
+as help. Error usage is scoped to the selected command/action. Flag descriptions
+and defaults come from the same registration used by parsing.
+
+`delegate tui` is for a human terminal, not agent automation. Agents keep using
+the bounded commands/JSON contracts below. The TUI has Tasks, Teams, Schedules
+and System views, with explicit actions over those same owners. Passive task
+history uses dated local/origin-cached evidence and never launches or repairs
+work; it is not a fresh global liveness claim. Quitting does not cancel admitted
+tasks or stop the independent scheduler. `delegate help tui` documents its own
+exit behavior; it does not change collect/wait exits.
 
 ## Doctor
 

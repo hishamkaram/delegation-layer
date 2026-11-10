@@ -37,6 +37,7 @@ type WorkspaceInspector func(context.Context, *taskdir.Store, inspection.GroupRe
 // Cleanup owns queue-row eligibility. Its evidence ports are immutable; queue
 // mutation and leases remain owned by the existing supervisor client.
 type Cleanup struct {
+	report     func(error)
 	inspection InspectionEvidence
 	workspace  WorkspaceInspector
 	// custody is the evidence's optional InspectionCustody, resolved once.
@@ -71,4 +72,12 @@ func (c *Cleanup) removalGate() func(context.Context, *inspection.Operation) err
 		}
 		return nil
 	}
+}
+
+// WithDiagnosticReporter binds immutable invocation telemetry without changing
+// queue eligibility, leases or the evidence owner's removal policy.
+func (c *Cleanup) WithDiagnosticReporter(report func(error)) *Cleanup {
+	copy := *c
+	copy.report = report
+	return &copy
 }

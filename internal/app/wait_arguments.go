@@ -4,7 +4,6 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"io"
 	"path/filepath"
 	"time"
 
@@ -13,30 +12,12 @@ import (
 
 const maxWaitTasks = 32
 
-func parseWaitArguments(a Arguments, rest []string) (Arguments, error) {
-	fs := flag.NewFlagSet("wait", flag.ContinueOnError)
-	fs.SetOutput(io.Discard)
+func registerWaitFlags(fs *flag.FlagSet, a *Arguments, anyMode *bool) {
 	fs.StringVar(&a.Root, "root", "", "absolute state root")
 	fs.BoolVar(&a.JSON, "json", false, "emit versioned JSON")
-	var anyMode bool
-	fs.BoolVar(&anyMode, "any", false, "wait for any task (default)")
+	fs.BoolVar(anyMode, "any", false, "wait for any task (default)")
 	fs.BoolVar(&a.WaitAll, "all", false, "wait for all tasks")
 	fs.DurationVar(&a.Watch, "watch", 5*time.Minute, "finite observation duration")
-	ordered, err := orderFlags(fs, rest)
-	if err != nil {
-		return Arguments{}, err
-	}
-	if err = fs.Parse(ordered); err != nil {
-		return Arguments{}, err
-	}
-	if anyMode && a.WaitAll {
-		return Arguments{}, errors.New("wait accepts either --any or --all")
-	}
-	a.WaitTaskIDs = fs.Args()
-	if err = validateWaitArguments(a); err != nil {
-		return Arguments{}, err
-	}
-	return a, nil
 }
 
 func validateWaitArguments(a Arguments) error {

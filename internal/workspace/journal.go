@@ -38,6 +38,10 @@ func LoadResource(ctx context.Context, store *taskdir.Store, id string) (*Resour
 	return journal.LoadResource(ctx, store, id)
 }
 
+func ReadResourceRequest(ctx context.Context, reader *taskdir.ReadOnlyStore, id string) (ResourceRequest, error) {
+	return journal.ReadResourceRequest(ctx, reader, id)
+}
+
 func ResourceIDs(ctx context.Context, store *taskdir.Store) ([]string, error) {
 	return journal.ResourceIDs(ctx, store)
 }

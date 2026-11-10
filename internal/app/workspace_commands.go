@@ -13,13 +13,17 @@ import (
 )
 
 func workspaceCommand(a Arguments, deps Dependencies) (result commandResult) {
-	deps = deps.withCapturedEnvironment()
+	return workspaceCommandContext(context.Background(), a, deps)
+}
+
+func workspaceCommandContext(parent context.Context, a Arguments, deps Dependencies) (result commandResult) {
+	deps = deps.withCapturedEnvironmentContext(parent)
 	response := newResponse("workspace")
 	root, err := tasklifecycle.ResolveRoot(a.Root)
 	if err != nil {
 		return failed(response, err, 2)
 	}
-	store, err := openStore(root, deps.storeDependencies(), false)
+	store, err := openStoreContext(parent, root, deps.storeDependencies(), false)
 	if err != nil {
 		return failed(response, err, 1)
 	}
@@ -27,14 +31,14 @@ func workspaceCommand(a Arguments, deps Dependencies) (result commandResult) {
 	defer func() { mergeCommandClose(&result, func() error { return resources.closeAfter(result.err) }) }()
 	response.RootID = store.RootID
 	if a.WorkspaceAction == "list" {
-		return listManagedWorkspaces(a, store, response)
+		return listManagedWorkspacesContext(parent, a, store, response)
 	}
 	budget, err := workspacescore.ParseBudget(a.WorkspaceBudget)
 	if err != nil {
 		return failed(response, err, 2)
 	}
 	observationBudget := workspaceObservationBudget(a.WorkspaceAction, a.Watch, budget)
-	ctx, cancel := context.WithTimeout(context.Background(), observationBudget)
+	ctx, cancel := context.WithTimeout(parent, observationBudget)
 	defer cancel()
 	options := workspaceRuntimeOptions(deps)
 	resource, err := workspace.LoadResource(ctx, store, a.WorkspaceID)
@@ -145,14 +149,14 @@ func workspaceViewRetryable(err error) bool {
 	})
 }
 
-func listManagedWorkspaces(a Arguments, store *taskdir.Store, response Response) (result commandResult) {
+func listManagedWorkspacesContext(parent context.Context, a Arguments, store *taskdir.Store, response Response) (result commandResult) {
 	if a.WorkspaceLimit == 0 {
 		a.WorkspaceLimit = defaultWorkspacePageSize
 	}
 	if a.WorkspaceLimit < 1 || a.WorkspaceLimit > defaultWorkspacePageSize {
 		return failed(response, task.ErrInvalidPermit, 2)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), workspace.DefaultBudget)
+	ctx, cancel := context.WithTimeout(parent, workspace.DefaultBudget)
 	defer cancel()
 	ids, err := workspace.ResourceIDs(ctx, store)
 	if err != nil {

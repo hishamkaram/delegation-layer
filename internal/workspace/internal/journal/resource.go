@@ -1,6 +1,7 @@
 package journal
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"os"
@@ -220,6 +221,34 @@ func LoadResource(ctx context.Context, store *taskdir.Store, id string) (*Resour
 		return nil, errors.Join(task.ErrEvidenceFault, task.ErrIdentityMismatch, control.Close())
 	}
 	return &Resource{control: control, store: store, request: request}, nil
+}
+
+// ReadResourceRequest observes only the immutable workspace identity through
+// a passive task-store reader. Its validation belongs to the journal owner,
+// exactly as for LoadResource, without opening a mutable control handle.
+func ReadResourceRequest(ctx context.Context, reader *taskdir.ReadOnlyStore, id string) (contract.ResourceRequest, error) {
+	var request contract.ResourceRequest
+	data, err := reader.ReadWorkspaceRequestBytes(ctx, id)
+	if err != nil {
+		return request, err
+	}
+	if err = task.DecodeStrict(data, &request); err != nil {
+		return request, classifyStoredResourceRecordError(err)
+	}
+	if err = validateResourceRequest(request, reader.RootID()); err != nil {
+		return request, classifyStoredResourceRecordError(err)
+	}
+	if request.WorkspaceID != id {
+		return request, errors.Join(task.ErrEvidenceFault, task.ErrIdentityMismatch)
+	}
+	canonical, err := task.MarshalCanonical(request)
+	if err != nil {
+		return request, err
+	}
+	if !bytes.Equal(data, canonical) {
+		return request, task.ErrEvidenceFault
+	}
+	return request, nil
 }
 
 func validateResourceRequest(request contract.ResourceRequest, rootID string) error {

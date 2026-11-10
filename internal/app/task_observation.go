@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"sync"
 	"time"
@@ -36,7 +37,7 @@ func statusContext(ctx context.Context, a Arguments, deps Dependencies) (result 
 	// Runs before td.Close; it never changes the command result.
 	defer func() {
 		if !cleanupRetainsStore(result.err, store) {
-			reportContextTaskMaintenance(ctx, taskMaintenanceObserver{root: root, options: deps.supervisorControlScope(), lookup: deps.supervisorLookup()}, td)
+			reportContextTaskMaintenance(ctx, taskMaintenanceObserver{root: root, options: deps.supervisorControlScope(), lookup: deps.supervisorLookup()}, td, deps.ReportDiagnostic)
 		}
 	}()
 	defer func() { fillRecordedTaskContextForOperation(ctx, store, td, deps.Environment, &result) }()
@@ -50,7 +51,7 @@ func statusContext(ctx context.Context, a Arguments, deps Dependencies) (result 
 		response.ProviderOutputActivity = activity
 	}
 	observed, err := tasklifecycle.StatusContext(ctx, store, td, observationSupervisorOptions(deps.supervisorControlScope(), deps.supervisorLookup(), deps.infrastructureRouting()), deps.RunnerExecutable, deps.storeDependencies().providerCatalog())
-	reportTaskMaintenanceDeferral(observed.MaintenanceError)
+	reportTaskMaintenanceDeferral(deps.ReportDiagnostic, observed.MaintenanceError)
 	applyTaskObservation(&response, observed.Observation, root)
 	if observed.ControlObservation {
 		return statusObservationResult(response, err)
@@ -84,7 +85,7 @@ func collectContext(ctx context.Context, a Arguments, deps storeDependencies) (r
 	// Runs before td.Close; it never changes the command result.
 	defer func() {
 		if !cleanupRetainsStore(result.err, store) {
-			reportContextTaskMaintenance(ctx, taskMaintenanceObserver{root: root, options: deps.supervisorOptions, lookup: deps.supervisorLookup}, td)
+			reportContextTaskMaintenance(ctx, taskMaintenanceObserver{root: root, options: deps.supervisorOptions, lookup: deps.supervisorLookup}, td, deps.reportDiagnostic)
 		}
 	}()
 	defer func() { fillRecordedTaskContextForOperation(ctx, store, td, deps.environment, &result) }()
@@ -112,10 +113,18 @@ func collectContext(ctx context.Context, a Arguments, deps storeDependencies) (r
 // observation successfully because observing it is not a failure.
 var errTaskInterrupted = errors.New("task was interrupted before it published an outcome")
 
-func reportTaskMaintenanceDeferral(err error) {
+func reportTaskMaintenanceDeferral(report func(error), err error) {
 	if err != nil {
-		log.Printf("delegation-layer: task supervisor maintenance deferred: %v", err)
+		reportObservationDiagnostic(report, fmt.Errorf("delegation-layer: task supervisor maintenance deferred: %w", err))
 	}
+}
+
+func reportObservationDiagnostic(report func(error), err error) {
+	if report != nil {
+		report(err)
+		return
+	}
+	log.Printf("%v", err)
 }
 
 func (deps storeDependencies) collectionOptions(watch time.Duration) tasklifecycle.CollectionOptions {
@@ -126,7 +135,7 @@ func (deps storeDependencies) collectionOptions(watch time.Duration) tasklifecyc
 		Catalog:    deps.providerCatalog(), Registry: deps.registry,
 		ReportMaintenanceDeferral: func(err error) {
 			if err != nil {
-				reported.Do(func() { reportTaskMaintenanceDeferral(err) })
+				reported.Do(func() { reportTaskMaintenanceDeferral(deps.reportDiagnostic, err) })
 			}
 		},
 	}
@@ -171,10 +180,10 @@ func collectionResult(response Response, outcome *task.OutcomeRecord, collectErr
 }
 
 // A completed command's maintenance wake has its own existing finite lifetime.
-func reportContextTaskMaintenance(parent context.Context, observer taskMaintenanceObserver, td *taskdir.TaskDir) {
+func reportContextTaskMaintenance(parent context.Context, observer taskMaintenanceObserver, td *taskdir.TaskDir, report func(error)) {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(parent), lifetimeCustodyReleaseTimeout)
 	defer cancel()
 	if err := observer.observeTask(ctx, td); err != nil {
-		log.Printf("delegate: task maintenance observation deferred: %v", err)
+		reportObservationDiagnostic(report, fmt.Errorf("delegate: task maintenance observation deferred: %w", err))
 	}
 }

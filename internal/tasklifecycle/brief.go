@@ -48,6 +48,24 @@ func ReadBrief(path string) (data []byte, resultErr error) {
 	return data, nil
 }
 
+// ReadBriefInput resolves exactly one requested content source. Bytes are
+// copied and bounded by the same request limit as a file; nil means absent.
+func ReadBriefInput(path string, content []byte) ([]byte, error) {
+	if content == nil {
+		return ReadBrief(path)
+	}
+	if path != "" {
+		return nil, errors.New("brief requires exactly one file or text source")
+	}
+	if len(content) == 0 {
+		return nil, config.ErrBriefEmpty
+	}
+	if len(content) > task.MaxBriefSize {
+		return nil, config.ErrBriefTooLarge
+	}
+	return append([]byte(nil), content...), nil
+}
+
 func openBriefForRead(path string) (*os.File, error) {
 	fd, err := unix.Open(path, unix.O_RDONLY|unix.O_CLOEXEC|unix.O_NOFOLLOW|unix.O_NONBLOCK, 0)
 	if err != nil {

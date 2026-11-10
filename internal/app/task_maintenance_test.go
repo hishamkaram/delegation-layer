@@ -496,7 +496,7 @@ func TestOrdinaryPrivateGuardianHandoffNeverReleasesDirectly(t *testing.T) {
 	}{
 		{name: "closure pending", cause: custodyLifetimeOpen, pending: true},
 		{name: "already released", cause: task.LifetimeTerminationCompleted, prepare: func(t *testing.T, run guardianCustodyRun, _ *guardianOwnerLaunches, _ *Dependencies) {
-			if err := releaseLifetimeCustody(t.Context(), run.td); err != nil {
+			if err := releaseLifetimeCustody(t.Context(), run.td, nil); err != nil {
 				t.Fatal(err)
 			}
 		}},

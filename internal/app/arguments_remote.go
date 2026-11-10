@@ -4,7 +4,6 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"io"
 	"path/filepath"
 	"strings"
 
@@ -37,14 +36,7 @@ func validateRoutedTaskID(id string) error {
 	return task.ValidateTaskID(strings.TrimPrefix(id, "remote:"))
 }
 
-func parseRemoteArguments(a Arguments, rest []string) (Arguments, error) {
-	action, remaining, err := parseSupervisorAction(rest)
-	if err != nil {
-		return a, err
-	}
-	a.RemoteAction = action
-	fs := flag.NewFlagSet(a.Command, flag.ContinueOnError)
-	fs.SetOutput(io.Discard)
+func registerRemoteManagementFlags(fs *flag.FlagSet, a *Arguments) {
 	fs.StringVar(&a.Root, "root", "", "origin state root")
 	fs.StringVar(&a.RemoteAfter, "after", "", "remote reference cursor")
 	fs.StringVar(&a.Device, "device", "", "SSH alias")
@@ -59,19 +51,6 @@ func parseRemoteArguments(a Arguments, rest []string) (Arguments, error) {
 	fs.StringVar(&a.RemoteScope, "scope", "both", "origin, destination or both")
 	fs.BoolVar(&a.RemoteApply, "apply", false, "retire selected owned bytes")
 	fs.BoolVar(&a.RemoteDryRun, "dry-run", false, "preview retirement")
-	ordered, err := orderFlags(fs, remaining)
-	if err != nil {
-		return a, err
-	}
-	if err = fs.Parse(ordered); err != nil {
-		return a, err
-	}
-	fs.Visit(func(f *flag.Flag) {
-		if f.Name == "scope" {
-			a.remoteScopeSet = true
-		}
-	})
-	return validateRemoteAction(a, fs.Args())
 }
 
 func validateRemoteAction(a Arguments, positional []string) (Arguments, error) {
@@ -129,7 +108,10 @@ func (a *Arguments) validateRemoteDispatch(positional []string) error {
 	if len(positional) != 0 || remoteDispatchLocalOptions(*a) {
 		return errors.New("remote dispatch conflicts with local workspace, auto, Team, continuation or supervisor options")
 	}
-	if a.Brief == "" || (a.RemoteCwd == "") == (a.InputManifest == "") {
+	if err := validateContentSources(a.Brief, a.BriefBytes, true); err != nil {
+		return err
+	}
+	if (a.RemoteCwd == "") == (a.InputManifest == "") {
 		return errors.New("remote dispatch requires --brief and exactly one of --remote-cwd or --input-manifest")
 	}
 	if a.RemoteCwd != "" && !filepath.IsAbs(a.RemoteCwd) {

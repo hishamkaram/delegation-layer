@@ -144,6 +144,60 @@ Compare performance with matching toolchain, cache, race options and concurrency
 Changes to shared fixtures require their consumers as well as the fixture tests;
 these focused commands do not replace the required final gates above.
 
+### Terminal workbench acceptance
+
+TUI changes need a real terminal check on native Linux and macOS; cross-builds
+and model tests do not establish PTY or signal behavior. After installing the
+existing test supervisor pair, run:
+
+```sh
+make acceptance-tui
+```
+
+This target builds the production CLI, `bin/tui-native` lifetime/PTY helper and
+the test-only `bin/tui-task/{delegate,delegate-run,provider}` installation in
+place. The task fixture keeps the real application, TUI and task lifecycle;
+only its provider boundary is replaced. It launches no paid provider turn.
+Pueue defaults to `bin/test-supervisor/{pueue,pueued}`; set
+`DELEGATE_TEST_PUEUE` and `DELEGATE_TEST_PUEUED` to select an existing installed
+pair. Programs are not copied or fingerprinted.
+
+For direct driver use, supply absolute installed paths and a **new** output
+path (replace `/absolute/repository` with your checkout):
+
+```sh
+python3 -m scripts.acceptance.tui.cli \
+  --binary /absolute/repository/bin/delegate \
+  --control-helper /absolute/repository/bin/tui-native \
+  --task-binary /absolute/repository/bin/tui-task/delegate \
+  --pueue /absolute/repository/bin/test-supervisor/pueue \
+  --pueued /absolute/repository/bin/test-supervisor/pueued \
+  --output /absolute/repository/bin/tui-acceptance-evidence
+```
+
+The receipt records actual cases, platform and cleanup. Terminal cases exercise
+keyboard/paste/resize, orderly and signal/hangup exits, non-TTY refusal, native
+child closure and restoration where the terminal remains observable. Supplied
+task-fixture paths additionally exercise the real lifecycle through a controlled
+provider. Missing task fixtures leave those cases explicitly unverified; a
+terminal-only run does not prove task operations. Fixture directories are
+removed only after supported closure is proven; failure retains evidence and
+unresolved resources. Treat those as blockers, not successful cleanup.
+
+`make check-platform` includes this native acceptance with the existing smoke
+checks on both platform gates. Report each host's actual result, including
+unverified cases; this guide does not assert that a pending CI run passed.
+Keep direct action/stream-writer coverage aligned when adding controls. Ordinary
+provider/lifecycle acceptance remains separate and must not be replaced with
+this controlled provider fixture.
+
+The frontend packages own form values/presentation; `app.Workbench` and existing
+domain owners retain validation and writes. CLI help and form defaults derive
+from real command registration in `internal/app/cli.go` and the typed command
+engine, rather than another command/flag catalog. Changes to user-visible
+controls also reconcile the [TUI guide](terminal-workbench.md), command/result
+references and affected architecture guidance before final review.
+
 ### Static analysis
 
 `make tools` installs Ruff, ty, ShellCheck, jactionlint, zizmor, and the separately
@@ -519,6 +573,17 @@ PR distribution jobs build and install the PR head commit, rather than GitHub's
 temporary merge commit. They run for same-repository PRs; fork PRs retain the
 ordinary gates. Main builds always run the distribution install checks before
 their artifacts can be published.
+
+Candidate-install CI temporarily selects `--bootstrap-cpu-guard=false` for positive macOS
+bootstrap turns across all three channels. The proof tool defaults to CPU-on;
+Linux and the shared private-CLI caller retain that default. Memory stays on.
+The receipt records `admission_guards` before bootstrap execution and discloses
+that the host-load source and installer-descendant closure are unproven. This
+proves installed bootstrap behavior under the recorded policy, not default CPU
+admission. Platform and nested-survival gates keep their default-on guard
+coverage. The distribution install job owns this selection; remove it when
+host CPU is controlled and installer descendants have proven closure. Failed
+or uncertain attempts still retain their evidence; the proof tool never retries them.
 
 Publication validates the trusted workflow/run/source, successful build/install
 chain, artifact digest/expiry/archive contents and version before mutation.

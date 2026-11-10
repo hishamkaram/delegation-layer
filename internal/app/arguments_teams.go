@@ -4,7 +4,6 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"io"
 	"path/filepath"
 	"strings"
 
@@ -15,58 +14,6 @@ const (
 	defaultTeamsPageSize = 50
 	maxTeamsPageSize     = 100
 )
-
-func parseTeamsArguments(a Arguments, rest []string) (Arguments, error) {
-	var err error
-	a.TeamAction, rest, err = teamsAction(rest)
-	if err != nil {
-		return Arguments{}, err
-	}
-	if a.TeamAction == "default" {
-		a.TeamDefaultAction, rest, err = teamsAction(rest)
-		if err != nil {
-			return Arguments{}, errors.New("teams default requires show, set, or clear")
-		}
-	}
-	fs := flag.NewFlagSet("teams", flag.ContinueOnError)
-	fs.SetOutput(io.Discard)
-	if err = registerTeamsFlags(fs, &a); err != nil {
-		return Arguments{}, err
-	}
-	ordered, err := orderFlags(fs, rest)
-	if err != nil {
-		return Arguments{}, err
-	}
-	if err = fs.Parse(ordered); err != nil {
-		return Arguments{}, err
-	}
-	if err = validateNoPositional("teams "+a.TeamAction, fs.Args()); err != nil {
-		return Arguments{}, err
-	}
-	if err = validateTeamsArguments(a); err != nil {
-		return Arguments{}, err
-	}
-	return a, nil
-}
-
-// Only root and JSON may precede an action, matching the other command groups.
-func teamsAction(args []string) (string, []string, error) {
-	for i := 0; i < len(args); i++ {
-		name, _, assigned := strings.Cut(strings.TrimLeft(args[i], "-"), "=")
-		if strings.HasPrefix(args[i], "-") && (name == "root" || name == "json") {
-			if name == "root" && !assigned {
-				i++
-				if i == len(args) {
-					return "", nil, errors.New("missing value for --root")
-				}
-			}
-			continue
-		}
-		rest := append(append([]string(nil), args[:i]...), args[i+1:]...)
-		return args[i], rest, nil
-	}
-	return "", nil, errors.New("teams requires register, update, delete, list, show, or default")
-}
 
 func registerTeamsFlags(fs *flag.FlagSet, a *Arguments) error {
 	fs.StringVar(&a.Root, "root", a.Root, "absolute execution state root; never selects the Team catalog")

@@ -20,6 +20,9 @@ func resolveDispatchTeam(request DispatchRequest, options DispatchOptions, store
 
 func resolveDispatchTeamContext(ctx context.Context, request DispatchRequest, options DispatchOptions, store *taskdir.Store, id, cwd string) (DispatchRequest, error) {
 	if request.TeamTarget == nil {
+		if request.ExpectedTeamSelection != nil {
+			return request, teamcontract.ErrTeamSelectionChanged
+		}
 		return request, task.ValidateTeamContext(request.TeamContext)
 	}
 	if request.ResumeTask != "" {
@@ -51,16 +54,15 @@ func resolveDispatchTeamContext(ctx context.Context, request DispatchRequest, op
 		return request, err
 	}
 	intent := task.TeamIntent{Provider: request.Provider, Auto: request.Auto, Config: request.Config}
-	resolved, err := teamcontract.MergeExecution(member.Member.ExecutionDefaults, intent)
+	selected, err := teamcontract.Select(member, intent)
 	if err != nil {
 		return request, err
 	}
-	selection, err := teamcontract.SelectionContext(member, intent)
-	if err != nil {
-		return request, err
+	if request.ExpectedTeamSelection != nil && !request.ExpectedTeamSelection.Equal(selected) {
+		return request, teamcontract.ErrTeamSelectionChanged
 	}
-	request.Provider, request.Auto, request.Config = resolved.Provider, resolved.Auto, resolved.Config
-	request.TeamContext = selection
+	request.Provider, request.Auto, request.Config = selected.Execution.Provider, selected.Execution.Auto, selected.Execution.Config
+	request.TeamContext = selected.Context
 	return request, nil
 }
 

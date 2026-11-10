@@ -12,7 +12,8 @@ import (
 
 func dispatchRequest(a Arguments, deps Dependencies) tasklifecycle.DispatchRequest {
 	return tasklifecycle.DispatchRequest{
-		Remote: a.remoteBinding, Root: a.Root, TaskID: a.TaskID, GeneratedTaskID: a.generatedTaskID, ResumeTask: a.ResumeTask,
+		ExpectedTeamSelection: a.ExpectedTeamSelection,
+		Remote:                a.remoteBinding, Root: a.Root, TaskID: a.TaskID, GeneratedTaskID: a.generatedTaskID, ResumeTask: a.ResumeTask,
 		Provider: a.Provider, Auto: a.Auto, Config: a.Config, Cwd: a.Cwd, BriefPath: a.Brief, BriefBytes: a.BriefBytes,
 		Isolation: a.Isolation, WorkspaceID: a.WorkspaceID, Base: a.Base, WorkspaceBudget: a.WorkspaceBudget,
 		WorkspaceBinding: a.workspaceBinding, Selection: supervisorAdmissionSelection(a, deps),
@@ -49,15 +50,23 @@ func dispatchOptionsContext(ctx context.Context, deps Dependencies, continuation
 }
 
 func dispatch(a Arguments, deps Dependencies) commandResult {
-	deps = deps.withCapturedEnvironment()
-	options := dispatchOptions(deps, a.ResumeTask != "")
+	return dispatchContext(context.Background(), a, deps)
+}
+
+func dispatchContext(ctx context.Context, a Arguments, deps Dependencies) commandResult {
+	deps = deps.withCapturedEnvironmentContext(ctx)
+	options := dispatchOptionsContext(ctx, deps, a.ResumeTask != "")
 	options.ResourceGuards = a.ResourceGuards
-	return dispatchCommandResult(tasklifecycle.Dispatch(dispatchRequest(a, deps), options))
+	return dispatchCommandResult(tasklifecycle.DispatchContext(ctx, dispatchRequest(a, deps), options))
 }
 
 func continueTask(a Arguments, deps Dependencies) commandResult {
-	deps = deps.withCapturedEnvironment()
-	options := tasklifecycle.ContinuationOptions{Dispatch: dispatchOptions(deps, true)}
+	return continueTaskContext(context.Background(), a, deps)
+}
+
+func continueTaskContext(ctx context.Context, a Arguments, deps Dependencies) commandResult {
+	deps = deps.withCapturedEnvironmentContext(ctx)
+	options := tasklifecycle.ContinuationOptions{Dispatch: dispatchOptionsContext(ctx, deps, true), SuccessorTaskID: a.SuccessorTaskID}
 	options.Dispatch.ResourceGuards = a.ResourceGuards
-	return continuationCommandResult(tasklifecycle.Continue(dispatchRequest(a, deps), options))
+	return continuationCommandResult(tasklifecycle.ContinueContext(ctx, dispatchRequest(a, deps), options))
 }

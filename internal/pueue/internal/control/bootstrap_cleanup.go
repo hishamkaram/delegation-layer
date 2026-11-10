@@ -3,7 +3,6 @@ package control
 import (
 	"errors"
 	"fmt"
-	"log"
 	"sync"
 )
 
@@ -108,11 +107,16 @@ func (e *BootstrapCleanupError) finish(commandErr error, report func(error)) {
 }
 
 func finishPrivateBootstrap(lock **bootstrapLock, resultErr *error) {
-	if owner := retainBootstrapLock(lock, pendingHandles(*resultErr), reportBootstrapCleanup); owner != nil {
+	pending := pendingHandles(*resultErr)
+	// Synchronous cleanup faults are returned/joined. Only deferred cleanup
+	// needs a separate report after the original caller has returned.
+	var report func(error)
+	if len(pending) > 0 {
+		report = func(err error) {
+			reportRetained(pending, fmt.Errorf("delegate: retained supervisor lock cleanup failed: %w", err))
+		}
+	}
+	if owner := retainBootstrapLock(lock, pending, report); owner != nil {
 		*resultErr = errors.Join(*resultErr, owner)
 	}
-}
-
-func reportBootstrapCleanup(err error) {
-	log.Printf("delegate: retained supervisor lock cleanup failed: %v", err)
 }

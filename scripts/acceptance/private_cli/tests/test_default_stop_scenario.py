@@ -21,6 +21,7 @@ from scripts.acceptance.private_cli import receipt as private_cli_receipt
 from scripts.acceptance.private_cli import stop as stop_impl
 from scripts.acceptance.private_cli import admission as admission_impl
 from scripts.acceptance.private_cli import commands as commands_impl
+from scripts.acceptance.private_cli import supervisor as supervisor_impl
 from scripts.acceptance.private_cli.tests.fixtures import set_up_private_capture_root
 
 
@@ -96,6 +97,135 @@ class PrivateDefaultStopScenarioTests(unittest.TestCase):
         self.assertEqual(records["lifecycle"], ["enter", "cancel", "closure", "exit"])
         self.assertEqual(records["lease_cleanup_calls"], [])
         self.assertEqual(len(records["dispatches"]), 1)
+
+
+class DefaultSilenceFailureEvidenceTests(unittest.TestCase):
+    def setUp(self):
+        self.capture_root = set_up_private_capture_root(self)
+        temporary = tempfile.TemporaryDirectory(prefix="delegate-silence-failure-")
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        self.state = self.root / "state"
+        self.lifetime = self.state / "tasks" / TASK / "lifetime"
+        self.lifetime.mkdir(parents=True)
+        for name in ("intent.json", "worker-wait.json", "terminated.json", "owner.lock"):
+            (self.lifetime / name).write_text("PRIVATE_DIAGNOSTIC_CANARY")
+        (self.lifetime / "PRIVATE_DIAGNOSTIC_CANARY").touch()
+        self.receipt = private_cli_receipt.AcceptanceReceipt(self.root / "receipt.json", 3, 2, {})
+        self.tasks = {}
+        self.receipt.add_details(default_stop={"tasks": self.tasks})
+        self.clock = 0.0
+
+    def invoke_timeout(self):
+        task_id = TASK
+        closure = _budget_closure(deadline="2026-10-14T00:05:00Z", terminated_at="2026-10-14T00:01:30Z")
+        closure["termination"]["cause"] = "output-silence"
+        closure["private_output"] = "PRIVATE_DIAGNOSTIC_CANARY"
+        response = {"task_id": task_id, "root_id": ROOT, "task_record": "created", "admission": "admitted"}
+        specification = {
+            "pid": 101, "scope_kind": "process-group", "assurance": "cooperative",
+            "owner_sha256": "a" * 64, "registration_sha256": "b" * 64,
+            "scope_plan_sha256": "c" * 64, "scope_id_sha256": "d" * 64,
+        }
+        cohort = _SilenceFailureCohort()
+        snapshot = {"tasks": {"7": {"id": 7, "label": "delegate:" + ROOT + ":" + task_id,
+                                   "status": {"Running": {}}, "command": "PRIVATE_DIAGNOSTIC_CANARY"}}}
+
+        def sleep(_seconds):
+            self.clock += 30
+
+        with patch.object(stop_impl.uuid, "uuid4", return_value=stop_impl.uuid.UUID(hex=task_id)), \
+                patch.object(stop_impl, "default_stop_live_lease", return_value=(specification, cohort, {})), \
+                patch.object(stop_impl, "await_managed_lifetime_closure", return_value={"tasks": {task_id: closure}}), \
+                patch.object(supervisor_impl, "pueue_snapshot", return_value=snapshot) as observe, \
+                patch.object(supervisor_impl.time, "monotonic", side_effect=lambda: self.clock), \
+                patch.object(supervisor_impl.time, "sleep", side_effect=sleep), \
+                patch.object(stop_impl, "run_json") as status:
+            with self.assertRaises(RuntimeError) as raised:
+                stop_impl._prove_default_silence_stop(
+                    attempted_task_ids=[], capture_root=self.capture_root, client="client", config="config",
+                    delegate="delegate", dispatch_fixture=lambda *_a, **_kw: response, env={}, lease_nonce="n" * 32,
+                    receipts=self.root, run_receipt=self.receipt, state=self.state, task_evidence=self.tasks,
+                    waiter_directory=self.root / "waiters",
+                )
+        self.assertEqual(str(raised.exception), "timed out waiting for isolated pueue task state Done")
+        self.assertIs(type(raised.exception), RuntimeError)
+        observe.assert_called_once()
+        status.assert_not_called()
+        self.assertTrue(cohort.closed)
+        self.receipt.write("FAIL", {"status": "retained"}, raised.exception)
+        text = self.receipt.output.read_text()
+        self.assertNotIn("PRIVATE_DIAGNOSTIC_CANARY", text)
+        recorded = json.loads(text)
+        self.assertEqual(recorded["failure"], {
+            "code": "default-stop-output-silence-failed", "exception_type": "RuntimeError",
+            "phase": "default_stop_output_silence",
+        })
+        return recorded["default_stop"]["tasks"]["output_silence"]
+
+    def test_queue_timeout_keeps_canonical_closure_and_same_poll_without_claiming_success(self):
+        evidence = self.invoke_timeout()
+        self.assertEqual(evidence["closure"]["termination"], {
+            "cause": "output-silence", "scope_empty": True, "observed_at": "2026-10-14T00:01:30Z",
+        })
+        self.assertEqual(evidence["closure"]["worker_wait"]["exit_code"], 143)
+        self.assertEqual(evidence["queue_ended_observation"], {
+            "kind": "pending", "poll_count": 1, "elapsed_seconds": 30.0,
+            "last": {"kind": "exact-label", "state": "Running", "queue_id": 7},
+        })
+        self.assertEqual(evidence["diagnostics"], {
+            "guardian_identity": "not-recorded",
+            "lifetime_entries": {"names": ["intent.json", "owner.lock", "terminated.json", "worker-wait.json"],
+                                 "truncated": False, "unrecognized_entry_count": 1},
+        })
+        self.assertNotIn("status", evidence)
+        self.assertNotIn("fixture_lease_cleanup", evidence)
+
+    def test_capture_failure_keeps_the_original_timeout_and_partial_closure(self):
+        with patch.object(stop_impl, "_silence_lifetime_entries", side_effect=PermissionError("PRIVATE_DIAGNOSTIC_CANARY")):
+            evidence = self.invoke_timeout()
+        self.assertTrue(evidence["closure"]["termination"]["scope_empty"])
+        self.assertEqual(evidence["queue_ended_observation"]["last"]["state"], "Running")
+        self.assertEqual(evidence["diagnostics"], {
+            "guardian_identity": "not-recorded",
+            "capture_errors": [{"stage": "lifetime-entry-names", "exception_type": "PermissionError"}],
+        })
+
+    def test_checkpoint_projection_failure_cannot_replace_the_queue_timeout(self):
+        with patch.object(stop_impl, "default_stop_closure_evidence", side_effect=ValueError("PRIVATE_DIAGNOSTIC_CANARY")):
+            evidence = self.invoke_timeout()
+        self.assertNotIn("closure", evidence)
+        self.assertEqual(evidence["diagnostics"]["capture_errors"], [
+            {"stage": "checkpoint-projection", "exception_type": "ValueError"},
+        ])
+        self.assertEqual(evidence["queue_ended_observation"]["last"]["state"], "Running")
+
+    def test_lifetime_name_capture_is_bounded_and_does_not_follow_the_directory(self):
+        for sequence in range(1, 70):
+            (self.lifetime / f"{sequence:020d}.launch.json").touch()
+        evidence = stop_impl._silence_lifetime_entries(self.state, TASK)
+        self.assertTrue(evidence["truncated"])
+        self.assertLessEqual(len(evidence["names"]), 64)
+        self.assertNotIn("PRIVATE_DIAGNOSTIC_CANARY", json.dumps(evidence))
+        original = self.lifetime.with_name("original-lifetime")
+        self.lifetime.rename(original)
+        self.lifetime.symlink_to(original, target_is_directory=True)
+        with self.assertRaises(OSError):
+            stop_impl._silence_lifetime_entries(self.state, TASK)
+
+
+class _SilenceFailureCohort:
+    def __init__(self):
+        self.closed = False
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, _error_type, _error, _traceback):
+        self.closed = True
+
+    def remove_closed_fifos(self):
+        raise AssertionError("a failed queue observation must retain cleanup custody")
 
 
 class DefaultStopDispatchReceiptTests(unittest.TestCase):

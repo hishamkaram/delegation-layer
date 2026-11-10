@@ -35,7 +35,23 @@ done
 echo \"build \${GOOS:-host}/\${GOARCH:-host} \${output}\" >> '${RECORD}'
 if [[ -n \"\${STUB_FAIL_BUILD:-}\" ]]; then exit 1; fi
 : > \"\${output}\""
-write_stub "${STUB_PATH}/python3" "echo \"python3 \$*\" >> '${RECORD}'"
+write_stub "${STUB_PATH}/python3" "
+if [[ \"\${1:-}\" == -m && \"\${2:-}\" == scripts.acceptance.tui.cli ]]; then
+    while [[ \$# -gt 0 ]]; do
+        if [[ \"\$1\" == --output ]]; then
+            shift
+            # The real native driver owns creation of a new output directory.
+            [[ ! -e \"\$1\" ]]
+            mkdir -p \"\$1\"
+            break
+        fi
+        shift
+    done
+    echo acceptance-tui >> '${RECORD}'
+    if [[ -n \"\${STUB_FAIL_TUI:-}\" ]]; then exit 1; fi
+else
+    echo \"python3 \$*\" >> '${RECORD}'
+fi"
 write_stub "${STUB_PATH}/sha256sum" "echo sha256sum >> '${RECORD}'"
 write_stub "${LAYOUT}/bin/golangci-lint" "echo \"golangci-lint \$1\" >> '${RECORD}'"
 write_stub "${LAYOUT}/bin/goreleaser" "echo goreleaser >> '${RECORD}'"
@@ -63,6 +79,13 @@ BUILD_RECORDS=(
     "build linux/amd64 dist/delegate-linux-amd64/delegate-run"
     "build linux/arm64 dist/delegate-linux-arm64/delegate"
     "build linux/arm64 dist/delegate-linux-arm64/delegate-run"
+)
+TUI_RECORDS=(
+    "build host/host bin/tui-task/delegate"
+    "build host/host bin/tui-task/delegate-run"
+    "build host/host bin/tui-task/provider"
+    "go test -c -buildvcs=false -o bin/tui-native ./internal/lifetime"
+    acceptance-tui
 )
 PLATFORM_GATES_BEFORE_BUILD=(
     "python3 scripts/verify_skills.py" sha256sum
@@ -113,12 +136,12 @@ expect_run() {
 }
 
 run_make check
-expect_run "check runs every gate in order and each of the 11 builds once before smoke" zero \
-    "${SHARED_STATIC_GATES[@]}" "${PLATFORM_GATES_BEFORE_BUILD[@]}" "${BUILD_RECORDS[@]}" smoke-cli smoke-cli govulncheck
+expect_run "check runs every gate with one production build before smoke and native TUI proof" zero \
+    "${SHARED_STATIC_GATES[@]}" "${PLATFORM_GATES_BEFORE_BUILD[@]}" "${BUILD_RECORDS[@]}" smoke-cli smoke-cli "${TUI_RECORDS[@]}" govulncheck
 
 run_make check-platform
 expect_run "platform check retains Go lint, race and runtime tests without shared static checks" zero \
-    "${PLATFORM_GATES_BEFORE_BUILD[@]}" "${BUILD_RECORDS[@]}" smoke-cli smoke-cli govulncheck
+    "${PLATFORM_GATES_BEFORE_BUILD[@]}" "${BUILD_RECORDS[@]}" smoke-cli smoke-cli "${TUI_RECORDS[@]}" govulncheck
 
 run_make tools-go
 expect_run "platform tools install only the pinned core tools" zero install-tools
@@ -147,5 +170,9 @@ expect_run "check stops at a build failure before smoke and vuln" nonzero \
 run_make check STUB_FAIL_SMOKE=1
 expect_run "check stops at a smoke failure before vuln" nonzero \
     "${SHARED_STATIC_GATES[@]}" "${PLATFORM_GATES_BEFORE_BUILD[@]}" "${BUILD_RECORDS[@]}" smoke-cli
+
+run_make check STUB_FAIL_TUI=1
+expect_run "check propagates native TUI failure before vuln" nonzero \
+    "${SHARED_STATIC_GATES[@]}" "${PLATFORM_GATES_BEFORE_BUILD[@]}" "${BUILD_RECORDS[@]}" smoke-cli smoke-cli "${TUI_RECORDS[@]}"
 
 echo "All ${PASSED_CASES} check build-stage regression checks passed."

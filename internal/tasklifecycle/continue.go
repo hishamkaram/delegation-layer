@@ -13,6 +13,11 @@ func Continue(request DispatchRequest, options ContinuationOptions) (result Cont
 }
 
 func ContinueContext(ctx context.Context, request DispatchRequest, options ContinuationOptions) (result ContinuationResult) {
+	if options.SuccessorTaskID != "" {
+		if err := task.ValidateTaskID(options.SuccessorTaskID); err != nil {
+			return continuationFailure(result, ContinueValidation, "validate-continuation", err)
+		}
+	}
 	root, err := ResolveRoot(request.Root)
 	if err != nil {
 		return continuationFailure(result, ContinueResolveRoot, "resolve-state-root", err)
@@ -46,7 +51,7 @@ func ContinueContext(ctx context.Context, request DispatchRequest, options Conti
 		return continuationFailure(result, ContinueSession, "load-continuation-session", err)
 	}
 	result.SessionSource = source
-	successorID, err := randomid.NewTaskID()
+	successorID, err := continuationSuccessorID(options.SuccessorTaskID)
 	if err != nil {
 		return continuationFailure(result, ContinueGenerateID, "generate-task-id", err)
 	}
@@ -59,6 +64,13 @@ func ContinueContext(ctx context.Context, request DispatchRequest, options Conti
 	}
 	successor.GeneratedTaskID = successorID
 	return continueAdmittedContext(ctx, successor, options, predecessor, meta, result)
+}
+
+func continuationSuccessorID(requested string) (string, error) {
+	if requested != "" {
+		return requested, task.ValidateTaskID(requested)
+	}
+	return randomid.NewTaskID()
 }
 
 // continueAdmitted dispatches the successor in the caller's captured launch

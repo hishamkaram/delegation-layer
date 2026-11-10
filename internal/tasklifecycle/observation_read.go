@@ -11,6 +11,8 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 )
 
+const sessionReleaseContentionWait = 5 * time.Second
+
 func ReadTimeoutRecords(td *taskdir.TaskDir) ([]taskdir.StopRecord, error) {
 	if td == nil {
 		return nil, errors.New("nil task directory")
@@ -30,10 +32,46 @@ func ReleaseContinuationSessionContext(ctx context.Context, td *taskdir.TaskDir,
 	if td == nil || req == nil || req.PriorSession == nil || outcome == nil {
 		return nil
 	}
-	return td.ReleaseSessionContext(ctx, req.Provider, req.PriorSession.ConversationID, outcome.EvidenceSHA256)
+	if ctx == nil {
+		return context.Canceled
+	}
+	// TaskDir owns claims and proof checks. Only pure acquisition contention
+	// permits waiting; any cleanup fault may retain a lease and must return.
+	acquisition, cancel := context.WithTimeout(ctx, sessionReleaseContentionWait)
+	defer cancel()
+	deadline, _ := acquisition.Deadline()
+	var priorContention error
+	for {
+		err := td.ReleaseSessionContext(acquisition, req.Provider, req.PriorSession.ConversationID, outcome.EvidenceSHA256)
+		if !continuationReleaseContended(err) {
+			return retainContinuationContention(err, priorContention, acquisition.Err())
+		}
+		priorContention = err
+		if !waitForCollectionContext(acquisition, deadline) {
+			return errors.Join(err, acquisition.Err())
+		}
+	}
 }
 
-func WaitForCollection(deadline time.Time) bool {
+func retainContinuationContention(err, prior, contextErr error) error {
+	if prior != nil && contextErr != nil && task.AllErrorCauses(err, func(cause error) bool {
+		return errors.Is(cause, contextErr)
+	}) {
+		return errors.Join(prior, err)
+	}
+	return err
+}
+
+func continuationReleaseContended(err error) bool {
+	// Reuse the whole-error policy; a joined I/O/cleanup/active-owner fault must
+	// never become retry permission. A missing seal is not release contention.
+	return errors.Is(err, task.ErrLockBusy) && !errors.Is(err, task.ErrNoSeal) && IsPureCollectionPendingError(err)
+}
+
+func waitForCollectionContext(ctx context.Context, deadline time.Time) bool {
+	if ctx.Err() != nil {
+		return false
+	}
 	remaining := time.Until(deadline)
 	if remaining <= 0 {
 		return false
@@ -50,8 +88,12 @@ func WaitForCollection(deadline time.Time) bool {
 			}
 		}
 	}()
-	<-timer.C
-	return time.Now().Before(deadline)
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return ctx.Err() == nil && time.Now().Before(deadline)
+	}
 }
 
 func reapSupervisorObservation(ctx context.Context, err error) error {

@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -31,7 +30,7 @@ func startDaemon(ctx context.Context, operationRoot, executable, configPath, bas
 	if err = configurePrivateDaemonCommand(cmd); err != nil {
 		return fmt.Errorf("%w: prepare private pueued launch: %w", ErrBinding, err)
 	}
-	done, guardErr := guardedDaemonStart(ctx, operationRoot, configPath, cmd, options.DaemonStartGuard)
+	done, guardErr := guardedDaemonStart(ctx, operationRoot, configPath, cmd, options.DaemonStartGuard, options.ReportDiagnostic)
 	if done == nil {
 		return guardErr
 	}
@@ -42,7 +41,7 @@ func startDaemon(ctx context.Context, operationRoot, executable, configPath, bas
 }
 
 // guardedDaemonStart owns callback lifetime and the sole Wait after successful Start.
-func guardedDaemonStart(ctx context.Context, operationRoot, configPath string, cmd *exec.Cmd, guard DaemonStartGuard) (<-chan struct{}, error) {
+func guardedDaemonStart(ctx context.Context, operationRoot, configPath string, cmd *exec.Cmd, guard DaemonStartGuard, report func(error)) (<-chan struct{}, error) {
 	if ctx == nil {
 		return nil, context.Canceled
 	}
@@ -79,7 +78,7 @@ func guardedDaemonStart(ctx context.Context, operationRoot, configPath string, c
 				startErr = fmt.Errorf("%w: start private pueued: %w", ErrBinding, err)
 			} else {
 				// A guard may report a post-Start fault; it cannot delay reaping.
-				done = startDaemonWait(cmd)
+				done = startDaemonWait(cmd, report)
 			}
 		}
 		return startErr
@@ -96,13 +95,13 @@ func guardedDaemonStart(ctx context.Context, operationRoot, configPath string, c
 
 // Called immediately after successful Start, this owner launches the sole Wait.
 // Completion denotes Wait's return; diagnostic log I/O cannot delay it.
-func startDaemonWait(cmd *exec.Cmd) <-chan struct{} {
+func startDaemonWait(cmd *exec.Cmd, report func(error)) <-chan struct{} {
 	done := make(chan struct{})
 	go func() {
 		waitErr := cmd.Wait()
 		close(done)
 		if waitErr != nil {
-			log.Printf("private daemon exited: %v", waitErr)
+			reportDiagnostic(report, fmt.Errorf("private daemon exited: %w", waitErr))
 		}
 	}()
 	return done

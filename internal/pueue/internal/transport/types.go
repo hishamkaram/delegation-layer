@@ -51,6 +51,7 @@ type pendingStatusIdentity struct {
 }
 
 type Pending struct {
+	report   func(error)
 	done     chan struct{}
 	result   CommandResult
 	args     []string
@@ -58,12 +59,12 @@ type Pending struct {
 	complete sync.Once
 }
 
-func NewPending(args []string) *Pending {
-	return &Pending{done: make(chan struct{}), args: slices.Clone(args)}
+func NewPending(args []string, report func(error)) *Pending {
+	return &Pending{done: make(chan struct{}), args: slices.Clone(args), report: report}
 }
 
 func NewCompletedPending(args []string, result CommandResult) *Pending {
-	pending := NewPending(args)
+	pending := NewPending(args, nil)
 	CompletePending(pending, result)
 	return pending
 }
@@ -138,3 +139,12 @@ type InFlightError struct{ Pending *Pending }
 
 func (e *InFlightError) Error() string { return ErrInFlight.Error() }
 func (e *InFlightError) Unwrap() error { return ErrInFlight }
+
+// PendingDiagnosticReporter exposes immutable invocation telemetry only inside
+// Pueue's internal implementation. It grants no lifecycle authority.
+func PendingDiagnosticReporter(p *Pending) func(error) {
+	if p == nil {
+		return nil
+	}
+	return p.report
+}

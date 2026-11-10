@@ -46,11 +46,15 @@ import (
 // views. Every task is attempted; faults are joined so the pass stays failed
 // and a later full wake retries it.
 func releasePrivateTerminalCustody(ctx context.Context, root string, supervisor task.SupervisorRef, scope pueue.PrivateTerminalCustodyScope) error {
-	err := privateCleanupOwner().ReleaseInspectionCustody(ctx, root, supervisor, scope.Candidates)
+	return releasePrivateTerminalCustodyReported(ctx, root, supervisor, scope, nil)
+}
+
+func releasePrivateTerminalCustodyReported(ctx context.Context, root string, supervisor task.SupervisorRef, scope pueue.PrivateTerminalCustodyScope, report func(error)) error {
+	err := privateCleanupOwnerWithReporter(report).ReleaseInspectionCustody(ctx, root, supervisor, scope.Candidates)
 	if !scope.Full {
 		return err
 	}
-	return errors.Join(err, releaseClosedTaskCustody(ctx, root))
+	return errors.Join(err, releaseClosedTaskCustody(ctx, root, report))
 }
 
 // closedTaskCustodyWorkers bounds the ordinary-task custody releases one full
@@ -58,7 +62,7 @@ func releasePrivateTerminalCustody(ctx context.Context, root string, supervisor 
 // removal, so a pass at its deadline can still hold up to this many.
 const closedTaskCustodyWorkers = 4
 
-func releaseClosedTaskCustody(ctx context.Context, root string) (resultErr error) {
+func releaseClosedTaskCustody(ctx context.Context, root string, report func(error)) (resultErr error) {
 	store, err := taskdir.OpenStoreWithPredicatesContext(ctx, root, predicate.Default())
 	if err != nil {
 		return err
@@ -69,7 +73,7 @@ func releaseClosedTaskCustody(ctx context.Context, root string) (resultErr error
 		return err
 	}
 	return releaseTaskCustodyInOrder(ctx, ids, func(ctx context.Context, id string) error {
-		return releaseStoredTaskCustody(ctx, store, id)
+		return releaseStoredTaskCustody(ctx, store, id, report)
 	})
 }
 
@@ -121,7 +125,7 @@ func handOutTaskCustody(ctx context.Context, count int, work chan<- int) bool {
 	return true
 }
 
-func releaseStoredTaskCustody(ctx context.Context, store *taskdir.Store, id string) (resultErr error) {
+func releaseStoredTaskCustody(ctx context.Context, store *taskdir.Store, id string, report func(error)) (resultErr error) {
 	td, err := store.OpenTask(id)
 	if task.RecordAbsent(err) {
 		// Task creation opens its locks before any lifetime record, so a
@@ -132,7 +136,7 @@ func releaseStoredTaskCustody(ctx context.Context, store *taskdir.Store, id stri
 		return err
 	}
 	defer func() { resultErr = errors.Join(resultErr, td.Close()) }()
-	releaseErr := releaseLifetimeCustody(ctx, td)
+	releaseErr := releaseLifetimeCustody(ctx, td, report)
 	request, readErr := td.RecordedRequest()
 	if readErr != nil {
 		return errors.Join(releaseErr, readErr)
@@ -168,7 +172,7 @@ func (o taskMaintenanceObserver) observeTask(ctx context.Context, td *taskdir.Ta
 		return err
 	}
 	if !pueue.IsPrivateConfig(o.root, meta.SupervisorConfig.ConfigPath) {
-		return releaseLifetimeCustody(ctx, td)
+		return releaseLifetimeCustody(ctx, td, o.options.ReportDiagnostic)
 	}
 	custodyWork, custodyErr := closedLifetimeCustodyReleasePending(ctx, td)
 	rowWork, client, rowErr := o.observeEndedRow(ctx, td, req, meta, spec, metaHash)
@@ -283,7 +287,7 @@ var errPrivateMaintenanceNotStarted = errors.New("private queue maintenance owne
 func releaseGuardianLifetimeCustody(root string, closure guardian.ClosureRecords, private bool) {
 	ctx, cancel := context.WithTimeout(context.Background(), lifetimeCustodyReleaseTimeout)
 	defer cancel()
-	err := releaseLifetimeCustody(ctx, closure)
+	err := releaseLifetimeCustody(ctx, closure, nil)
 	if err == nil {
 		return
 	}

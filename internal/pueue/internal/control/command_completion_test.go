@@ -175,7 +175,7 @@ func TestControlOwnerProcessClassifiesStatusCompletion(t *testing.T) {
 				return pending
 			},
 			"direct": func(_ *testing.T, command *exec.Cmd) *Pending {
-				return startOwnedCaptured(command, "", nil, FixtureVersion)
+				return startOwnedCaptured(command, "", nil, FixtureVersion, nil)
 			},
 		} {
 			t.Run(testCase.name+"/"+path, func(t *testing.T) {

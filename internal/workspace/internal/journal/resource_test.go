@@ -11,9 +11,35 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hishamkaram/delegation-layer/internal/predicate"
+
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 )
+
+func TestPassiveResourceRequestUsesJournalValidityWithoutCreatingRecords(t *testing.T) {
+	store, resource, request := newResourceFixture(t)
+	t.Cleanup(func() { closeResource(t, resource) })
+	reader, err := taskdir.OpenReadOnlyStoreContext(t.Context(), store.Root, predicate.Default())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if closeErr := reader.Close(); closeErr != nil {
+			t.Error(closeErr)
+		}
+	})
+	got, err := ReadResourceRequest(t.Context(), reader, request.WorkspaceID)
+	if err != nil || got != request {
+		t.Fatalf("passive request=%+v, %v", got, err)
+	}
+	if _, err = ReadResourceRequest(t.Context(), reader, testID('f')); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("absent workspace=%v", err)
+	}
+	if _, err = os.Lstat(filepath.Join(store.Root, "workspaces", testID('f'))); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("passive read created workspace: %v", err)
+	}
+}
 
 func TestResourceRegistryReplayAndCollision(t *testing.T) {
 	store, resource, request := newResourceFixture(t)
@@ -514,8 +540,8 @@ func newResourceFixture(t *testing.T) (*taskdir.Store, *Resource, ResourceReques
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
-		if err := store.Close(); err != nil {
-			t.Error(err)
+		if closeErr := store.Close(); closeErr != nil {
+			t.Error(closeErr)
 		}
 	})
 	return store, resource, request
@@ -523,8 +549,8 @@ func newResourceFixture(t *testing.T) (*taskdir.Store, *Resource, ResourceReques
 
 func closeResource(t *testing.T, resource *Resource) {
 	t.Helper()
-	if err := resource.Close(); err != nil {
-		t.Error(err)
+	if closeErr := resource.Close(); closeErr != nil {
+		t.Error(closeErr)
 	}
 }
 

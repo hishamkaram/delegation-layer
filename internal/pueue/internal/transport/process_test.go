@@ -130,7 +130,7 @@ func TestPendingResultIsCopiedAfterNaturalCompletion(t *testing.T) {
 }
 
 func TestPendingHandlesTraversesWrappedNestedJoins(t *testing.T) {
-	first, second := NewPending(nil), NewPending(nil)
+	first, second := NewPending(nil, nil), NewPending(nil, nil)
 	firstError := &InFlightError{Pending: first}
 	secondError := &InFlightError{Pending: second}
 	tests := []struct {

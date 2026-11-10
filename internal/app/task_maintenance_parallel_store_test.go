@@ -179,7 +179,7 @@ func TestConcurrentTaskCustodyReleasesShareOneStore(t *testing.T) {
 		case <-time.After(composedWatchdog):
 			return fmt.Errorf("%w: fewer than %d releases overlapped", errComposedWatchdog, closedTaskCustodyWorkers)
 		}
-		return releaseStoredTaskCustody(ctx, store, id)
+		return releaseStoredTaskCustody(ctx, store, id, nil)
 	}
 	if err = releaseTaskCustodyInOrder(t.Context(), ids, release); err != nil {
 		t.Fatal(err)

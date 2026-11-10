@@ -185,11 +185,11 @@ func TestCollectReleasesCustodyBesideTerminalOutcome(t *testing.T) {
 func TestLifetimeCustodyResolverIgnoresUnplacedRegistrations(t *testing.T) {
 	store, td, _ := newAppTestTask(t, false)
 	defer closeAppTestTask(t, store, td)
-	if err := releaseLifetimeCustody(t.Context(), td); err != nil {
+	if err := releaseLifetimeCustody(t.Context(), td, nil); err != nil {
 		t.Fatalf("release without registration: %v", err)
 	}
 	recordCustodyLifetime(t, td, nil, task.LifetimeTerminationBudget)
-	if err := releaseLifetimeCustody(t.Context(), td); err != nil {
+	if err := releaseLifetimeCustody(t.Context(), td, nil); err != nil {
 		t.Fatalf("release of a legacy registration: %v", err)
 	}
 	if pending, err := lifetimeCustodyPending(t.Context(), td); err != nil || pending {
@@ -214,7 +214,7 @@ func TestLifetimeCustodyResolverRetainsForeignOrMissingPool(t *testing.T) {
 	}
 
 	restore := moveCustodyTestPool(t, placement)
-	if err := releaseLifetimeCustody(t.Context(), td); err == nil {
+	if err := releaseLifetimeCustody(t.Context(), td, nil); err == nil {
 		t.Fatal("release of a missing pool reported success")
 	}
 	if _, err := lifetimeCustodyPending(t.Context(), td); err == nil {
@@ -224,13 +224,13 @@ func TestLifetimeCustodyResolverRetainsForeignOrMissingPool(t *testing.T) {
 	if pending, err := lifetimeCustodyPending(t.Context(), td); err != nil || !pending {
 		t.Fatalf("restored pool pending = %t, %v; want retained views", pending, err)
 	}
-	if err := releaseLifetimeCustody(t.Context(), td); err != nil {
+	if err := releaseLifetimeCustody(t.Context(), td, nil); err != nil {
 		t.Fatal(err)
 	}
 	if pending, err := lifetimeCustodyPending(t.Context(), td); err != nil || pending {
 		t.Fatalf("released pool pending = %t, %v", pending, err)
 	}
-	if err := releaseLifetimeCustody(t.Context(), td); err != nil {
+	if err := releaseLifetimeCustody(t.Context(), td, nil); err != nil {
 		t.Fatalf("a second release of the same owner: %v", err)
 	}
 }

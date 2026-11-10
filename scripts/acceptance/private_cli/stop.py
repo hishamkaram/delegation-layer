@@ -6,6 +6,8 @@ from scripts.acceptance.private_cli.configuration import DEFAULT_STOP_SCENARIO
 from scripts.acceptance.private_cli.configuration import DEFAULT_STOP_TASK_BUDGET
 from scripts.acceptance.private_cli.configuration import DEFAULT_STOP_TASK_COUNT
 from scripts.acceptance.lifetime.identity import _lifetime_record_name
+from scripts.acceptance.lifetime.identity import _lifetime_launch_sequence
+from scripts.acceptance.evidence.validation import AcceptanceFailure
 from scripts.acceptance.private_cli.leases import LiveFIFOLeaseCohort
 from scripts.acceptance.private_cli.leases import LockedReleaseGate
 from scripts.acceptance.private_cli.leases import require_empty_fixture_waiters
@@ -30,6 +32,57 @@ from scripts.acceptance.private_cli.supervisor import shutdown_terminal_private_
 import time
 import uuid
 from scripts.acceptance.private_cli.supervisor import wait_for_pueue_state
+from scripts.acceptance.private_cli.supervisor import QueueWaitObservation
+from typing import NotRequired, TypedDict
+import os
+
+
+class LifetimeEntryNames(TypedDict):
+    names: list[str]
+    truncated: bool
+    unrecognized_entry_count: int
+
+
+class SilenceDiagnostics(TypedDict):
+    guardian_identity: str
+    lifetime_entries: NotRequired[LifetimeEntryNames]
+    capture_errors: NotRequired[list[dict[str, str]]]
+
+
+def _silence_capture_error(diagnostics: SilenceDiagnostics, stage: str, error: Exception):
+    errors = diagnostics.get("capture_errors")
+    if errors is None:
+        errors = []
+        diagnostics["capture_errors"] = errors
+    errors.append({"stage": stage, "exception_type": type(error).__name__[:64]})
+
+
+def _silence_lifetime_entries(state: Path, task_id: str) -> LifetimeEntryNames:
+    """List bounded known record names without following or reading any entry."""
+    known = {_lifetime_record_name("task", kind) for kind in
+             ("intent", "registration", "worker", "worker-wait", "termination")}
+    known.add("owner.lock")
+    descriptor = os.open(state / "tasks" / task_id / "lifetime", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    names = []
+    unrecognized = 0
+    truncated = False
+    try:
+        with os.scandir(descriptor) as entries:
+            for index, entry in enumerate(entries):
+                if index == 64:
+                    truncated = True
+                    break
+                try:
+                    recognized = entry.name in known or _lifetime_launch_sequence("task", entry.name) is not None
+                except AcceptanceFailure:
+                    recognized = False
+                if recognized:
+                    names.append(entry.name)
+                else:
+                    unrecognized += 1
+    finally:
+        os.close(descriptor)
+    return {"names": sorted(names), "truncated": truncated, "unrecognized_entry_count": unrecognized}
 
 
 def default_stop_live_lease(client, config, env, state, response, waiter_directory, lease_nonce, *, capture_root):
@@ -419,18 +472,39 @@ def _prove_default_silence_stop(
     with cohort:
         closure = await_managed_lifetime_closure(state, (task_id,), timeout=120)
         task_closure = closure.get("tasks", {}).get(task_id)
+        diagnostics: SilenceDiagnostics = {"guardian_identity": "not-recorded"}
+        observation: QueueWaitObservation = {"kind": "pending"}
+        evidence = {
+            "budget": DEFAULT_STOP_TASK_BUDGET, "output_silence_timeout": DEFAULT_SILENCE_TIMEOUT,
+            "queue_ended_observation": observation, "diagnostics": diagnostics,
+        }
+        task_evidence["output_silence"] = evidence
+        try:
+            # This checkpoint projects already validated facts. The expected
+            # silence cause and continuation are still asserted below.
+            evidence["dispatch"] = default_stop_dispatch_evidence(response)
+            evidence["lease"] = default_stop_lease_evidence(specification, lease)
+            evidence["closure"] = default_stop_closure_evidence(task_closure, task_id, task_closure["termination"]["cause"])
+        except Exception as error:
+            _silence_capture_error(diagnostics, "checkpoint-projection", error)
         label = "delegate:" + response["root_id"] + ":" + task_id
-        wait_for_pueue_state(client, config, env, label, "Done", capture_root=capture_root)
+        try:
+            wait_for_pueue_state(client, config, env, label, "Done", capture_root=capture_root, observation=observation)
+        except Exception:
+            try:
+                diagnostics["lifetime_entries"] = _silence_lifetime_entries(state, task_id)
+            except Exception as error:
+                _silence_capture_error(diagnostics, "lifetime-entry-names", error)
+            raise
+        observation["kind"] = "exact-label-done"
         status = run_json(
             delegate, env, ["--root", str(state), "status", task_id, "--json"],
             receipt=receipts / "status-default-stop-silence.json", capture_root=capture_root,
         )
-        task_evidence["output_silence"] = {
-            "budget": DEFAULT_STOP_TASK_BUDGET, "output_silence_timeout": DEFAULT_SILENCE_TIMEOUT,
+        evidence.update({
             "dispatch": default_stop_dispatch_evidence(response),
             "lease": default_stop_lease_evidence(specification, lease),
             **silence_stop_evidence(status, task_closure, task_id, response["root_id"]),
-            "queue_ended_observation": {"kind": "exact-label-done"},
             "fixture_lease_cleanup": cohort.remove_closed_fifos(),
-        }
+        })
         run_receipt.update_counts(running_task_count=0, live_lease_count=0)

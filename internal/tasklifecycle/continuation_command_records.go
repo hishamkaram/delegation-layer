@@ -9,6 +9,9 @@ import (
 
 type ContinuationOptions struct {
 	Dispatch DispatchOptions
+	// SuccessorTaskID is an optional caller-allocated identity for tracking an
+	// in-flight admission. It grants no admission or compatibility authority.
+	SuccessorTaskID string
 }
 
 type ContinuationPhase uint8

@@ -28,14 +28,14 @@ func TestTeamsArgumentsPreserveRequestedValues(t *testing.T) {
 	for _, test := range tests {
 		t.Run(strings.Join(test.argv[:1], " ")+test.sub, func(t *testing.T) {
 			argv := append([]string{"--root", dir, "--json"}, test.argv...)
-			a, err := parseTeamsArguments(Arguments{Command: "teams"}, argv)
+			a, err := ParseArguments(append([]string{"teams"}, argv...))
 			if err != nil {
 				t.Fatal(err)
 			}
 			requireTeamsParsedArguments(t, a, test, dir)
 		})
 	}
-	list, err := parseTeamsArguments(Arguments{Command: "teams"}, []string{"list"})
+	list, err := ParseArguments(append([]string{"teams"}, []string{"list"}...))
 	if err != nil || list.TeamLimit != 50 || list.Cwd != "" {
 		t.Fatalf("default list must not invent context: %+v, %v", list, err)
 	}
@@ -99,7 +99,7 @@ func TestTeamsArgumentsRejectInvalidBoundaries(t *testing.T) {
 		{"list", "--definition", filepath.Join(dir, "definition.json")},
 	}
 	for _, argv := range tests {
-		if _, err := parseTeamsArguments(Arguments{Command: "teams"}, argv); err == nil {
+		if _, err := ParseArguments(append([]string{"teams"}, argv...)); err == nil {
 			t.Errorf("accepted invalid teams argv %v", argv)
 		}
 	}

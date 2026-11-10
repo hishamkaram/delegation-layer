@@ -159,6 +159,15 @@ jobs:
           DELEGATE_REPAIR_EDITOR_OWNER: ${{ github.workspace }}/bin/test-supervisor/delegate-run
         run: make check
 
+      - name: Retain native TUI acceptance evidence
+        if: ${{ always() && needs.changes.outputs.full == 'true' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: tui-native-${{ runner.os }}-${{ github.run_attempt }}
+          path: bin/tui-acceptance.*/
+          retention-days: 7
+          if-no-files-found: ignore
+
       - name: Check documentation, skills and diagrams
         if: ${{ needs.changes.outputs.full == 'false' }}
         run: make check-docs
@@ -321,6 +330,15 @@ jobs:
           DELEGATE_TEST_PUEUED: ${{ github.workspace }}/bin/test-supervisor/pueued
           DELEGATE_REPAIR_EDITOR_OWNER: ${{ github.workspace }}/bin/test-supervisor/delegate-run
         run: make check-platform
+
+      - name: Retain native TUI acceptance evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: tui-native-${{ runner.os }}-${{ github.run_attempt }}
+          path: bin/tui-acceptance.*/
+          retention-days: 7
+          if-no-files-found: ignore
 
       - name: Prove selected native lifetime backend
         id: native_lifetime
@@ -704,12 +722,17 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           CHANNEL: ${{ matrix.channel }}
           ARTIFACT_ID: ${{ needs.development-candidate.outputs.artifact-id }}
+          # Temporary mitigation owned by this job: CPU-off may hide installer-descendant load.
+          # This proves install/bootstrap, not default CPU admission. Remove when host CPU is
+          # controlled and installer descendants have proven closure.
+          BOOTSTRAP_CPU_GUARD: ${{ matrix.host_os == 'Darwin' && 'false' || 'true' }}
         run: >-
           python3 scripts/prove_candidate_install.py
           --artifact-id "${ARTIFACT_ID}"
           --channel "${CHANNEL}"
           --output-dir "${RUNNER_TEMP}/candidate-install-proof"
           --github-auth environment
+          --bootstrap-cpu-guard "${BOOTSTRAP_CPU_GUARD}"
 
       - name: Retain the install proof evidence
         if: always()

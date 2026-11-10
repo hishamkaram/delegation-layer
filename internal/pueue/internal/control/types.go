@@ -57,6 +57,10 @@ type DaemonWaitOwner interface {
 // fresh call; the default child environment is bounded to pueue's control
 // variables. A nonnil Environment is passed through as supplied by the caller.
 type Options struct {
+	// ReportDiagnostic is invocation-owned telemetry. It may outlive a caller
+	// while natural cleanup settles and must remain safe after its UI closes.
+	// Nil keeps the finite CLI's existing standard logger.
+	ReportDiagnostic func(error)
 	// RuntimeClientExecutable is the installation resolver's selected transport.
 	// It never changes the persisted generation binding or grants Start authority.
 	// Empty retains an ordinary recorded installation; historical managed copies

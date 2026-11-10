@@ -263,9 +263,12 @@ class CandidateInstallWorkflowTests(unittest.TestCase):
     def test_installs_select_the_exact_producer_artifact_id_without_rebuilding(self):
         proof = self.steps["Prove the candidate install through the channel"]
         self.assertIn("ARTIFACT_ID: ${{ needs.development-candidate.outputs.artifact-id }}", proof)
+        self.assertIn("BOOTSTRAP_CPU_GUARD: ${{ matrix.host_os == 'Darwin' && 'false' || 'true' }}", proof)
         for argument in ('--artifact-id "${ARTIFACT_ID}"', '--channel "${CHANNEL}"',
-                         '--output-dir "${RUNNER_TEMP}/candidate-install-proof"', "--github-auth environment"):
+                         '--output-dir "${RUNNER_TEMP}/candidate-install-proof"', "--github-auth environment",
+                         '--bootstrap-cpu-guard "${BOOTSTRAP_CPU_GUARD}"'):
             self.assertIn(argument, proof)
+        self.assertNotIn("--memory-guard", self.job)
         self.assertNotIn("candidate-locator", self.job)
         self.assertNotIn("build_development_candidate", self.job)
 

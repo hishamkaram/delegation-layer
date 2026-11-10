@@ -5,12 +5,14 @@ import (
 	supervisorcore "github.com/hishamkaram/delegation-layer/internal/supervisor"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
+	teamcontract "github.com/hishamkaram/delegation-layer/internal/teams/contract"
 	"github.com/hishamkaram/delegation-layer/internal/workspaces"
 )
 
 // DispatchRequest contains requested values and the recorded continuation binding.
 // Only journal operations grant authority; these values confer none.
 type DispatchRequest struct {
+	ExpectedTeamSelection                         *teamcontract.Selection
 	Root, TaskID, GeneratedTaskID, ResumeTask     string
 	Provider                                      string
 	Auto                                          bool

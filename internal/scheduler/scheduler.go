@@ -40,7 +40,7 @@ func OpenReadOnly(ctx context.Context, store *taskdir.ReadOnlyStore) (contract.S
 	if store == nil {
 		return nil, errors.New("scheduler read requires a state reader")
 	}
-	return sqlitestore.Open(ctx, store.Root(), store.RootID())
+	return sqlitestore.OpenReadOnly(ctx, store.Root(), store.RootID())
 }
 
 // OwnerLease is the exclusive scheduler owner of one state root. Acquire it

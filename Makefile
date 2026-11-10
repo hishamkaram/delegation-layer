@@ -166,6 +166,27 @@ smoke-cli: build
 		/bin/bash ./scripts/smoke-cli.sh; \
 	fi
 
+.PHONY: tui-fixtures acceptance-tui
+# Test-only CLIs retain the real application/TUI/lifecycle owners and replace
+# only the provider boundary. The lifetime test binary owns native PTY signals.
+tui-fixtures: tool-versions
+	@mkdir -p bin/tui-task
+	CGO_ENABLED=0 go build -buildvcs=false -o bin/tui-task/delegate ./internal/testutil/tuiprovider/cmd/delegate
+	CGO_ENABLED=0 go build -buildvcs=false -o bin/tui-task/delegate-run ./internal/testutil/tuiprovider/cmd/delegate-run
+	CGO_ENABLED=0 go build -buildvcs=false -o bin/tui-task/provider ./internal/testutil/tuiprovider/cmd/provider
+	CGO_ENABLED=0 go test -c -buildvcs=false -o bin/tui-native ./internal/lifetime
+
+acceptance-tui: build tui-fixtures
+	@receipt_dir=$$(mktemp -d "$(BIN_DIR)/tui-acceptance.XXXXXX"); \
+	receipt_dir="$$receipt_dir/proof"; \
+	echo "Native TUI acceptance evidence: $$receipt_dir/receipt.json"; \
+	python3 -m scripts.acceptance.tui.cli \
+		--binary "$(BIN_DIR)/delegate" --control-helper "$(BIN_DIR)/tui-native" \
+		--task-binary "$(BIN_DIR)/tui-task/delegate" \
+		--pueue "$${DELEGATE_TEST_PUEUE:-$(BIN_DIR)/test-supervisor/pueue}" \
+		--pueued "$${DELEGATE_TEST_PUEUED:-$(BIN_DIR)/test-supervisor/pueued}" \
+		--output "$$receipt_dir"
+
 acceptance-protocol: build
 	./scripts/acceptance/protocol/run.sh
 
@@ -391,7 +412,7 @@ check-platform:
 	$(MAKE) verify-gates
 	$(MAKE) test-race
 	$(MAKE) test-python
-	$(MAKE) smoke-cli
+	$(MAKE) smoke-cli acceptance-tui
 	$(MAKE) vuln
 
 .PHONY: inspection-fixtures acceptance-inspection

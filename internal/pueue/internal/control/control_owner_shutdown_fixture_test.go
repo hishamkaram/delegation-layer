@@ -137,7 +137,7 @@ func runQualifiedControlCommand(ctx context.Context, root, binary, owner, role, 
 			command := exec.Command(helper, "-test.run=^TestManagedShutdownLeaseFixture$", "-test.timeout=45s")
 			command.Dir = root
 			command.Env = []string{"DELEGATE_MANAGED_SHUTDOWN_ROLE=1", "DELEGATE_MANAGED_SHUTDOWN_BASE=" + base, "DELEGATE_MANAGED_SHUTDOWN_SECRET=" + os.Getenv("DELEGATE_MANAGED_SHUTDOWN_SECRET"), "DELEGATE_MANAGED_SHUTDOWN_DEADLINE=" + strconv.FormatInt(deadline.UnixNano(), 10), "GORACE=atexit_sleep_ms=0"}
-			pending := startControlOwnedCapturedWithConsume(ctx, owner, command, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", client.options.Observer, "", nil)
+			pending := startControlOwnedCapturedWithConsume(ctx, owner, command, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", client.options.Observer, "", nil, nil)
 			_, commandErr = awaitPending(ctx, pending)
 		}
 		completed <- commandErr

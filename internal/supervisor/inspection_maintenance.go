@@ -2,7 +2,7 @@ package supervisor
 
 import (
 	"context"
-	"log"
+	"fmt"
 	"path/filepath"
 
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
@@ -18,7 +18,7 @@ func RequestInspectionQueueMaintenance(ctx context.Context, supervisor *pueue.Cl
 		_, eventErr := supervisor.RecordPrivateTerminalObservation(eventContext, observation)
 		if eventErr != nil {
 			eventFailed = true
-			log.Printf("delegation-layer: terminal inspection candidate deferred: %v", eventErr)
+			supervisor.ReportDiagnostic(fmt.Errorf("delegation-layer: terminal inspection candidate deferred: %w", eventErr))
 		}
 	}
 	cancelEvent()
@@ -39,14 +39,14 @@ func RequestInspectionQueueMaintenance(ctx context.Context, supervisor *pueue.Cl
 		requestErr = pueue.RequestPrivateCandidateQueueMaintenance(requestContext, stateRoot)
 	}
 	if requestErr != nil {
-		log.Printf("delegation-layer: terminal inspection cleanup request deferred: %v", requestErr)
+		supervisor.ReportDiagnostic(fmt.Errorf("delegation-layer: terminal inspection cleanup request deferred: %w", requestErr))
 		if eventFailed {
 			return false
 		}
 	}
 	scheduled := supervisor.ScheduleRequestedPrivateQueueMaintenance(requestContext)
 	if !scheduled {
-		log.Printf("delegation-layer: terminal inspection cleanup owner deferred")
+		supervisor.ReportDiagnostic(fmt.Errorf("delegation-layer: terminal inspection cleanup owner deferred"))
 	}
 	return scheduled
 }

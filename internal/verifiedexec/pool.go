@@ -257,3 +257,14 @@ func isLowerHex(text string, length int) bool {
 	}
 	return true
 }
+
+// WithFailureReporter returns an immutable invocation-specific view. It changes
+// only best-effort telemetry; recorded custody remains the removal authority.
+func (p *Pool) WithFailureReporter(report func(error)) *Pool {
+	if report == nil {
+		return p
+	}
+	copy := *p
+	copy.logf = func(format string, args ...any) { report(fmt.Errorf(format, args...)) }
+	return &copy
+}

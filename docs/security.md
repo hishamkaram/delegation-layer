@@ -28,6 +28,16 @@ The plugin's trusted startup hook can install Delegate's verified release
 bundle. Review it through the host's trust mechanism; see
 [installation](installation.md#plugin-for-codex-or-claude-code).
 
+## Terminal workbench
+
+The [TUI history cache](terminal-workbench.md#cache-ownership-and-privacy) stores
+metadata and dated status codes outside the execution root, with private files.
+It excludes prompts, results, logs, credentials and environment contents. Explicit
+result/log viewers still display private task content; terminal text is sanitized
+and never interpreted as a shell command. Cached observations grant no mutation
+authority. Device trust, live remote operations and destructive controls require
+explicit actions. Quitting the UI does not cancel admitted tasks.
+
 ## Process and result assurance
 
 An update between preflight and launch can change the provider CLI that runs

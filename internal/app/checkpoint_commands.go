@@ -17,13 +17,17 @@ import (
 // workspaces owner admits, schedules, qualifies, removes and lists, and this
 // command projects its acknowledgement and qualified descriptions.
 func checkpointCommand(a Arguments, deps Dependencies) commandResult {
-	deps = deps.withCapturedEnvironment()
-	return runCheckpointCommand(a, deps.storeDependencies(), workspaceRuntimeOptions(deps))
+	return checkpointCommandContext(context.Background(), a, deps)
+}
+
+func checkpointCommandContext(ctx context.Context, a Arguments, deps Dependencies) commandResult {
+	deps = deps.withCapturedEnvironmentContext(ctx)
+	return runCheckpointCommandContext(ctx, a, deps.storeDependencies(), workspaceRuntimeOptions(deps))
 }
 
 // runCheckpointCommand opens the state root. Only ordinary creation may
 // initialize it, after its explicit target has been validated.
-func runCheckpointCommand(a Arguments, deps storeDependencies, options workspacescore.OperationOptions) (result commandResult) {
+func runCheckpointCommandContext(ctx context.Context, a Arguments, deps storeDependencies, options workspacescore.OperationOptions) (result commandResult) {
 	response := newResponse("checkpoint")
 	root, err := tasklifecycle.ResolveRoot(a.Root)
 	if err != nil {
@@ -45,7 +49,7 @@ func runCheckpointCommand(a Arguments, deps storeDependencies, options workspace
 	if err != nil {
 		return failed(response, err, 2)
 	}
-	store, err := openStore(root, deps, ordinary)
+	store, err := openStoreContext(ctx, root, deps, ordinary)
 	if err != nil {
 		return checkpointFault(response, nil, err)
 	}
@@ -53,9 +57,8 @@ func runCheckpointCommand(a Arguments, deps storeDependencies, options workspace
 	defer func() { mergeCheckpointClose(&result, func() error { return resources.closeAfter(result.err) }) }()
 	response.RootID = store.RootID
 	if a.CheckpointAction == "list" {
-		return listCheckpoints(a, store, response)
+		return listCheckpointsContext(ctx, a, store, response)
 	}
-	ctx := context.Background()
 	switch {
 	case a.CheckpointAction == "status":
 		return watchCheckpoint(ctx, a, store, options, response)
@@ -180,8 +183,8 @@ func observeCheckpointOnce(ctx context.Context, a Arguments, store *taskdir.Stor
 // listCheckpoints returns one metadata page. It performs no Git, bootstrap,
 // submission, intent, fencing or recovery; entries may be pending or
 // unavailable without changing the command's success.
-func listCheckpoints(a Arguments, store *taskdir.Store, response Response) commandResult {
-	ctx, cancel := context.WithTimeout(context.Background(), workspace.DefaultBudget)
+func listCheckpointsContext(parent context.Context, a Arguments, store *taskdir.Store, response Response) commandResult {
+	ctx, cancel := context.WithTimeout(parent, workspace.DefaultBudget)
 	defer cancel()
 	page, cursor, err := workspacescore.ListCheckpoints(ctx, store, a.CheckpointAfter, a.CheckpointLimit)
 	if err != nil {

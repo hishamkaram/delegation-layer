@@ -53,12 +53,16 @@ func cancelContext(ctx context.Context, a Arguments, deps Dependencies) (result 
 }
 
 func logs(a Arguments, deps storeDependencies) (result commandResult) {
+	return logsContext(context.Background(), a, deps)
+}
+
+func logsContext(ctx context.Context, a Arguments, deps storeDependencies) (result commandResult) {
 	response := newResponse("logs")
 	root, err := tasklifecycle.ResolveRoot(a.Root)
 	if err != nil {
 		return failed(response, err, 1)
 	}
-	store, err := openStore(root, deps, false)
+	store, err := openStoreContext(ctx, root, deps, false)
 	if err != nil {
 		return failed(response, err, 1)
 	}

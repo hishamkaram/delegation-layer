@@ -24,147 +24,13 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/tasklifecycle"
 )
 
-// UsageText is the public command synopsis shared by delegate and its tests.
-const UsageText = `Usage: delegate [global flags] <command> [command flags]
-
-A durable single-machine agent delegation layer.
-
-Commands:
-  dispatch      Persist and submit one bounded provider turn
-  providers     Describe compiled provider capabilities
-  capabilities  Report one provider capability contract
-  models        Discover native model IDs and effort choices
-  status        Observe admission, liveness, and publication
-  collect       Recover or read the immutable publication
-  recheck       Re-evaluate a rejected task from sealed local evidence
-  reply         Answer an outstanding native clarification request
-  steer         Send guidance to a supported active native turn
-  events        Read interaction events, optionally with a bounded watch
-  wait          Passively wait for any or all task results with a finite watch
-  cancel        Request one explicit supervisor stop
-  logs          Return validated output descriptors
-  doctor        Observe installation and static readiness without launching
-  preflight     Check one provider without creating a task
-  continue      Continue one terminal task through its exact session
-  supervisor    Inspect or migrate the private supervisor, or stop its infrastructure owner
-  workspace     Inspect, verify, release, or forget a managed Git workspace
-  checkpoint    Create, observe, list, or remove a Git content checkpoint
-  schedule      Manage recurring definitions and inspect executions
-  scheduler     Serve, inspect, stop, run, or explicitly migrate the local scheduler
-  teams         Register, update, inspect, and explicitly select optional Teams
-  help          Show this help message
-  version       Print version information
-
-Global flags:
-  --root ABS              State root (default: user config directory)
-  --pueue-config ABS      Initial supervisor configuration
-  --runner ABS            Advanced custom runner override; omit for the automatic runner
-
-Supervisor recovery:
-  supervisor status --json
-  supervisor migrate --json
-  supervisor stop-owner --json
-  stop-owner releases infrastructure serving; it does not stop Pueue or tasks.
-
-Managed Git workspaces (optional):
-  dispatch ... --cwd ABS --isolation git-worktree [--base REV]
-  dispatch ... --workspace ID
-  workspace list [--after ID] [--limit 50] --json
-  workspace status ID [--operation OP] [--watch DURATION] --json
-  workspace exec ID --budget DURATION -- COMMAND ARGS
-  workspace release ID [--discard] [--budget DURATION] --json
-  workspace forget ID [--budget DURATION] --json
-  --workspace-budget DURATION sets the finite helper budget (default: 5m).
-  Source edits are excluded; landing changes belongs to the Lead.
-
-Git checkpoints (optional):
-  checkpoint create --cwd ABS [--budget DURATION] --json
-  checkpoint create --workspace ID [--budget DURATION] --json
-  checkpoint status CHECKPOINT_ID [--operation OP] [--watch DURATION] --json
-  checkpoint list [--after CHECKPOINT_ID] [--limit 50] --json
-  checkpoint remove CHECKPOINT_ID [--budget DURATION] --json
-  Creation names exactly one target. --operation selects an acknowledged
-  removal attempt; without it status observes the creation and latest removal.
-
-Recurring definitions:
-  schedule create --brief FILE --cwd ABS (--provider ID | --auto) --cron RULE [--timezone ZONE] --json
-  schedule list [--after ID] [--limit N] --json
-  schedule show|pause|resume|delete ID --json
-  schedule history SCHEDULE_ID [--before RFC3339Nano] [--limit 50] --json
-  schedule execution TASK_ID --json
-  schedule health SCHEDULE_ID --json
-  schedule policy get SCHEDULE_ID --json
-  schedule policy set SCHEDULE_ID --quota-hold on|off [--quota-max-hold DURATION] --json
-  schedule create ... [--failure-hook ABS --failure-threshold N --failure-hook-timeout DURATION]
-  Saving a definition never launches a provider. If no scheduler host is
-  ready, the saved ID is retained and start_required gives the user command.
-  History and execution are passive reads; collect TASK_ID recovers publication.
-
-Optional Teams:
-  teams register --scope user|project --definition FILE [--cwd ABS] --json
-  teams show --scope user|project --team ID [--cwd ABS] --json
-  teams update --scope user|project --team ID --expected-revision N --definition FILE [--cwd ABS] --json
-  teams delete --scope user|project --team ID --expected-revision N [--cwd ABS] --json
-  teams list [--cwd ABS] [--limit 50] [--after CURSOR] --json
-  teams default show|clear --cwd ABS --json
-  teams default set --cwd ABS --team-scope user|project --team ID --json
-  dispatch ... --team-scope user|project --team ID --member ID
-  schedule create ... --team-scope user|project --team ID --member ID
-  Use --definition - for stdin. Outside Git, Local scope also requires
-  --project-root ABS. Defaults guide explicit selection; they never auto-route.
-
-Independent scheduler:
-  scheduler serve [--root ABS] [--pueue-config ABS]
-  scheduler status --json
-  scheduler stop --json
-  scheduler migrate --json
-  scheduler run [--root ABS] [--pueue-config ABS]
-  Requires the automatic managed worker. Use colocated delegate/delegate-run
-  binaries from the same build and omit the advanced --runner override.
-  Start serve yourself in an independent terminal or tmux pane. It stays in
-  the foreground and restarts its scheduler child after unexpected exits.
-  Stop ends the host cooperatively. Host loss/reboot requires another serve.
-  Run is the compatibility foreground runtime without child recovery.
-  Existing admitted tasks continue after the scheduler stops.
-
-Remote tasks:
-  devices list|probe|trust --json
-  dispatch --device ALIAS --provider ID --brief FILE (--remote-cwd ABS | --input-manifest FILE)
-  status|collect|cancel|events|reply|steer remote:ID --json
-  collect remote:ID --out ABS --json
-  logs remote:ID [--stream stdout|stderr --offset N --limit N --cursor CURSOR] --json
-  remote list [--after CURSOR] --json
-  remote reconcile remote:ID --json
-  remote usage remote:ID [--scope origin|destination|both] --json
-  remote retire remote:ID [--scope origin|destination|both] [--dry-run | --apply] --json
-  supervisor ensure-owner --json
-
-Passive multi-task wait:
-  wait [--any|--all] [--watch DURATION] [--json] TASK_ID...
-  Defaults to any-of and a finite 5m watch; 0s observes once. Maximum 32 unique IDs.
-
-Output silence (opt-in):
-  dispatch ... [--output-silence-timeout DURATION]
-  schedule create ... [--output-silence-timeout DURATION]
-  continue --task ID ... [--output-silence-timeout DURATION]
-  Off by default; 0 explicitly disables. Continuation inherits unless overridden.
-  Waiting for a reply also counts as provider output silence.
-
-Interactive tasks:
-  dispatch ... --interactive
-  continue --task ID ... --interactive
-  reply ID --request REQUEST_ID --answers FILE --id MESSAGE_ID --json
-  steer ID --brief FILE --id MESSAGE_ID --json
-  events ID [--after SEQUENCE] [--watch DURATION] --json
-
-Use --json on task, providers, capabilities, models, preflight, continue, and recheck commands for the versioned response.
-`
-
 // Dependencies is the explicit composition boundary for production and the
 // hermetic acceptance harness. Production leaves hooks and profile selection at
 // their safe defaults; acceptance supplies a compiled finite profile directly.
 type Dependencies struct {
-	remoteRootPin *taskdir.RootPin
+	// ReportDiagnostic is invocation-scoped; nil preserves CLI logging.
+	ReportDiagnostic func(error)
+	remoteRootPin    *taskdir.RootPin
 	// TeamCatalogPath and Input are explicit command-edge dependencies. An empty
 	// catalog path is resolved from the captured user environment only on demand.
 	TeamCatalogPath string
@@ -217,6 +83,7 @@ func (d Dependencies) withCapturedEnvironmentContext(ctx context.Context) Depend
 // options remain outside this boundary. environment is a read-only copy of the
 // command's captured launch scope, with the same nil and empty meaning.
 type storeDependencies struct {
+	reportDiagnostic  func(error)
 	remoteRootPin     *taskdir.RootPin
 	predicateRegistry func() predicate.Registry
 	catalog           commonprovider.Catalog
@@ -235,6 +102,7 @@ func (d Dependencies) storeDependencies() storeDependencies {
 		registry = d.Catalog.Registry
 	}
 	return storeDependencies{
+		reportDiagnostic:  d.ReportDiagnostic,
 		predicateRegistry: registry,
 		remoteRootPin:     d.remoteRootPin,
 		catalog:           d.Catalog,
@@ -252,6 +120,9 @@ func (d Dependencies) storeDependencies() storeDependencies {
 // commands to this composition's captured launch scope. An uncaptured
 // composition keeps pueue's standalone per-invocation default.
 func (d Dependencies) supervisorControlScope() pueue.Options {
+	if d.ReportDiagnostic != nil {
+		d.SupervisorOptions.ReportDiagnostic = d.ReportDiagnostic
+	}
 	if d.Environment == nil {
 		return d.SupervisorOptions
 	}
@@ -285,7 +156,10 @@ func (d Dependencies) normalized() Dependencies {
 	if d.SupervisorOptions.ControlOwnerExecutable == "" {
 		d.SupervisorOptions.ControlOwnerExecutable = installation.DiscoverControlOwnerExecutable(d.RunnerExecutable)
 	}
-	d.SupervisorOptions = nativeInfrastructureCallbacks().ApplyTo(d.SupervisorOptions)
+	if d.ReportDiagnostic != nil {
+		d.SupervisorOptions.ReportDiagnostic = d.ReportDiagnostic
+	}
+	d.SupervisorOptions = nativeInfrastructureCallbacksForReporter(d.ReportDiagnostic).ApplyTo(d.SupervisorOptions)
 	return d
 }
 
@@ -297,13 +171,10 @@ func Run(args []string, stdout, stderr io.Writer, deps Dependencies) int {
 	deps = deps.withCapturedEnvironment()
 	parsed, err := ParseArguments(args)
 	if err != nil {
-		return argumentUsageError(stderr, err)
+		return argumentUsageErrorFor(args, stderr, err)
 	}
 	if parsed.Command == "help" {
-		if _, err = io.WriteString(stdout, UsageText); err != nil {
-			return 1
-		}
-		return 0
+		return presentHelp(parsed, stdout, stderr)
 	}
 	if parsed.Command == "version" {
 		if _, err = fmt.Fprintf(stdout, "delegate %s\n", deps.normalized().PublisherVersion); err != nil {
@@ -349,7 +220,10 @@ func Run(args []string, stdout, stderr io.Writer, deps Dependencies) int {
 func RunContext(ctx context.Context, args []string, stdout, stderr io.Writer, deps Dependencies) int {
 	parsed, err := ParseArguments(args)
 	if err != nil {
-		return argumentUsageError(stderr, err)
+		return argumentUsageErrorFor(args, stderr, err)
+	}
+	if parsed.Command == "help" {
+		return presentHelp(parsed, stdout, stderr)
 	}
 	if parsed.Command != "scheduler" {
 		return writeCLIError(stderr, errors.New("context execution requires a scheduler command"), 2)
@@ -358,8 +232,19 @@ func RunContext(ctx context.Context, args []string, stdout, stderr io.Writer, de
 	return presentCommandResult(parsed, result, stdout, stderr)
 }
 
-func argumentUsageError(stderr io.Writer, err error) int {
-	if _, writeErr := fmt.Fprintf(stderr, "error: %v\n\n%s", err, UsageText); writeErr != nil {
+func presentHelp(parsed Arguments, stdout, stderr io.Writer) int {
+	text, err := HelpText(parsed.HelpPath)
+	if err != nil {
+		return writeCLIError(stderr, err, 2)
+	}
+	if _, err = io.WriteString(stdout, text); err != nil {
+		return 1
+	}
+	return 0
+}
+
+func argumentUsageErrorFor(args []string, stderr io.Writer, err error) int {
+	if _, writeErr := fmt.Fprintf(stderr, "error: %v\n\n%s", err, CommandUsage(args)); writeErr != nil {
 		return 1
 	}
 	return 2

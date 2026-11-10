@@ -241,17 +241,21 @@ func readObservation(tx *taskdir.ControlTransaction, name string) (Observation, 
 	if err := tx.Read(name, &observation); err != nil {
 		return observation, err
 	}
+	return observation, validateObservation(name, observation)
+}
+
+func validateObservation(name string, observation Observation) error {
 	sequence, ok := observationSequence(name)
 	if !ok || sequence == 0 || observation.Sequence != sequence {
-		return observation, fmt.Errorf("%w: observation generation mismatch", ErrProtocol)
+		return fmt.Errorf("%w: observation generation mismatch", ErrProtocol)
 	}
 	if _, err := time.Parse(time.RFC3339Nano, observation.ObservedAt); err != nil {
-		return observation, fmt.Errorf("%w: invalid observation timestamp", ErrProtocol)
+		return fmt.Errorf("%w: invalid observation timestamp", ErrProtocol)
 	}
 	if err := observation.Response.Validate(); err != nil {
-		return observation, err
+		return err
 	}
-	return observation, nil
+	return nil
 }
 
 func verifyRetainedObservations(tx *taskdir.ControlTransaction, names []string) (latest Observation, resultErr error) {
@@ -320,6 +324,43 @@ func (r *Reference) LastObservation(ctx context.Context) (latest Observation, re
 		return err
 	})
 	return latest, resultErr
+}
+
+// ReadLastObservation validates the two retained origin observations without
+// opening a writable reference, taking its control lock or pruning history.
+func ReadLastObservation(ctx context.Context, reader *taskdir.ReadOnlyStore, id string, intent Intent) (Observation, error) {
+	if err := intent.Validate(); err != nil {
+		return Observation{}, err
+	}
+	if intent.TaskID != id || intent.OriginRootID != reader.RootID() {
+		return Observation{}, ErrIdentity
+	}
+	names, err := reader.RemoteIndexObservationNames(ctx, id)
+	if err != nil {
+		return Observation{}, err
+	}
+	if len(names) == 0 {
+		return Observation{}, os.ErrNotExist
+	}
+	var latest Observation
+	for index, name := range names {
+		var observation Observation
+		if err = reader.ReadCanonicalRemoteRecord(ctx, id, true, false, name, &observation); err != nil {
+			return Observation{}, err
+		}
+		if err = validateObservation(name, observation); err != nil {
+			return Observation{}, err
+		}
+		if observation.Response.Identity.RootID != "" {
+			if err = intent.Destination.Match(observation.Response.Identity); err != nil {
+				return Observation{}, err
+			}
+		}
+		if index == 0 {
+			latest = observation
+		}
+	}
+	return latest, nil
 }
 
 func observationSequence(name string) (uint64, bool) {

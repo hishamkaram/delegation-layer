@@ -2,16 +2,38 @@ package tasklifecycle_test
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/hishamkaram/delegation-layer/internal/tasklifecycle"
 	"github.com/hishamkaram/delegation-layer/internal/tasklifecycle/testsupport"
 )
+
+func TestCollectWatchPreservesCallerCancellation(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		cohort := testsupport.NewHeldCollectionCohort(t, 4096, 1)
+		handle := cohort.OpenCollector(t, 0)
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		canceled := make(chan struct{})
+		go func() {
+			time.Sleep(10 * time.Millisecond)
+			cancel()
+			close(canceled)
+		}()
+		result, err := tasklifecycle.CollectContext(ctx, cohort.Root(), handle.TaskDir(), tasklifecycle.CollectionOptions{Watch: time.Second})
+		<-canceled
+		if !errors.Is(err, context.Canceled) || result.Pending != "" || result.Waiting {
+			t.Fatalf("caller cancellation became successful pending observation: %+v, %v", result, err)
+		}
+	})
+}
 
 func TestHeldCollectionCohortCollectsPendingPublication(t *testing.T) {
 	for _, shape := range collectionCohortShapes {

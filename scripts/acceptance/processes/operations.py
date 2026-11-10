@@ -22,6 +22,7 @@ from scripts.acceptance.processes.contracts import BoundedCommandResult
 from scripts.acceptance.processes.contracts import CommandFailure
 from scripts.acceptance.processes.contracts import OutputCapture
 from scripts.acceptance.processes.contracts import OutputSink
+from scripts.acceptance.processes.contracts import TerminalIO
 from scripts.acceptance.processes.observation import _bounded_command_pending_bytes
 from scripts.acceptance.processes.observation import inherited_environment
 from scripts.acceptance.processes.observation import selected_environment
@@ -50,7 +51,8 @@ class Process:
                  environment_keys_only=False, return_result=False,
                  failure_type=RuntimeError,
                  on_start_uncertain: Callable[[Process], None] | None = None,
-                 start_new_session: bool = False):
+                 start_new_session: bool = False,
+                 terminal: TerminalIO | None = None):
         self.directory = Path(directory)
         self.argv = [str(arg) for arg in argv]
         self.cwd = Path(cwd)
@@ -65,6 +67,8 @@ class Process:
         self._return_result = return_result
         self._failure_type = failure_type
         require(callable(self._failure_type), "process failure type must be callable")
+        _validate_terminal_io(terminal, stdin, stdout_capture)
+        self._terminal = terminal
         self._stdin_data = bytes(stdin) if stdin is not None else None
         self._stdin_offset = 0
         self._stdin_error = None
@@ -80,7 +84,8 @@ class Process:
             _record_process_invocation(cwd=cwd, environment_keys_only=environment_keys_only, process=self, stdin=stdin)
             self.stdout = self.stdout_path.open("xb")
             self.stderr = self.stderr_path.open("xb")
-            child_stdout = self._stdout_capture.writer if self._stdout_capture is not None else self.stdout
+            child_stdout = (terminal.output_fd if terminal is not None else
+                            self._stdout_capture.writer if self._stdout_capture is not None else self.stdout)
         except BaseException as error:
             _rollback_unstarted_process(ownership=ownership, process=self, error=error)
             _raise_process_failure(error, self._failure_type)
@@ -89,7 +94,8 @@ class Process:
                 self.argv,
                 cwd=str(cwd),
                 env=self.environment,
-                stdin=subprocess.PIPE if stdin is not None else subprocess.DEVNULL,
+                stdin=(terminal.input_fd if terminal is not None else
+                       subprocess.PIPE if stdin is not None else subprocess.DEVNULL),
                 stdout=child_stdout,
                 stderr=self.stderr,
                 shell=False,
@@ -308,9 +314,13 @@ class Processes:
         self._uncertain_starts = []
 
     def start(self, name, argv, cwd, stdin=None, on_spawned=None, *,
-              environment: Mapping[str, str] | None = None, start_new_session: bool = False):
+              environment: Mapping[str, str] | None = None, start_new_session: bool = False,
+              terminal: TerminalIO | None = None):
         if callable(stdin) and on_spawned is None:
             on_spawned, stdin = stdin, None
+        _validate_terminal_io(terminal, stdin, None)
+        if terminal is not None and self.stdout_capture_factory is not None:
+            raise ValueError("terminal stdio cannot use an output capture factory")
         launch_environment = self.environment if environment is None else selected_environment(environment, self.failure_type)
         sequence = len(self.entries) + len(self._uncertain_starts) + 1
         directory = self.directory / ("%03d-%s" % (sequence, name))
@@ -334,7 +344,7 @@ class Processes:
                           failure_type=self.failure_type,
                           on_started=register_started,
                           on_start_uncertain=register_uncertain,
-                          start_new_session=start_new_session)
+                          start_new_session=start_new_session, terminal=terminal)
         write_json(directory / "started.json", {
             "pid": process.pid, "started_ns": time.time_ns()})
         return process
@@ -401,7 +411,7 @@ def _record_process_invocation(
         "argv": process.argv,
         "cwd": str(cwd),
         "executable": process.argv[0],
-        "stdin": "PIPE" if stdin is not None else "DEVNULL",
+        "stdin": "PTY" if process._terminal is not None else "PIPE" if stdin is not None else "DEVNULL",
         "stdin_bytes": len(process._stdin_data) if process._stdin_data is not None else 0,
         "stdin_sha256": sha(process._stdin_data) if process._stdin_data is not None else None,
         "shell": False,
@@ -416,6 +426,20 @@ def _record_process_invocation(
         invocation["environment_sha256"] = sha(
             json.dumps(process.environment, sort_keys=True).encode())
     write_json(process.directory / "invocation.json", invocation)
+
+
+def _validate_terminal_io(terminal: TerminalIO | None, stdin: bytes | None,
+                          capture: OutputCapture | None) -> None:
+    if terminal is None:
+        return
+    if stdin is not None or capture is not None:
+        raise ValueError("terminal stdio cannot be combined with pipe input or output capture")
+    if not isinstance(terminal, TerminalIO):
+        raise TypeError("terminal stdio requires TerminalIO")
+    if type(terminal.input_fd) is not int or type(terminal.output_fd) is not int or terminal.input_fd < 0 or terminal.output_fd < 0:
+        raise ValueError("terminal descriptors must be nonnegative integers")
+    if not os.isatty(terminal.input_fd) or not os.isatty(terminal.output_fd):
+        raise ValueError("terminal stdio requires terminal descriptors")
 
 
 def _require_capture_parent(*, capture_root: OwnedDirectory, directory: Path) -> None:

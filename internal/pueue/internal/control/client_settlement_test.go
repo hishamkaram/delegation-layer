@@ -24,7 +24,7 @@ func testResidentCloseJoinsPendingOwner(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	pending := transport.NewPending([]string{"enqueue"})
+	pending := transport.NewPending([]string{"enqueue"}, nil)
 	release := sync.OnceFunc(func() {
 		transport.CompletePending(pending, transport.CommandResult{})
 		finish()

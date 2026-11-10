@@ -36,8 +36,8 @@ func LoadContinuationInputContext(ctx context.Context, root string, a DispatchRe
 		meta = &migratedMeta
 	}
 	brief, err = td.ReadBrief()
-	if err == nil && a.BriefPath != "" {
-		brief, err = ReadBrief(a.BriefPath)
+	if err == nil && (a.BriefPath != "" || a.BriefBytes != nil) {
+		brief, err = ReadBriefInput(a.BriefPath, a.BriefBytes)
 	}
 	if err != nil {
 		return nil, nil, nil, err

@@ -4,78 +4,12 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"io"
-	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/hishamkaram/delegation-layer/internal/scheduler/contract"
 )
 
 const defaultSchedulePageSize = 50
-
-func parseScheduleArguments(a Arguments, rest []string) (Arguments, error) {
-	var err error
-	a.ScheduleAction, rest, err = scheduleAction(rest)
-	if err != nil {
-		return Arguments{}, err
-	}
-	if a.ScheduleAction == "policy" {
-		a.SchedulePolicyOperation, rest, err = scheduleAction(rest)
-		if err != nil || (a.SchedulePolicyOperation != "get" && a.SchedulePolicyOperation != "set") {
-			return Arguments{}, errors.New("schedule policy requires get or set")
-		}
-	}
-
-	fs := flag.NewFlagSet("schedule", flag.ContinueOnError)
-	fs.SetOutput(io.Discard)
-	registerScheduleFlags(fs, &a)
-	ordered, err := orderFlags(fs, rest)
-	if err != nil {
-		return Arguments{}, err
-	}
-	if err = fs.Parse(ordered); err != nil {
-		return Arguments{}, err
-	}
-	fs.Visit(func(f *flag.Flag) {
-		if f.Name == "timezone" {
-			a.ScheduleTimezoneSet = true
-		}
-	})
-	if a.Root != "" && !filepath.IsAbs(a.Root) {
-		return Arguments{}, errors.New("root must be an absolute path")
-	}
-	if err = validateSchedulePositionals(&a, fs.Args()); err != nil {
-		return Arguments{}, err
-	}
-	if err = validateScheduleCreateOptions(&a); err != nil {
-		return Arguments{}, err
-	}
-
-	return a, nil
-}
-
-func scheduleAction(args []string) (string, []string, error) {
-	for i := 0; i < len(args); i++ {
-		arg := args[i]
-		if arg == "--json" || arg == "-json" || strings.HasPrefix(arg, "--json=") || strings.HasPrefix(arg, "-json=") {
-			continue
-		}
-		if arg == "--root" || arg == "-root" {
-			i++
-			if i == len(args) {
-				return "", nil, errors.New("missing value for --root")
-			}
-			continue
-		}
-		if strings.HasPrefix(arg, "--root=") || strings.HasPrefix(arg, "-root=") {
-			continue
-		}
-		remaining := append(append([]string(nil), args[:i]...), args[i+1:]...)
-		return arg, remaining, nil
-	}
-	return "", nil, errors.New("schedule requires create, list, show, history, execution, pause, resume, or delete")
-}
 
 func registerScheduleFlags(fs *flag.FlagSet, a *Arguments) {
 	fs.StringVar(&a.Root, "root", "", "absolute state root")
@@ -139,6 +73,12 @@ func validateSchedulePositionals(a *Arguments, positional []string) error {
 func validateScheduleCreateOptions(a *Arguments) error {
 	if a.ScheduleAction != "create" {
 		return nil
+	}
+	if err := validateContentSources(a.Brief, a.BriefBytes, false); err != nil {
+		return err
+	}
+	if a.ScheduleHook == nil {
+		return validateTeamTargetInputs(*a)
 	}
 	if a.ScheduleHook.Executable == "" {
 		if a.ScheduleHook.Threshold != 1 || a.ScheduleHook.Timeout != 10*time.Second {

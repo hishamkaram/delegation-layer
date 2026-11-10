@@ -55,9 +55,15 @@ func interactionCommandContext(ctx context.Context, a Arguments, deps storeDepen
 func interactionMessage(a Arguments) (task.InteractionMessage, error) {
 	message := task.InteractionMessage{ID: a.MessageID, Kind: a.Command, RequestID: a.RequestID}
 	if a.Command == "steer" {
-		data, err := tasklifecycle.ReadBrief(a.Brief)
+		data, err := tasklifecycle.ReadBriefInput(a.Brief, a.BriefBytes)
 		message.Text = string(data)
 		return message, err
+	}
+	if a.AnswersBytes != nil {
+		if a.Answers != "" || len(a.AnswersBytes) > task.MaxControlRecordSize {
+			return message, task.ErrControlRecordTooBig
+		}
+		return message, task.DecodeStrict(a.AnswersBytes, &message.Answers)
 	}
 	file, err := os.Open(a.Answers)
 	if err != nil {

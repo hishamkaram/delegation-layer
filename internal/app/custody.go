@@ -84,12 +84,12 @@ func isClosureProofPending(err error) bool { return errors.Is(err, guardian.ErrP
 // closure. Pending closure and unplaced registrations change nothing. A
 // missing, replaced or aliased pool returns the pool's concrete cause and stays
 // unresolved for the next attempt.
-func releaseLifetimeCustody(ctx context.Context, records guardian.ClosureRecords) error {
+func releaseLifetimeCustody(ctx context.Context, records guardian.ClosureRecords, report func(error)) error {
 	custody, closed, err := closedLifetimeCustody(ctx, records)
 	if err != nil || !closed {
 		return err
 	}
-	return custody.pool.ReleaseOwner(ctx, custody.namespace)
+	return custody.pool.WithFailureReporter(report).ReleaseOwner(ctx, custody.namespace)
 }
 
 // lifetimeCustodyPending reports whether the recorded owner may still hold

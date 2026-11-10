@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
 	"time"
@@ -352,7 +351,7 @@ func finishPrivateQueueWriterIntent(lock **bootstrapLock, resultErr *error) {
 			}
 		}
 		if err := errors.Join(writePrivateQueueWriterIntent(retained, false), closeBootstrapLock(retained)); err != nil {
-			log.Printf("delegate: retained queue writer intent cleanup failed: %v", err)
+			reportRetained(pending, fmt.Errorf("delegate: retained queue writer intent cleanup failed: %w", err))
 		}
 	}()
 }
