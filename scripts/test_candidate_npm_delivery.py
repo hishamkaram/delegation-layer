@@ -4,7 +4,8 @@ The fake ``npm`` is a real child. It keeps one registry package in a test-owned
 JSON state file, answers only the exact argv the edge builds, digests the file a
 publish names, and appends one log line per invocation. A fault replaces one
 matching reply, optionally after applying its effect; a successful publish may
-stay unlisted, or leave ``latest`` stale, for a number of reads. Nothing touches the
+stay unlisted, or leave ``latest`` stale, for a number of reads. The adapter-only
+fake clock also drives elapsed-time visibility through the command hook. Nothing touches the
 network, a real registry or a credential; no fixture here is live proof.
 """
 
@@ -36,7 +37,6 @@ from scripts.release_verification.candidate_manifest import npm_package_path
 from scripts.release_verification.candidate_manifest import parse_manifest
 from scripts.release_verification import candidate_npm_delivery as candidate_npm_delivery
 from scripts.release_verification.candidate_npm_delivery import CONFIRMATION_INTERVAL_SECONDS
-from scripts.release_verification.candidate_npm_delivery import CONFIRMATION_ROUNDS
 from scripts.release_verification.candidate_npm_delivery import deliver_npm
 from scripts.acceptance.evidence.source import command
 from scripts.acceptance.evidence.source import MAX_OUTPUT
@@ -96,8 +96,7 @@ def publish():
     state["packages"][version] = state["publish_override"] or {
         "integrity": "sha512-" + base64.b64encode(hashlib.sha512(data).digest()).decode(),
         "shasum": hashlib.sha1(data).hexdigest(), "gitHead": None}
-    if state["publish_sets_latest"]:
-        state["latest"] = version
+    state["latest"] = version
     return ""
 
 def listing():
@@ -142,6 +141,20 @@ if reply is None:
     finish('{"error":{"code":"E404","summary":"Not Found"}}', 1)
 finish(reply)
 '''
+
+
+@dataclass
+class FakeClock:
+    """Adapter-only elapsed time; the real child command owner keeps its native clock."""
+
+    elapsed: float = 0
+    oversleep: float = 0
+
+    def monotonic(self) -> float:
+        return self.elapsed
+
+    def sleep(self, seconds: float) -> None:
+        self.elapsed += seconds + self.oversleep
 
 
 @dataclass(frozen=True)
@@ -198,6 +211,9 @@ class NpmDeliveryCase(unittest.TestCase):
         self.receipt: dict = {"commands": []}
         self.calls: list[str] = []
         self.sleeps: list[float] = []
+        self.clock = FakeClock()
+        self.read_timeouts: list[int] = []
+        self.round_starts: list[float] = []
         # Independent copies of each environment the edge hands the command owner, in call order.
         self.forwarded: list[dict[str, str]] = []
         # The release workflow's shape: a literal registry-scoped token in an owned userconfig and no
@@ -208,7 +224,7 @@ class NpmDeliveryCase(unittest.TestCase):
             "NPM_CONFIG_USERCONFIG": str(root / USERCONFIG_CANARY),
         }
         self.save({"versions": ["0.1.32", OLDER], "packages": {OLDER: self.identity(b"older")}, "latest": OLDER,
-                   "publish_version": VERSION, "publish_override": None, "publish_sets_latest": True,
+                   "publish_version": VERSION, "publish_override": None,
                    "hide_listings": 0, "stale_latest": 0, "stale_value": OLDER, "faults": []})
 
     def reset(self) -> None:
@@ -246,6 +262,10 @@ class NpmDeliveryCase(unittest.TestCase):
         """The canonical command owner; ``before`` may change the payload and ``inject`` replaces a child."""
         def run(receipt, name, argv, env, **options):
             self.calls.append(name)
+            if name == CONFIRM_VERSIONS:
+                self.round_starts.append(self.clock.elapsed)
+            if name.startswith("candidate-npm-confirm"):
+                self.read_timeouts.append(options["timeout"])
             self.forwarded.append(dict(env))
             if before is not None:
                 before(name)
@@ -261,8 +281,12 @@ class NpmDeliveryCase(unittest.TestCase):
 
     def deliver(self, *, resume_published: bool = False, environment: dict[str, str] | None = None,
                 before=None, inject=None):
-        # The module-local pause is recorded, never slept.
-        with patch.object(candidate_npm_delivery, "sleep", self.sleeps.append):
+        def pause(seconds):
+            self.sleeps.append(seconds)
+            self.clock.sleep(seconds)
+
+        with patch.object(candidate_npm_delivery, "sleep", pause), patch.object(
+                candidate_npm_delivery, "monotonic", self.clock.monotonic):
             return self.tree.observe_operation(lambda: deliver_npm(
                 artifact(self.manifest, self.payload), ports=self.ports(before, inject), receipt=self.receipt,
                 environment=self.environment if environment is None else environment,
@@ -373,6 +397,7 @@ class ConfirmationTests(NpmDeliveryCase):
     def assert_one_publish_succeeded(self) -> None:
         publishes = [record for record in self.receipt["commands"] if record["name"] == PUBLISH]
         self.assertEqual([record["exit_code"] for record in publishes], [0])
+        self.assertFalse(any("dist-tag" in entry["argv"] for entry in self.log()))
 
     def test_unlisted_then_stale_latest_then_target_latest_confirms(self):
         self.edit(lambda state: state.update(hide_listings=1, stale_latest=1))
@@ -382,18 +407,86 @@ class ConfirmationTests(NpmDeliveryCase):
         self.assertEqual(identity.integrity, npm_integrity(self.data))
         self.assert_one_publish_succeeded()
 
-    def test_exhausted_rounds_are_pending_with_the_publish_kept(self):
-        for label, change, rounds in (
-                ("never listed", {"hide_listings": 99}, [CONFIRM_VERSIONS] * CONFIRMATION_ROUNDS),
-                ("latest never target", {"publish_sets_latest": False}, CONFIRM_ROUND * CONFIRMATION_ROUNDS)):
-            with self.subTest(case=label):
+    def visibility(self, *, listed_after=0, latest_after=0, costs=None):
+        """Registry replies follow elapsed time; command cost is charged before its reply."""
+        def before(name):
+            self.clock.elapsed += (costs or {}).get(name, 0)
+            if name == CONFIRM_VERSIONS and self.clock.elapsed < listed_after:
+                self.edit(lambda state: state.update(hide_listings=1))
+            if name == CONFIRM_LATEST and self.clock.elapsed < latest_after:
+                self.edit(lambda state: state.update(stale_latest=1))
+        return before
+
+    def test_registry_visibility_after_four_minutes_confirms_without_republishing(self):
+        for field in ("listed_after", "latest_after"):
+            with self.subTest(field=field):
                 self.reset()
-                self.edit(lambda state, change=change: state.update(change))
-                self.refused("candidate_npm_confirmation_pending")
-                self.assertEqual(self.calls, [VERSIONS, LATEST, PUBLISH, *rounds])
-                self.assertEqual(self.sleeps, [CONFIRMATION_INTERVAL_SECONDS] * (CONFIRMATION_ROUNDS - 1))
+                identity = self.deliver(before=self.visibility(**{field: 240}))
+                self.assertEqual(identity.integrity, npm_integrity(self.data))
+                self.assertEqual(self.round_starts, list(range(0, 241, 10)))
                 self.assert_one_publish_succeeded()
-                self.assertFalse(any("dist-tag" in entry["argv"] for entry in self.log()))
+
+    def test_expired_window_is_pending_without_a_pointless_final_pause(self):
+        self.refused("candidate_npm_confirmation_pending", before=self.visibility(listed_after=1000))
+        self.assertEqual(self.round_starts, list(range(0, 600, 10)))
+        self.assertEqual(self.sleeps, [10] * 59)
+        self.assertEqual(self.clock.elapsed, 590)
+        self.assert_one_publish_succeeded()
+
+    def test_varying_read_cost_consumes_the_same_window(self):
+        for field, costs, starts, end in (
+                ("listed_after", {CONFIRM_VERSIONS: 7}, list(range(0, 596, 17)), 602),
+                ("latest_after", {CONFIRM_VERSIONS: 2, CONFIRM_METADATA: 3, CONFIRM_LATEST: 5},
+                 list(range(0, 581, 20)), 590)):
+            with self.subTest(field=field):
+                self.reset()
+                self.refused("candidate_npm_confirmation_pending",
+                             before=self.visibility(**{field: 1000}, costs=costs))
+                self.assertEqual(self.round_starts, starts)
+                self.assertEqual(self.clock.elapsed, end)
+                self.assert_one_publish_succeeded()
+
+    def test_prepublication_time_does_not_consume_confirmation_window(self):
+        self.clock.elapsed = 900
+        hook = self.visibility(listed_after=2140, costs={VERSIONS: 200, LATEST: 200, PUBLISH: 600})
+        self.deliver(before=hook)
+        self.assertEqual(self.round_starts, list(range(1900, 2141, 10)))
+        self.assert_one_publish_succeeded()
+
+    def test_sleep_rechecks_deadline_before_admitting_another_round(self):
+        for oversleep in (590, 591):
+            with self.subTest(oversleep=oversleep):
+                self.reset()
+                self.clock.oversleep = oversleep
+                self.refused("candidate_npm_confirmation_pending", before=self.visibility(listed_after=1000))
+                self.assertEqual(self.round_starts, [0])
+                self.assertEqual(self.sleeps, [10])
+                self.assertEqual(self.clock.elapsed, 10 + oversleep)
+                self.assert_one_publish_succeeded()
+
+    def test_last_admitted_round_keeps_full_read_budgets_and_can_finish_late(self):
+        hook = self.visibility(listed_after=590)
+
+        def before(name):
+            if name.startswith("candidate-npm-confirm") and self.clock.elapsed >= 590:
+                self.clock.elapsed += 60
+            hook(name)
+
+        self.deliver(before=before)
+        self.assertEqual(self.round_starts, list(range(0, 600, 10)))
+        self.assertEqual(self.clock.elapsed, 770)
+        self.assertTrue(self.read_timeouts)
+        self.assertEqual(set(self.read_timeouts), {60})
+        self.assert_one_publish_succeeded()
+
+    def test_command_timeout_remains_a_hard_fault_after_successful_publish(self):
+        injected = VerificationError("command_timeout", CONFIRM_METADATA)
+        with self.assertRaises(VerificationError) as caught:
+            self.deliver(inject={CONFIRM_METADATA: injected})
+        self.assertEqual(self.calls, [VERSIONS, LATEST, PUBLISH, CONFIRM_VERSIONS, CONFIRM_METADATA])
+        self.assertEqual(self.sleeps, [])
+        self.assert_one_publish_succeeded()
+        self.assert_retained(caught.exception, injected)
 
     def test_errors_and_conflicts_stop_the_first_or_a_later_round(self):
         cases = (
