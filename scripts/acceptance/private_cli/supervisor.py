@@ -18,6 +18,8 @@ from scripts.acceptance.private_cli.leases import private_fixture_transition_unt
 from scripts.acceptance.private_cli.noexec_state import custody_release_pending
 from scripts.acceptance.private_cli.noexec_state import describe_pending_custody
 from scripts.acceptance.private_cli.queue_policy import pueue_state
+from scripts.acceptance.private_cli.queue_policy import queue_wait_projection
+from scripts.acceptance.private_cli.queue_policy import QueueWaitProjection
 import errno
 import json
 import os
@@ -45,10 +47,35 @@ def pueue_snapshot(client, config, env, metrics=None, phase=None, *, capture_roo
     return json.loads(result.stdout)
 
 
-def wait_for_pueue_state(client, config, env, label, expected, phase="supervisor-observation", *, capture_root):
-    deadline = time.monotonic() + 30
+class QueueWaitObservation(TypedDict, total=False):
+    kind: str
+    poll_count: int
+    elapsed_seconds: float
+    last: QueueWaitProjection
+    capture_error: dict[str, str]
+
+
+def _observe_queue_wait(snapshot, label, observation: QueueWaitObservation | None, started, poll_count):
+    if observation is None:
+        return
+    observation.update(poll_count=poll_count, elapsed_seconds=round(max(0.0, time.monotonic() - started), 6))
+    try:
+        observation["last"] = queue_wait_projection(snapshot, label)
+    except Exception as error:
+        # Derived diagnostics cannot replace the queue owner's original result.
+        observation.pop("last", None)
+        observation["capture_error"] = {"stage": "queue-projection", "exception_type": type(error).__name__[:64]}
+
+
+def wait_for_pueue_state(client, config, env, label, expected, phase="supervisor-observation", *, capture_root,
+                        observation: QueueWaitObservation | None = None):
+    started = time.monotonic()
+    deadline = started + 30
+    poll_count = 0
     while time.monotonic() < deadline:
         snapshot = pueue_snapshot(client, config, env, phase=phase, capture_root=capture_root)
+        poll_count += 1
+        _observe_queue_wait(snapshot, label, observation, started, poll_count)
         for row in snapshot.get("tasks", {}).values():
             if row.get("label") == label:
                 status = row.get("status", {})
@@ -58,6 +85,8 @@ def wait_for_pueue_state(client, config, env, label, expected, phase="supervisor
                 if state == "Done":
                     raise RuntimeError("fixture task ended before reaching " + expected)
         time.sleep(0.05)
+    if observation is not None:
+        observation["elapsed_seconds"] = round(max(0.0, time.monotonic() - started), 6)
     raise RuntimeError("timed out waiting for isolated pueue task state " + expected)
 
 
