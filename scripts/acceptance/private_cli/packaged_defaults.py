@@ -32,12 +32,13 @@ INSTALLED_BINARIES = ("delegate", "delegate-run", "pueue", "pueued")
 
 @dataclass(frozen=True)
 class InstalledDefaults:
-    """One installation driven only through public defaults.
+    """One installation driven through public default paths and caller-selected CPU admission.
 
     ``delegate`` is the installed entry the caller resolved and executes;
     ``supervisor_directory`` holds the supervisor pair the installation ships;
     ``executables`` are the selected (name, path) of the four installed binaries.
     The isolated ``env`` HOME selects ``state``; ``workspace`` is the task cwd.
+    CPU admission defaults on; memory admission always uses the enabled product default.
     """
 
     delegate: Path
@@ -48,6 +49,7 @@ class InstalledDefaults:
     workspace: Path
     brief: Path
     response_directory: Path
+    cpu_guard: bool = True
 
     @property
     def config(self):
@@ -89,9 +91,9 @@ class InstalledBootstrap:
     scope_empty: bool
 
 
-def packaged_default_commands(brief, workspace, task_id):
+def packaged_default_commands(brief, workspace, task_id, *, cpu_guard: bool = True):
     """Construct the exact public commands used without any global path override."""
-    return {
+    commands = {
         "dispatch": [
             "dispatch",
             "--provider",
@@ -111,6 +113,9 @@ def packaged_default_commands(brief, workspace, task_id):
         "status": ["status", task_id, "--json"],
         "collect": ["collect", task_id, "--watch", COLLECT_WATCH, "--json"],
     }
+    if not cpu_guard:
+        commands["dispatch"].append("--cpu-guard=false")
+    return commands
 
 
 def isolated_default_state_path(home):
@@ -143,7 +148,7 @@ def dispatch_installed_default(installed, cleanup, *, capture_root, run_receipt=
     """Dispatch one task; require durable admission and the expected state-root supervisor pair."""
     task_id = uuid.uuid4().hex
     cleanup["task_ids"].append(task_id)
-    commands = packaged_default_commands(installed.brief, installed.workspace, task_id)
+    commands = packaged_default_commands(installed.brief, installed.workspace, task_id, cpu_guard=installed.cpu_guard)
     if run_receipt is not None:
         run_receipt.phase("packaged_default_dispatch")
     dispatched = run_json(

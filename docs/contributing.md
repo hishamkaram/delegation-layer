@@ -574,6 +574,17 @@ temporary merge commit. They run for same-repository PRs; fork PRs retain the
 ordinary gates. Main builds always run the distribution install checks before
 their artifacts can be published.
 
+Candidate-install CI temporarily selects `--bootstrap-cpu-guard=false` for positive macOS
+bootstrap turns across all three channels. The proof tool defaults to CPU-on;
+Linux and the shared private-CLI caller retain that default. Memory stays on.
+The receipt records `admission_guards` before bootstrap execution and discloses
+that the host-load source and installer-descendant closure are unproven. This
+proves installed bootstrap behavior under the recorded policy, not default CPU
+admission. Platform and nested-survival gates keep their default-on guard
+coverage. The distribution install job owns this selection; remove it when
+host CPU is controlled and installer descendants have proven closure. Failed
+or uncertain attempts still retain their evidence; the proof tool never retries them.
+
 Publication validates the trusted workflow/run/source, successful build/install
 chain, artifact digest/expiry/archive contents and version before mutation.
 Reruns use full job history so unchanged successful jobs can be reused, while

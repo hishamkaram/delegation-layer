@@ -1,4 +1,4 @@
-"""The installed default fixture turn behind the candidate install BootstrapProbe port.
+"""The installed default-path fixture turn behind the candidate install BootstrapProbe port.
 
 The install proof application supplies this probe to the channel observers. One call
 owns one short private root below ``parent`` through its own DirectoryOwner, installs
@@ -7,6 +7,7 @@ that entry, and runs the private CLI's shared installed-default core with it: di
 status, collect, the dispatched task's own managed lifetime closure and a verified
 daemon and endpoint shutdown. Its children run through that core's identity-pinned
 file capture, not ConsumerPorts.run.
+Default paths and memory admission stay enabled; CPU admission follows the caller's explicit selection.
 
 One local DirectoryOwner lifetime covers the root's creation, setup, the turn, failure
 diagnostics and its single disposal. One DisposalLeases owner spans the same lifetime: the
@@ -74,17 +75,21 @@ class InstalledBootstrapProbe:
     leave room for the default state root's private supervisor endpoint.
     """
 
-    def __init__(self, *, receipt: dict, locations: dict[str, Path], parent: Path):
+    def __init__(self, *, receipt: dict, locations: dict[str, Path], parent: Path, cpu_guard: bool = True):
         self.receipt = receipt
         self.locations = locations
         self.parent = parent
+        self.cpu_guard = cpu_guard
 
     def __call__(self, target: BootstrapTarget) -> BootstrapObservation:
         owner = DirectoryOwner()
         disposal = DisposalLeases()
         root = self.parent / f"{ROOT_PREFIX}{secrets.token_hex(4)}"
         # The intent is recorded before the fallible creation; it grants no authority.
-        facts: dict[str, object] = {"status": "partial", "parent": str(self.parent), "root": str(root)}
+        facts: dict[str, object] = {
+            "status": "partial", "parent": str(self.parent), "root": str(root),
+            "admission_guards": {"cpu": "enabled" if self.cpu_guard else "disabled-by-caller", "memory": "enabled"},
+        }
         self.receipt["candidate_install"]["bootstrap"] = facts
         self.locations["bootstrap_root"] = root
         ledger: list[SupervisorCleanup] = []
@@ -98,7 +103,7 @@ class InstalledBootstrapProbe:
                 facts["root_identity"] = directory_identity_record(token)
                 capture = owner.create("candidate bootstrap captures", root / "c", root)
                 state, closed = _run(owner, capture, root=root, target=target, ledger=ledger, facts=facts,
-                                     disposal=disposal)
+                                     disposal=disposal, cpu_guard=self.cpu_guard)
                 observation = _observation(closed)
                 managed_roots = ((state, (closed.task_id,)),)
             except Exception as primary:
@@ -207,7 +212,7 @@ def _release_unconsumed(entries: tuple[OwnedDirectory, ...], facts: dict[str, ob
 
 def _run(owner: DirectoryOwner, capture: OwnedDirectory, *, root: Path, target: BootstrapTarget,
          ledger: list[SupervisorCleanup], facts: dict[str, object],
-         disposal: DisposalLeases) -> tuple[Path, InstalledBootstrap]:
+         disposal: DisposalLeases, cpu_guard: bool) -> tuple[Path, InstalledBootstrap]:
     """Run the shared core for one installed root; return its state root with the closed turn."""
     home, providers, workspace, responses = (
         owner.create(label, root / name, root).directory for label, name in (
@@ -226,7 +231,8 @@ def _run(owner: DirectoryOwner, capture: OwnedDirectory, *, root: Path, target: 
     installed = InstalledDefaults(
         delegate=Path(found), supervisor_directory=target.supervisor_directory,
         executables=tuple((name, paths[name]) for name in INSTALLED_BINARIES), env=env,
-        state=isolated_default_state_path(home), workspace=workspace, brief=brief, response_directory=responses)
+        state=isolated_default_state_path(home), workspace=workspace, brief=brief, response_directory=responses,
+        cpu_guard=cpu_guard)
     facts["state"] = str(installed.state)
     closed = prove_installed_default_bootstrap(
         installed, supervisor_cleanups=ledger, capture_root=capture, disposal=disposal)

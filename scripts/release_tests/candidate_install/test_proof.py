@@ -180,7 +180,7 @@ class OutputDirectoryTests(ProofCase):
         self.assertEqual(list(existing.iterdir()), [])
 
 class BootstrapParentTests(ProofCase):
-    """The bootstrap root's parent is resolved once at the application boundary; HOME stays the default."""
+    """Explicit bootstrap inputs reach the application boundary; omitted inputs retain their defaults."""
 
     def setUp(self) -> None:
         super().setUp()
@@ -208,6 +208,20 @@ class BootstrapParentTests(ProofCase):
         request = self.parse("--bootstrap-parent", str(self.tree.root / "link"))
         self.assertEqual(request.bootstrap_parent, self.tree.root / "link")
         self.assertEqual(app.require_bootstrap_parent(request), short.resolve())
+
+    def test_cpu_guard_is_default_on_and_only_explicit_false_disables_it(self) -> None:
+        self.assertIs(self.parse("--bootstrap-cpu-guard", "false").bootstrap_cpu_guard, False)
+        self.assertIs(self.parse().bootstrap_cpu_guard, True)
+        self.assertIs(self.parse("--bootstrap-cpu-guard", "true").bootstrap_cpu_guard, True)
+
+    def test_invalid_cpu_guard_is_rejected_before_the_proof_runs(self) -> None:
+        with mock.patch.object(cli, "prove_candidate_install") as prove, contextlib.redirect_stderr(io.StringIO()):
+            with self.assertRaises(SystemExit) as caught:
+                cli.main(["--artifact-id", str(ARTIFACT_ID), "--channel", "shell",
+                          "--output-dir", str(self.tree.root / "output"), "--bootstrap-cpu-guard", "0"])
+        self.assertEqual(caught.exception.code, 2)
+        prove.assert_not_called()
+        self.assertFalse((self.tree.root / "output").exists())
 
     def test_an_invalid_parent_refuses_before_the_output_or_the_probe_exists(self) -> None:
         a_file = self.tree.root / "a-file"
@@ -407,6 +421,8 @@ class FullFlowTests(CandidateArtifactCase):
         self.assertEqual(facts["installation"]["tag"], self.manifest.build_tag)
         self.assertEqual(self.requested(), [*ENDPOINTS.values(), DOWNLOAD])
         self.assertNotIn("private-canary", json.dumps(receipt))
+        self.assertNotIn("CPU admission disabled by caller; host load source and installer-descendant closure are unproven.",
+                         receipt["unresolved_limits"])
 
     def test_the_real_probe_refuses_the_version_only_install_and_retains_its_root(self) -> None:
         self.probe = None
@@ -503,20 +519,27 @@ class OnboardingWiringTests(ProofCase):
         for channel in InstallChannel:
             with self.subTest(channel=channel):
                 output = self.tree.root / channel.value
-                request = replace(self.request(output=output, channel=channel), bootstrap_parent=self.tree.root)
+                request = replace(self.request(output=output, channel=channel), bootstrap_parent=self.tree.root,
+                                  bootstrap_cpu_guard=False)
                 facts = mock.Mock()
                 facts.installs = (mock.Mock(channel=channel.value),)
                 facts.to_record.return_value = {"channel": channel.value}
                 with mock.patch.object(app, "load_candidate_artifact", return_value=artifact), \
                         mock.patch.object(app, "extract_archive"), mock.patch.object(app, "inspect_binaries"), \
                         mock.patch.object(app, "fetch_skill_manifest", return_value=skill), \
+                        mock.patch.object(app, "InstalledBootstrapProbe", wraps=app.InstalledBootstrapProbe) as probe, \
                         mock.patch.object(app, "verify_candidate_install", return_value=facts) as verify:
                     self.assertEqual(self.call(app.prove_candidate_install, request), 0)
+                probe.assert_called_once()
+                self.assertIs(probe.call_args.kwargs["cpu_guard"], False)
                 ((install_request,), options) = verify.call_args
                 self.assertIs(options["onboarding"], True)
                 self.assertEqual(options["channels"], (channel.value,))
                 self.assertIsNotNone(install_request.files.package)
-                self.assertEqual(self.receipt(output)["verdict"], "pass")
+                receipt = self.receipt(output)
+                self.assertEqual(receipt["verdict"], "pass")
+                self.assertEqual(receipt["unresolved_limits"].count(
+                    "CPU admission disabled by caller; host load source and installer-descendant closure are unproven."), 1)
 
 
 class ImportClosureTests(unittest.TestCase):
