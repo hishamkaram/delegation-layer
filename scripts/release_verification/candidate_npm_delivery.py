@@ -20,7 +20,7 @@ never inspects credentials. The publish is attempted at most once: a failed or
 unknown publish stops with no later read. Only after it exits 0 do bounded
 read-only confirmation rounds wait for the registry to list the exact package
 with ``latest`` at the target; an error or conflicting identity stops at once,
-and nothing is republished or retagged. Running out of rounds is
+and nothing is republished or retagged. Exhausting the admission window is
 ``candidate_npm_confirmation_pending``: the receipt keeps the publish exit 0 and
 a later explicit invocation observes again from the start. Without a publish, a
 ``latest`` tag other than the target is refused, never rewritten.
@@ -30,7 +30,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 import json
-from time import sleep
+from time import monotonic, sleep
 
 from scripts.release_verification.candidate_artifact import CandidateArtifact
 from scripts.release_verification.candidate_manifest import ArtifactEntry
@@ -62,10 +62,10 @@ PUBLISH_TIMEOUT = 600
 READ_TIMEOUT = 60
 
 
-# Read-only rounds after a known successful publish, and the pause between pending rounds.
-# Each round makes at most three reads, so the worst case is 15 reads of READ_TIMEOUT
-# (900 s of read budgets) plus four pauses (40 s), excluding bounded child cleanup.
-CONFIRMATION_ROUNDS = 5
+# Admit read-only rounds for ten minutes after a known successful publish.
+# An admitted round keeps all three READ_TIMEOUT budgets and may finish late:
+# up to 180 seconds of reads, plus child cleanup, startup and validation overhead.
+CONFIRMATION_WINDOW_SECONDS = 600
 
 
 CONFIRMATION_INTERVAL_SECONDS = 10
@@ -136,17 +136,19 @@ def _confirm_published(npm: _Npm, expected: NpmPackage, release_commit: str) -> 
 
     Only a successful listing without the target, or a valid ``latest`` naming
     another version, is pending; every error and conflict propagates at once.
+    Rounds admitted before the post-publish deadline may finish after it.
     """
-    for round_index in range(CONFIRMATION_ROUNDS):
-        if round_index:
-            sleep(CONFIRMATION_INTERVAL_SECONDS)
+    deadline = monotonic() + CONFIRMATION_WINDOW_SECONDS
+    while monotonic() < deadline:
         observed = _observe(npm, "candidate-npm-confirm", expected, release_commit)
-        if observed is Absent.ABSENT:
-            continue
-        # A positive identity only skips or refuses; this is never publication authority.
-        decide_npm(expected=expected, observed=observed, resume_published=False)
-        if _latest(npm, "candidate-npm-confirm-latest") == expected.version:
-            return observed
+        if observed is not Absent.ABSENT:
+            # A positive identity only skips or refuses; this is never publication authority.
+            decide_npm(expected=expected, observed=observed, resume_published=False)
+            if _latest(npm, "candidate-npm-confirm-latest") == expected.version:
+                return observed
+        if monotonic() + CONFIRMATION_INTERVAL_SECONDS >= deadline:
+            break
+        sleep(CONFIRMATION_INTERVAL_SECONDS)
     raise VerificationError("candidate_npm_confirmation_pending", STAGE)
 
 

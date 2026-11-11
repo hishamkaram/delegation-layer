@@ -611,6 +611,19 @@ are skipped on explicit retry; conflicting bytes refuse. Existing resume mode
 keeps its restricted destination behavior. No first-attempt rule, freeze,
 readiness status, evidence branch or local dispatch receipt is required.
 
+After npm acknowledges a successful publish, the publisher admits read-only
+confirmation rounds for up to ten minutes, with a ten-second pause between
+rounds. Each admitted round keeps the normal 60-second timeout for each of its
+three possible reads and may finish after that window. The last round can add up to three
+minutes of read execution, plus process cleanup and scheduling overhead; this
+is not a strict total wall-time limit. If the next polling slot would reach the
+window end, confirmation stops without another pause or round. Exact package
+identity and `latest` must both be confirmed before Homebrew delivery proceeds.
+Read errors and identity conflicts stop immediately. Unconfirmed visibility
+keeps the successful publish evidence and reports pending; use the supported
+explicit resume once visibility settles. Confirmation never republishes or
+retags a package, and a failed or unknown publish is never retried automatically.
+
 Normal development does not publish. Before merge, real build/install checks
 and publisher tests with fake clients/real archives validate the path without
 publishing. A real hosted publication is verified only when an authorized
