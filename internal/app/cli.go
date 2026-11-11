@@ -19,6 +19,10 @@ func leaf(name, summary, operands string) commandSpec {
 func commandTree() commandSpec {
 	return commandSpec{Register: argumentFlags(registerGlobalFlags), Notes: "\nTask results keep admission, liveness and publication independent.\n", Summary: "Manage bounded agent tasks and their evidence", Children: []commandSpec{
 		withFlags(commandSpec{Name: "tui", Summary: "Open the terminal workbench", Operands: "", Example: []string{"delegate", "tui"}, Notes: "\nRequires terminal stdin and stdout. Closing the workbench does not cancel admitted tasks or stop the independent scheduler host.\n", ExitNotes: "  3 forced exit with unresolved operations; signals use 128 + signal.\n"}, registerGlobalFlags),
+		{Name: "context", Summary: "Inspect or explicitly upgrade connector context", Children: []commandSpec{leaf("inspect", "Passively inspect pinned root and project", ""), leaf("enable-connector", "Explicit offline one-way root upgrade", "")}},
+		{Name: "resolve", Summary: "Passively resolve an immutable task or explicitly fence/recover it", Operands: "TASK_ID"},
+		{Name: "result", Summary: "Read verified committed result ranges", Children: []commandSpec{leaf("read", "Verify complete result before returning a range", "TASK_ID")}},
+		{Name: "origin", Summary: "Explicit local origin recovery administration", Children: []commandSpec{leaf("barrier", "Close a fresh generation under root exclusion", ""), leaf("inventory", "Read canonical origin membership", ""), leaf("reopen", "Reopen only with current complete inventory proof", "")}},
 		{Name: "dispatch", Summary: "Admit one bounded provider task", ExitNotes: "  3 managed workspace admission pending, or remote acceptance/connectivity uncertain. Inspect the same task/reference before another admission.\n  4 returned remote task outcome is rejected.\n", Operands: "", Notes: "\nRequired: --brief FILE; --cwd ABS or --workspace ID; --provider ID, --auto, or an explicit Team/member.\nRemote dispatch requires --device, --provider, --brief and exactly one of --remote-cwd or --input-manifest.\nProvider/model discovery is advisory; requested values are never silently substituted.\n", Example: []string{"delegate", "dispatch", "--provider", "codex:exec", "--brief", "/path/review.md", "--cwd", "/path/repository", "--budget", "30m", "--json"}},
 		{Name: "continue", Summary: "Continue a task through its exact recorded session", ExitNotes: "  3 managed workspace preparation pending; inspect the acknowledged workspace before another continuation.\n", Operands: "", Notes: "\nRequired: --task TASK_ID. The follow-up brief is optional. Continuation uses the predecessor's exact recorded session and inherited permissions.\n", Example: []string{"delegate", "continue", "--task", "TASK_ID", "--budget", "10m", "--json"}},
 		{Name: "status", Summary: "Inspect task evidence and current supervisor state", Operands: "TASK_ID", ExitNotes: "  3 remote connectivity/observation uncertain; inspect the recorded reference, not a new launch.\n  4 returned remote task outcome is rejected.\n"},
@@ -99,6 +103,8 @@ func argumentsForPath(path []string) Arguments {
 		return a
 	}
 	switch a.Command {
+	case "context", "result", "origin":
+		a.Connector.Action = path[1]
 	case "supervisor":
 		a.SupervisorAction = path[1]
 	case "scheduler":

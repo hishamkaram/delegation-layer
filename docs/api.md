@@ -16,6 +16,13 @@ The packaged [task response contract](../skills/agent-integration/references/res
 owns the envelope, authority fields, and descriptor rules.
 [JSON examples](../skills/agent-integration/examples/json-results.md) show abbreviated shapes.
 
+## Guarded connectors
+
+The additive [local connector contract](connector-contract.md) owns root/project
+guards, immutable gateway receipts, passive resolution, verified result ranges
+and explicit origin recovery. Accepted outcomes do not independently prove
+execution lifetime closure or release quota.
+
 ## Remote responses
 
 Remote task controls can return an origin envelope with the destination reply

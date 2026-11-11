@@ -38,6 +38,9 @@ Use `--cpu-guard=false` or `--memory-guard=false` for an explicit per-command
 opt-out; it does not change running tasks, saved settings or nested tasks. See the
 [resource-check contract](skills/agent-integration/references/command-reference.md#dispatch).
 
+Operator-managed gateways can use the additive [guarded local connector
+contract](docs/connector-contract.md) for context-pinned admission and recovery.
+
 ## Get started
 
 For a standalone installation, use guided setup (Node.js 18 or later):

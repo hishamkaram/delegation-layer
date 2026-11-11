@@ -208,7 +208,12 @@ func (s *Store) stageReaderContext(ctx context.Context, dirPath, filename string
 		return false, nil, err
 	}
 	defer func() { resultErr = errors.Join(resultErr, s.maintLock.Unlock()) }()
-	if err = ctx.Err(); err != nil {
+	return s.stageReaderOwnedContext(ctx, dirPath, filename, reader, injector)
+}
+
+// The caller retains maintenance SH or EX through publication and cleanup.
+func (s *Store) stageReaderOwnedContext(ctx context.Context, dirPath, filename string, reader io.Reader, injector FaultInjector) (committed bool, cleanupErr, resultErr error) {
+	if err := ctx.Err(); err != nil {
 		return false, nil, err
 	}
 	if filename == "." || filename == ".." || filepath.Base(filename) != filename {

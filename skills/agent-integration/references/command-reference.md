@@ -775,3 +775,9 @@ and removes only owned byte families. It retains journals, raw logs, outcomes,
 downloads and a prepared user cwd. Preserve partial per-side progress and errors.
 Legacy input consumers can block retirement. Follow the workflow's recovery
 guidance; never replace this with manual journal deletion.
+
+## Guarded local connectors
+
+Operator-managed connectors use the public guarded context, resolve, result and
+origin commands described in the [connector contract](https://github.com/hishamkaram/delegation-layer/blob/main/docs/connector-contract.md).
+Ordinary agent task creation and recovery rules above remain unchanged.

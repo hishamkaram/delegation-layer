@@ -585,3 +585,61 @@ func requireOwnerStopReleaseEvidence(t *testing.T, ctx context.Context, reader *
 		t.Fatalf("new settlement is not the selected owner's bound release: fenced=%t error=%v", fenced, err)
 	}
 }
+
+func TestOwnerStopSnapshotInterruptedReadDoesNotInventIdentity(t *testing.T) {
+	fixture := newStopLocatorFixture(t, false)
+	snapshot, err := readOwnerStopSnapshot(t.Context(), fixture.reader, fixture.owner.journal.pin, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, deadline := range []bool{false, true} {
+		name := "canceled"
+		ctx, cancel := context.WithCancel(t.Context())
+		if deadline {
+			cancel()
+			name = "deadline"
+			ctx, cancel = context.WithDeadline(t.Context(), time.Now().Add(-time.Second))
+		}
+		cancel()
+		t.Run(name, func(t *testing.T) {
+			for _, verify := range []struct {
+				name string
+				call func() error
+			}{
+				{"selected", func() error {
+					return verifySelectedOwnerStopSnapshot(ctx, fixture.reader, snapshot.locator, snapshot.names, snapshot.records)
+				}},
+				{"latest", func() error {
+					return verifyOwnerStopSnapshot(ctx, fixture.reader, snapshot.locator, snapshot.names, snapshot.records)
+				}},
+			} {
+				cause := verify.call()
+				if !errors.Is(cause, ctx.Err()) || errors.Is(cause, ErrIdentity) {
+					t.Errorf("%s interrupted snapshot invented identity: %v", verify.name, cause)
+				}
+			}
+		})
+	}
+}
+
+func TestOwnerStopSnapshotReadErrorKeepsConcreteFaults(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		cause    error
+		identity bool
+	}{
+		{"canceled", context.Canceled, false},
+		{"deadline", context.DeadlineExceeded, false},
+		{"evidence cancellation", errors.Join(task.ErrEvidenceFault, context.Canceled), false},
+		{"identity cancellation", errors.Join(ErrIdentity, context.Canceled), true},
+		{"permission cancellation", errors.Join(os.ErrPermission, context.Canceled), true},
+		{"permission", os.ErrPermission, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := ownerStopSnapshotReadError(tc.cause)
+			if errors.Is(got, ErrIdentity) != tc.identity || !errors.Is(got, tc.cause) {
+				t.Fatalf("snapshot read classification lost concrete cause: %v", got)
+			}
+		})
+	}
+}

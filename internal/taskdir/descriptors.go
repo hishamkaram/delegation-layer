@@ -1,6 +1,7 @@
 package taskdir
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
@@ -29,12 +30,16 @@ type LogDescriptor struct {
 // A seal or validated terminal winner supplies final raw identities. Otherwise
 // each regular raw file is only reported as an available, potentially live path.
 func (td *TaskDir) LogDescriptors() ([]LogDescriptor, error) {
-	inspection, err := td.Inspect()
+	return td.LogDescriptorsContext(context.Background())
+}
+
+func (td *TaskDir) LogDescriptorsContext(ctx context.Context) ([]LogDescriptor, error) {
+	inspection, err := td.InspectContext(ctx)
 	if err != nil {
 		return nil, err
 	}
 	if inspection.SealExists || inspection.Outcome != nil {
-		manifest, err := td.descriptorManifest(inspection)
+		manifest, err := td.descriptorManifestContext(ctx, inspection)
 		if err != nil {
 			return nil, err
 		}
@@ -58,9 +63,9 @@ func (td *TaskDir) LogDescriptors() ([]LogDescriptor, error) {
 	return descriptors, nil
 }
 
-func (td *TaskDir) descriptorManifest(inspection *TaskInspection) ([]task.RawManifestEntry, error) {
+func (td *TaskDir) descriptorManifestContext(ctx context.Context, inspection *TaskInspection) ([]task.RawManifestEntry, error) {
 	if inspection.Outcome != nil {
-		manifest, digest, err := td.rawManifest()
+		manifest, digest, err := td.rawManifestContext(ctx)
 		if err != nil {
 			return nil, err
 		}
@@ -73,7 +78,7 @@ func (td *TaskDir) descriptorManifest(inspection *TaskInspection) ([]task.RawMan
 	if err != nil {
 		return nil, err
 	}
-	seal, err := td.readSeal(meta.Predicate, specHash, metaHash)
+	seal, err := td.readSealContext(ctx, meta.Predicate, specHash, metaHash)
 	if err != nil {
 		return nil, err
 	}

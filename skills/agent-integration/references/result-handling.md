@@ -31,7 +31,10 @@ Member, Roles and original caller intent after catalog edits/deletion. See
 [Team inspection](command-reference.md#team-task-context). Its presence is not
 admission, readiness, liveness or publication authority.
 
-`outcome` is terminal authority after validation. Its verdict, evidence
+`outcome` is terminal publication authority after validation. It does not prove
+complete native worker lifetime closure; a worker can publish before its
+guardian records exit. Connector quota release follows the
+[connector closure contract](https://github.com/hishamkaram/delegation-layer/blob/main/docs/connector-contract.md#execution-closure-and-quota-release). Its verdict, evidence
 digest, and payload descriptor describe the accepted or rejected evidence.
 A payload descriptor has `basename`, `length`, and `sha256`; raw stream
 descriptors include rooted paths. Validate the returned path, byte length,

@@ -121,6 +121,12 @@ func (s *Store) CreateTask(id string, req *task.TaskRecord, brief []byte, meta *
 }
 
 func (s *Store) CreateTaskContext(ctx context.Context, id string, req *task.TaskRecord, brief []byte, meta *task.MetaRecord) (_ *TaskDir, resultErr error) {
+	creationAttempted := false
+	defer func() {
+		if !creationAttempted && resultErr != nil {
+			resultErr = &TaskCreationNotAttemptedError{cause: resultErr}
+		}
+	}()
 	if err := lifetimeContextErr(ctx); err != nil {
 		return nil, err
 	}
@@ -131,29 +137,38 @@ func (s *Store) CreateTaskContext(ctx context.Context, id string, req *task.Task
 	if err = s.maintLock.LockSHNonblockingContext(ctx); err != nil {
 		return nil, annotateTaskCreationError("acquiring task maintenance", err)
 	}
-	defer func() { resultErr = errors.Join(resultErr, s.maintLock.Unlock()) }()
-	dir := filepath.Join(s.Root, "tasks", id)
-	if err = s.mkdirContext(ctx, dir, s.faultInjector); err != nil {
-		return nil, annotateTaskCreationError("creating task directory", err)
-	}
-	createLocks, err := s.allowInitialLocks(dir)
+	defer s.finishConnectorMaintenance(&resultErr)
+	namespace, err := s.acquireCreationNamespaceContext(ctx, id)
 	if err != nil {
-		return nil, annotateTaskCreationError("checking initial task locks", err)
+		return nil, err
 	}
-	td, err := s.newTaskHandle(id, createLocks)
+	if namespace != nil {
+		defer func() { resultErr = errors.Join(resultErr, s.closeNamespace(namespace)) }()
+	}
+	if err = s.requireNamespaceUnrefusedContext(ctx, id); err != nil {
+		return nil, err
+	}
+	contextLease, err := s.retainTaskCreationContext(ctx, req)
 	if err != nil {
-		return nil, annotateTaskCreationError(fmt.Sprintf("opening task locks (create=%t)", createLocks), err)
+		return nil, err
 	}
-	if err = td.admissionLock.LockEXNonblockingContext(ctx); err != nil {
-		closeTaskQuietly(td)
-		return nil, annotateTaskCreationError("acquiring task admission", err)
+	if contextLease != nil {
+		defer func() { resultErr = errors.Join(resultErr, contextLease.Close()) }()
 	}
-	err = td.prepareSetContext(ctx, brief, reqData, metaData)
-	err = errors.Join(err, td.admissionLock.Unlock())
+
+	if err = s.requireOriginAdmissionContext(ctx, req.Origin); err != nil {
+		return nil, err
+	}
+	creationAttempted = true
+	td, err := s.commitPreparedTaskContext(ctx, id, brief, reqData, metaData)
 	if err != nil {
-		closeTaskQuietly(td)
-		return nil, annotateTaskCreationError("preparing task records", err)
+		return nil, err
 	}
+
+	if err = s.validateCreatedConnectorContext(ctx, req, contextLease); err != nil {
+		return nil, errors.Join(err, td.Close())
+	}
+
 	return td, nil
 }
 
@@ -461,7 +476,7 @@ func (td *TaskDir) PrepareSubmissionContext(ctx context.Context, supervisor task
 	if err = td.requireTaskLaunchPermissionContext(ctx); err != nil {
 		return nil, err
 	}
-	if err = td.validateExecutionDirectories(req); err != nil {
+	if err = td.validateExecutionDirectories(ctx, req); err != nil {
 		return nil, err
 	}
 	rec := task.SubmitRecord{SchemaVersion: task.SchemaVersion, RootID: td.store.RootID, TaskID: td.TaskID, SpecSHA256: specHash, MetaSHA256: metaHash, Label: fmt.Sprintf("delegate:%s:%s", td.store.RootID, td.TaskID), Supervisor: supervisor, CreatedAt: timestamp()}
@@ -528,7 +543,7 @@ func (td *TaskDir) PrepareStart(budget int64) (_ *StartPermit, resultErr error) 
 	if err = td.requireTaskLaunchPermissionContext(context.Background()); err != nil {
 		return nil, err
 	}
-	if err = td.validateExecutionDirectories(req); err != nil {
+	if err = td.validateExecutionDirectories(context.Background(), req); err != nil {
 		return nil, err
 	}
 	if err = td.initializeRaw(); err != nil {
@@ -590,4 +605,32 @@ func (s *Store) allowInitialLocks(dir string) (bool, error) {
 		}
 	}
 	return true, nil
+}
+
+// Caller retains maintenance and (on opted-in roots) namespace ownership.
+func (s *Store) commitPreparedTaskContext(ctx context.Context, id string, brief, reqData, metaData []byte) (*TaskDir, error) {
+	dir := filepath.Join(s.Root, "tasks", id)
+
+	if err := s.mkdirContext(ctx, dir, s.faultInjector); err != nil {
+		return nil, annotateTaskCreationError("creating task directory", err)
+	}
+	createLocks, err := s.allowInitialLocks(dir)
+	if err != nil {
+		return nil, annotateTaskCreationError("checking initial task locks", err)
+	}
+	td, err := s.newTaskHandle(id, createLocks)
+	if err != nil {
+		return nil, annotateTaskCreationError(fmt.Sprintf("opening task locks (create=%t)", createLocks), err)
+	}
+	if err = td.admissionLock.LockEXNonblockingContext(ctx); err != nil {
+		closeTaskQuietly(td)
+		return nil, annotateTaskCreationError("acquiring task admission", err)
+	}
+	err = td.prepareSetContext(ctx, brief, reqData, metaData)
+	err = errors.Join(err, td.admissionLock.Unlock())
+	if err != nil {
+		closeTaskQuietly(td)
+		return nil, annotateTaskCreationError("preparing task records", err)
+	}
+	return td, nil
 }

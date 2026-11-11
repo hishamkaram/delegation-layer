@@ -48,7 +48,7 @@ func (r *ReadOnlyStore) ReadTaskEvidence(ctx context.Context, id string) (TaskEv
 	if err != nil {
 		return evidence, err
 	}
-	evidence.Inspection, err = td.Inspect()
+	evidence.Inspection, err = td.InspectContext(ctx)
 	if err != nil {
 		return evidence, err
 	}
@@ -59,7 +59,7 @@ func (r *ReadOnlyStore) ReadTaskEvidence(ctx context.Context, id string) (TaskEv
 	if err != nil {
 		return evidence, err
 	}
-	evidence.Logs, err = td.LogDescriptors()
+	evidence.Logs, err = td.LogDescriptorsContext(ctx)
 	return evidence, errors.Join(err, ctx.Err())
 }
 
@@ -82,13 +82,13 @@ func readTaskEvidenceRecords(ctx context.Context, td *TaskDir, evidence *TaskEvi
 		if readErr != nil {
 			return readErr
 		}
-		evidence.Seal, err = td.readSeal(meta.Predicate, specHash, metaHash)
+		evidence.Seal, err = td.readSealContext(ctx, meta.Predicate, specHash, metaHash)
 		if err != nil {
 			return err
 		}
 	}
 	if evidence.Inspection.Outcome != nil {
-		evidence.OutcomeSHA256, err = td.OutcomeReference()
+		evidence.OutcomeSHA256, err = td.OutcomeReferenceContext(ctx)
 	}
 	return errors.Join(err, ctx.Err())
 }

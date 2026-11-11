@@ -289,9 +289,29 @@ func passiveRemoteEnvelope(ctx context.Context, reader *taskdir.ReadOnlyStore, r
 // Remote commands share the ordinary command implementations while retaining
 // this dedicated control process's finite operation lifetime.
 
-func runCommandContext(ctx context.Context, a Arguments, deps Dependencies) commandResult {
+func runCommandContext(ctx context.Context, a Arguments, deps Dependencies) (result commandResult) {
+	if usesConnectorControl(a) {
+		defer func() { scrubConnectorFailure(&result) }()
+		timeout := a.Connector.ControlTimeout
+		if timeout <= 0 {
+			return failed(newResponse(a.Command), errors.New("connector control timeout must be finite and positive"), 2)
+		}
+		operationContext, cancel := context.WithTimeout(ctx, timeout)
+		defer cancel()
+		ctx = operationContext
+	}
+	if err := loadConnectorOrigin(ctx, &a, deps); err != nil {
+		return failed(newResponse(a.Command), err, 2)
+	}
 	switch a.Command {
+	case "context", "resolve", "result", "origin":
+		return connectorCommandContext(ctx, a, deps)
+	case "dispatch":
+		return dispatchContext(ctx, a, deps)
 	case "status":
+		if a.Connector.ExpectedRoot != "" {
+			return connectorCommandContext(ctx, a, deps)
+		}
 		return statusContext(ctx, a, deps)
 	case "collect":
 		return collectContext(ctx, a, deps.storeDependencies())

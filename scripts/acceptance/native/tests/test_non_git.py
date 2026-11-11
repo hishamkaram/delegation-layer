@@ -3,6 +3,7 @@
 import json
 import os
 from pathlib import Path
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -26,6 +27,59 @@ from scripts.acceptance.native.tests.support import repository_root as fixture_r
 
 
 import scripts.acceptance.native_evidence.contract as native_evidence_contract
+
+
+def matrix_stdin_python_script():
+    # This shell-loop fixture owns only case planning, stdin and exit codes.
+    # Full evidence construction remains covered by the aggregate cohort.
+    plan = "".join("\t".join((case.case_id, case.provider, case.permission, case.scenario)) + "\n"
+                   for case in native_evidence_contract.EXPECTED_CASES)
+    program = f'''
+import sys
+from pathlib import Path
+
+script, *arguments = sys.argv[1:]
+
+def option(name):
+    return arguments[arguments.index(name) + 1]
+
+if script == "-c":
+    print(3)
+elif script.endswith("/acceptance/native_evidence/cli.py"):
+    command = arguments[0]
+    if command == "list-cases":
+        print({plan!r}, end="")
+    elif command == "prepare-case":
+        (Path(option("--aggregate-root")) / "cases" / option("--case-id")).mkdir()
+    elif command == "aggregate":
+        Path(option("--receipt")).write_text("{{}}\\n")
+    elif command == "validate":
+        if Path(option("--receipt")).read_text() != "{{}}\\n":
+            raise SystemExit(7)
+    else:
+        raise SystemExit(7)
+elif script.endswith("/acceptance/native/cli.py"):
+    sys.stdin.buffer.read()
+    failed = (option("--provider"), option("--permission"), option("--scenario")) == (
+        "codex:exec", "read-only", "non-git")
+    raise SystemExit(1 if failed else 2)
+else:
+    raise SystemExit(7)
+'''
+    return '#!/bin/sh\nexec "$REAL_PYTHON" -c ' + shlex.quote(program) + ' "$@"\n'
+
+
+def run_matrix_stdin_fixture(root, repository):
+    fake_python = root / "python3"
+    fake_python.write_text(matrix_stdin_python_script())
+    fake_python.chmod(0o700)
+    environment = {**os.environ, "PATH": str(root) + os.pathsep + os.environ["PATH"],
+                   "REAL_PYTHON": sys.executable,
+                   "DELEGATE_ACCEPTANCE_OUTPUT_ROOT": str(root / "aggregate")}
+    return subprocess.run(["sh", str(repository / "scripts/acceptance/native/run_all.sh")],
+                          cwd=repository, env=environment, capture_output=True,
+                          text=True, check=False, timeout=20)
+
 
 def isolate_git_ancestors(root):
     native_lstat = Path.lstat
@@ -153,21 +207,31 @@ class NonGitAcceptanceTests(unittest.TestCase):
     def test_matrix_child_stdin_cannot_hide_a_case_failure(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve()
-            fake_python = root / "python3"
-            fake_python.write_text(fake_native_python_script())
-            fake_python.chmod(0o700)
-            environment = {**os.environ, "PATH": str(root) + os.pathsep + os.environ["PATH"],
-                           "REAL_PYTHON": sys.executable, "FAKE_NATIVE_RESULT": "one-failure",
-                           "FAKE_READ_STDIN": "1", "DELEGATE_ACCEPTANCE_OUTPUT_ROOT": str(root / "aggregate")}
-            result = subprocess.run(["sh", str(fixture_repository_root() / "scripts/acceptance/native/run_all.sh")],
-                                    cwd=fixture_repository_root(), env=environment, capture_output=True,
-                                    text=True, check=False, timeout=20)
+            result = run_matrix_stdin_fixture(root, fixture_repository_root())
             self.assertEqual(result.returncode, 1, result.stderr)
             self.assertIn(f"passed=0 blocked={len(native_evidence_contract.EXPECTED_CASES) - 1} failed=1", result.stdout)
             rows = (root / "aggregate" / "case-matrix.tsv").read_text().splitlines()[1:]
             self.assertEqual(len(rows), len(native_evidence_contract.EXPECTED_CASES))
             self.assertEqual([row.split("\t")[0] for row in rows],
                              [case.case_id for case in native_evidence_contract.EXPECTED_CASES])
+
+    def test_matrix_stdin_fixture_detects_a_child_consuming_remaining_cases(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            repository = root / "repository"
+            wrapper = repository / "scripts/acceptance/native/run_all.sh"
+            wrapper.parent.mkdir(parents=True)
+            source = (fixture_repository_root() / "scripts/acceptance/native/run_all.sh").read_text()
+            self.assertEqual(source.count(" </dev/null; then"), 1)
+            wrapper.write_text(source.replace(" </dev/null; then", "; then"))
+            fixture = root / "fixture"
+            fixture.mkdir()
+            result = run_matrix_stdin_fixture(fixture, repository)
+            self.assertEqual(result.returncode, 1, result.stderr)
+            self.assertIn("case plan was not completely consumed", result.stderr)
+            rows = (fixture / "aggregate/case-matrix.tsv").read_text().splitlines()[1:]
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0].split("\t")[0], native_evidence_contract.EXPECTED_CASES[0].case_id)
 
     def test_matrix_helper_failure_runs_no_case(self):
         with tempfile.TemporaryDirectory() as directory:

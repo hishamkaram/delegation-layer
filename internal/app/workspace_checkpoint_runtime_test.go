@@ -141,12 +141,7 @@ func (f checkpointRuntimeFixture) runHelper(t *testing.T, operationID string, ac
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer func() {
-		if closeErr := operation.Close(); closeErr != nil {
-			t.Error(closeErr)
-		}
-	}()
-	workspacefixture.RunRealGuardianLifetime(t, store, operation, func() {
+	runCheckpointFixtureLifetime(t, store, operation, func() {
 		if act {
 			f.performAction(t, operation)
 		}
@@ -154,6 +149,18 @@ func (f checkpointRuntimeFixture) runHelper(t *testing.T, operationID string, ac
 	if err = reconcileWorkspaceAfterGuardian(store, runnerArguments{WorkspaceOperation: true, TaskID: operationID}, f.deps); err != nil {
 		t.Fatalf("guardian completion: %v", err)
 	}
+}
+
+// The fixture owns the operation handle until the guardian's later cleanup
+// joins. A helper-scope Fatal/panic must not close records still in use by it.
+func runCheckpointFixtureLifetime(t *testing.T, store *taskdir.Store, operation *workspace.Operation, live func()) {
+	t.Helper()
+	t.Cleanup(func() {
+		if closeErr := operation.Close(); closeErr != nil {
+			t.Error(closeErr)
+		}
+	})
+	workspacefixture.RunRealGuardianLifetime(t, store, operation, live)
 }
 
 func (f checkpointRuntimeFixture) performAction(t *testing.T, operation *workspace.Operation) {

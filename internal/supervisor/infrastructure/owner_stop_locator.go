@@ -325,12 +325,18 @@ func verifyOwnerStopSnapshot(ctx context.Context, reader *taskdir.ReadOnlyStore,
 		return err
 	}
 	sequence, err := latestOwnerStopSequence(ctx, reader)
-	if err != nil || sequence != locator.reference.Sequence {
-		return errors.Join(ErrIdentity, err)
+	if err != nil {
+		return ownerStopSnapshotReadError(err)
+	}
+	if sequence != locator.reference.Sequence {
+		return ErrIdentity
 	}
 	pin, err := reader.PinRootContext(ctx)
-	if err != nil || !pin.Equal(locator.pin) {
-		return errors.Join(ErrIdentity, err)
+	if err != nil {
+		return ownerStopSnapshotReadError(err)
+	}
+	if !pin.Equal(locator.pin) {
+		return ErrIdentity
 	}
 	return ctx.Err()
 }
@@ -343,7 +349,7 @@ func verifySelectedOwnerStopSnapshot(ctx context.Context, reader *taskdir.ReadOn
 				continue
 			}
 			if readErr != nil {
-				return errors.Join(ErrIdentity, readErr)
+				return ownerStopSnapshotReadError(readErr)
 			}
 			released, releaseErr := ownerStopReleased(current, locator)
 			if releaseErr != nil || !released {
@@ -351,13 +357,34 @@ func verifySelectedOwnerStopSnapshot(ctx context.Context, reader *taskdir.ReadOn
 			}
 			continue
 		}
-		if readErr != nil || !bytes.Equal(current, records[index]) {
-			return errors.Join(ErrIdentity, readErr)
+		if readErr != nil {
+			return ownerStopSnapshotReadError(readErr)
+		}
+		if !bytes.Equal(current, records[index]) {
+			return ErrIdentity
 		}
 	}
 	pin, err := reader.PinRootContext(ctx)
-	if err != nil || !pin.Equal(locator.pin) {
-		return errors.Join(ErrIdentity, err)
+	if err != nil {
+		return ownerStopSnapshotReadError(err)
+	}
+	if !pin.Equal(locator.pin) {
+		return ErrIdentity
 	}
 	return ctx.Err()
+}
+
+// Interrupted reads cannot prove identity change. Preserve any independently
+// observed identity or concrete read fault instead of hiding it as cancellation.
+func ownerStopSnapshotReadError(err error) error {
+	if errors.Is(err, ErrIdentity) {
+		return err
+	}
+	canceled := errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
+	if canceled && task.AllErrorCauses(err, func(cause error) bool {
+		return errors.Is(cause, context.Canceled) || errors.Is(cause, context.DeadlineExceeded) || errors.Is(cause, task.ErrEvidenceFault)
+	}) {
+		return err
+	}
+	return errors.Join(ErrIdentity, err)
 }

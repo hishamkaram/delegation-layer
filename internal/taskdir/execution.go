@@ -1,6 +1,7 @@
 package taskdir
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -172,14 +173,17 @@ func (td *TaskDir) WriteRawFiles(stdout, stderr string) error {
 	return td.WriteRawFrom(strings.NewReader(stdout), strings.NewReader(stderr))
 }
 
-func (s *Store) fileDigest(path string) (string, int64, error) {
+func (s *Store) fileDigestContext(ctx context.Context, path string) (string, int64, error) {
+	if err := ctx.Err(); err != nil {
+		return "", 0, err
+	}
 	f, err := s.openFile(path, unix.O_RDONLY)
 	if err != nil {
 		return "", 0, err
 	}
 	h := sha256.New()
-	n, err := io.Copy(h, f)
-	err = errors.Join(err, f.Close())
+	n, err := io.Copy(h, contextReader{ctx: ctx, reader: f})
+	err = errors.Join(err, f.Close(), ctx.Err())
 	if err != nil {
 		return "", 0, err
 	}
@@ -187,6 +191,10 @@ func (s *Store) fileDigest(path string) (string, int64, error) {
 }
 
 func (td *TaskDir) rawManifest() ([]task.RawManifestEntry, string, error) {
+	return td.rawManifestContext(context.Background())
+}
+
+func (td *TaskDir) rawManifestContext(ctx context.Context) ([]task.RawManifestEntry, string, error) {
 	names, err := td.admittedRawNames()
 	if err != nil {
 		return nil, "", err
@@ -195,7 +203,7 @@ func (td *TaskDir) rawManifest() ([]task.RawManifestEntry, string, error) {
 	manifest := make([]task.RawManifestEntry, 0, len(names))
 	for _, name := range names {
 		path := "raw/" + name
-		digest, size, digestErr := td.store.fileDigest(filepath.Join(td.Dir, path))
+		digest, size, digestErr := td.store.fileDigestContext(ctx, filepath.Join(td.Dir, path))
 		if digestErr != nil {
 			return nil, "", digestErr
 		}
@@ -296,19 +304,23 @@ func (td *TaskDir) barrierRaw() error {
 }
 
 func (td *TaskDir) readSeal(predicate task.PredicateRef, spec, meta string) (*task.ProviderExitRecord, error) {
-	seal, err := td.readSealRecord(predicate, spec, meta)
+	return td.readSealContext(context.Background(), predicate, spec, meta)
+}
+
+func (td *TaskDir) readSealContext(ctx context.Context, predicate task.PredicateRef, spec, meta string) (*task.ProviderExitRecord, error) {
+	seal, err := td.readSealRecordContext(ctx, predicate, spec, meta)
 	if err != nil && !errors.Is(err, task.ErrNoSeal) {
 		return nil, fmt.Errorf("%w: %w", task.ErrEvidenceFault, err)
 	}
 	return seal, err
 }
 
-func (td *TaskDir) readSealRecord(predicate task.PredicateRef, spec, meta string) (*task.ProviderExitRecord, error) {
-	seal, err := td.readSealMetadata(predicate, spec, meta, td.store.readRecord)
+func (td *TaskDir) readSealRecordContext(ctx context.Context, predicate task.PredicateRef, spec, meta string) (*task.ProviderExitRecord, error) {
+	seal, err := td.readSealMetadata(predicate, spec, meta, func(path string, dst any) error { return td.store.readRecordContext(ctx, path, dst) })
 	if err != nil {
 		return nil, err
 	}
-	if err = td.validateSealedFiles(seal); err != nil {
+	if err = td.validateSealedFilesContext(ctx, seal); err != nil {
 		return nil, err
 	}
 	return seal, nil
@@ -346,12 +358,12 @@ func (td *TaskDir) readSealMetadata(predicate task.PredicateRef, spec, meta stri
 	return &seal, nil
 }
 
-func (td *TaskDir) validateSealedFiles(seal *task.ProviderExitRecord) error {
+func (td *TaskDir) validateSealedFilesContext(ctx context.Context, seal *task.ProviderExitRecord) error {
 	if err := td.validateManifestDeclarations(seal.RawManifest); err != nil {
 		return err
 	}
 	for _, entry := range seal.RawManifest {
-		digest, size, e := td.store.fileDigest(filepath.Join(td.Dir, entry.Path))
+		digest, size, e := td.store.fileDigestContext(ctx, filepath.Join(td.Dir, entry.Path))
 		if e != nil {
 			return e
 		}

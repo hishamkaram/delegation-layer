@@ -201,7 +201,7 @@ func closedLifetimeCustodyReleasePending(ctx context.Context, records guardian.C
 // exact match is positive; an unknown observation proves nothing. The
 // returned client is structural and owned by the caller.
 func (o taskMaintenanceObserver) observeEndedRow(ctx context.Context, td *taskdir.TaskDir, req *task.TaskRecord, meta *task.MetaRecord, spec, metaHash string) (bool, *pueue.Client, error) {
-	submission, receipt, err := publishedTaskSubmission(td)
+	submission, receipt, err := publishedTaskSubmission(ctx, td)
 	if err != nil || submission == nil {
 		return false, nil, err
 	}
@@ -233,8 +233,8 @@ func (o taskMaintenanceObserver) observeEndedRow(ctx context.Context, td *taskdi
 // publishedTaskSubmission returns the saved submission and receipt of a task
 // whose outcome is published, or nil when it has none: a row of an unadmitted
 // or unpublished task proves no removable work.
-func publishedTaskSubmission(td *taskdir.TaskDir) (*task.SubmitRecord, *task.SupervisorReceipt, error) {
-	inspection, err := td.Inspect()
+func publishedTaskSubmission(ctx context.Context, td *taskdir.TaskDir) (*task.SubmitRecord, *task.SupervisorReceipt, error) {
+	inspection, err := td.InspectContext(ctx)
 	if err != nil || inspection.Outcome == nil {
 		return nil, nil, err
 	}

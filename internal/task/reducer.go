@@ -23,6 +23,9 @@ func CompareRequests(a, b *TaskRecord) bool {
 	if !reflect.DeepEqual(a.RequestedConfig, b.RequestedConfig) {
 		return false
 	}
+	if !reflect.DeepEqual(a.Origin, b.Origin) || !reflect.DeepEqual(a.ConnectorContext, b.ConnectorContext) {
+		return false
+	}
 	if !reflect.DeepEqual(a.Remote, b.Remote) {
 		return false
 	}

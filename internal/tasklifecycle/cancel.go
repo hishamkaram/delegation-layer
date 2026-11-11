@@ -28,7 +28,7 @@ func CancelWithRequestIDContext(ctx context.Context, root string, td *taskdir.Ta
 	if err := ctx.Err(); err != nil {
 		return result, err
 	}
-	inspection, err := td.Inspect()
+	inspection, err := td.InspectContext(ctx)
 	result.Inspection = inspection
 	if err != nil {
 		return result, err
@@ -58,7 +58,7 @@ func CancelWithRequestIDContext(ctx context.Context, root string, td *taskdir.Ta
 
 	outcome, stopErr := stop.Task(ctx, root, td, requestID, "user", options, lookup, openControl)
 	if errors.Is(stopErr, task.ErrTerminalTask) {
-		return terminalAfterCancelRace(result, td)
+		return terminalAfterCancelRace(ctx, result, td)
 	}
 	if errors.Is(stopErr, task.ErrStopAlreadyRequested) {
 		if duplicateCancellationOnly(stopErr) {
@@ -72,15 +72,15 @@ func CancelWithRequestIDContext(ctx context.Context, root string, td *taskdir.Ta
 	} else {
 		stopErr = errors.Join(stopErr, recordsErr)
 	}
-	finalInspection, inspectErr := td.Inspect()
+	finalInspection, inspectErr := td.InspectContext(ctx)
 	if finalInspection != nil {
 		result.Inspection = finalInspection
 	}
 	return result, errors.Join(stopErr, inspectErr)
 }
 
-func terminalAfterCancelRace(result Cancellation, td *taskdir.TaskDir) (Cancellation, error) {
-	inspection, err := td.Inspect()
+func terminalAfterCancelRace(ctx context.Context, result Cancellation, td *taskdir.TaskDir) (Cancellation, error) {
+	inspection, err := td.InspectContext(ctx)
 	if inspection != nil {
 		result.Inspection = inspection
 	}

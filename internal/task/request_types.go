@@ -89,27 +89,30 @@ func SameSupervisorIdentity(left, right SupervisorRef) bool {
 
 // RootRecord is stored in root.json.
 type RootRecord struct {
-	SchemaVersion int    `json:"schema_version"`
-	RootID        string `json:"root_id"`
-	CreatedAt     string `json:"created_at"`
+	SchemaVersion    int      `json:"schema_version"`
+	RootID           string   `json:"root_id"`
+	CreatedAt        string   `json:"created_at"`
+	RequiredFeatures []string `json:"required_features,omitempty"`
 }
 
 // TaskRecord is stored in task.json (the immutable task request).
 type TaskRecord struct {
-	SchemaVersion   int               `json:"schema_version"`
-	RootID          string            `json:"root_id"`
-	TaskID          string            `json:"task_id"`
-	Provider        string            `json:"provider"`
-	Mode            string            `json:"mode"`
-	CanonicalCwd    string            `json:"canonical_cwd"`
-	RequestedConfig TaskConfig        `json:"requested_config"`
-	BudgetNanos     int64             `json:"budget_nanos"`
-	PriorSession    *PriorSession     `json:"prior_session,omitempty"`
-	BriefSHA256     string            `json:"brief_sha256"`
-	BriefLength     int64             `json:"brief_length"`
-	Workspace       *WorkspaceBinding `json:"workspace,omitempty"`
-	Team            *TeamContext      `json:"team,omitempty"`
-	Remote          *RemoteBinding    `json:"remote,omitempty"`
+	Origin           *GatewayOrigin    `json:"origin,omitempty"`
+	ConnectorContext *ConnectorContext `json:"connector_context,omitempty"`
+	SchemaVersion    int               `json:"schema_version"`
+	RootID           string            `json:"root_id"`
+	TaskID           string            `json:"task_id"`
+	Provider         string            `json:"provider"`
+	Mode             string            `json:"mode"`
+	CanonicalCwd     string            `json:"canonical_cwd"`
+	RequestedConfig  TaskConfig        `json:"requested_config"`
+	BudgetNanos      int64             `json:"budget_nanos"`
+	PriorSession     *PriorSession     `json:"prior_session,omitempty"`
+	BriefSHA256      string            `json:"brief_sha256"`
+	BriefLength      int64             `json:"brief_length"`
+	Workspace        *WorkspaceBinding `json:"workspace,omitempty"`
+	Team             *TeamContext      `json:"team,omitempty"`
+	Remote           *RemoteBinding    `json:"remote,omitempty"`
 }
 
 // WorkspaceBinding identifies the resource usage owned by this request. The

@@ -35,8 +35,11 @@ conflicts, unreadable state, or unknown endpoint ownership without editing
 records, deleting state, running process searches, or operating Pueue directly.
 
 An extremely deep root can exceed the host's Unix socket path limit even with
-Delegate's compact socket name. Choose a shorter root for a new installation;
-do not move an existing task's state as a recovery shortcut.
+Delegate's compact socket name. Cold owner routing checks this byte budget
+before accepting a startup or launching its child, and the child checks it again.
+The owner endpoint adds 14 bytes to the canonical root path; the pathname
+validator permits 107 bytes on Linux and 103 on macOS. Choose a shorter root for
+a new installation; do not move an existing task's state as a recovery shortcut.
 
 On macOS, a login available in a GUI terminal or tmux does not prove an existing
 supervisor started from SSH has the same access. Compare the exact execution

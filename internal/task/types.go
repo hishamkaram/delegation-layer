@@ -441,6 +441,11 @@ func ValidateRootRecord(r *RootRecord) error {
 	if err := ValidateRootID(r.RootID); err != nil {
 		return err
 	}
+	for _, feature := range r.RequiredFeatures {
+		if feature != NamespaceAdmissionFeature {
+			return fmt.Errorf("%w: required feature %q", ErrUnsupportedSchema, feature)
+		}
+	}
 	return validateTimestamp(r.CreatedAt)
 }
 
@@ -456,6 +461,9 @@ func ValidateTaskRecord(r *TaskRecord) error {
 		return err
 	}
 	if err := ValidateTaskID(r.TaskID); err != nil {
+		return err
+	}
+	if err := ValidateConnectorBinding(r); err != nil {
 		return err
 	}
 	if err := validateWorkspaceBinding(r.Workspace); err != nil {

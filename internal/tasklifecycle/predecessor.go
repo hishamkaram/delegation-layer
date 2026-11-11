@@ -14,7 +14,7 @@ import (
 )
 
 func preparePredecessorResolution(ctx context.Context, store *taskdir.Store, td *taskdir.TaskDir, predecessorReq *task.TaskRecord, predecessorMeta *task.MetaRecord, options supervisorcore.AdmissionOptions) (handedOff, submitted bool, resultErr error) {
-	inspection, err := td.Inspect()
+	inspection, err := td.InspectContext(ctx)
 	if err != nil {
 		return false, false, err
 	}

@@ -2,9 +2,7 @@ package app
 
 import (
 	"context"
-	"crypto/sha256"
 	"encoding/base64"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
@@ -14,6 +12,7 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/app/remotecommands"
 	"github.com/hishamkaram/delegation-layer/internal/config"
 	"github.com/hishamkaram/delegation-layer/internal/remote"
+	"github.com/hishamkaram/delegation-layer/internal/resultread"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 	"github.com/hishamkaram/delegation-layer/internal/tasklifecycle"
@@ -126,43 +125,11 @@ func (w *Workbench) readRemoteResult(ctx context.Context, a Arguments, reader *t
 }
 
 func readPublishedPrefix(ctx context.Context, source io.Reader, descriptor task.PayloadDescriptor, limit int64) (ContentPreview, error) {
-	if err := task.ValidatePayloadDescriptor(descriptor); err != nil {
+	observed, err := resultread.Read(ctx, source, descriptor, 0, limit)
+	if err != nil {
 		return ContentPreview{}, err
 	}
-	result := ContentPreview{TotalBytes: descriptor.Length, Truncated: descriptor.Length > limit}
-	hash := sha256.New()
-	buffer := make([]byte, 32<<10)
-	var length int64
-	for {
-		if err := ctx.Err(); err != nil {
-			return ContentPreview{}, err
-		}
-		n, err := source.Read(buffer)
-		if n > 0 {
-			length += int64(n)
-			if length > descriptor.Length {
-				return ContentPreview{}, task.ErrEvidenceFault
-			}
-			if _, writeErr := hash.Write(buffer[:n]); writeErr != nil {
-				return ContentPreview{}, writeErr
-			}
-			keep := min(int64(n), max(0, limit-int64(len(result.Data))))
-			result.Data = append(result.Data, buffer[:keep]...)
-		}
-		if errors.Is(err, io.EOF) {
-			break
-		}
-		if err != nil {
-			return ContentPreview{}, err
-		}
-		if n == 0 {
-			return ContentPreview{}, io.ErrNoProgress
-		}
-	}
-	if length != descriptor.Length || hex.EncodeToString(hash.Sum(nil)) != descriptor.SHA256 {
-		return ContentPreview{}, task.ErrEvidenceFault
-	}
-	return result, nil
+	return ContentPreview{Data: observed.Data, TotalBytes: descriptor.Length, Truncated: descriptor.Length > limit}, nil
 }
 
 func (w *Workbench) ReadLogRange(ctx context.Context, a Arguments) (taskdir.LogRange, error) {

@@ -70,7 +70,7 @@ func (td *TaskDir) RecheckAvailableContext(ctx context.Context, interpreter pred
 		return false, predicate.ErrRecoveryUnsupported
 	}
 	resultErr = td.withRecheckLockContext(ctx, func() error {
-		source, err := td.loadRecheckSource(interpreter)
+		source, err := td.loadRecheckSourceContext(ctx, interpreter)
 		if err != nil {
 			return err
 		}
@@ -86,7 +86,7 @@ func (td *TaskDir) RecheckAvailableContext(ctx context.Context, interpreter pred
 			available = true
 			return nil
 		}
-		_, err = td.readCachedRecheck(source)
+		_, err = td.readCachedRecheckContext(ctx, source)
 		return err
 	})
 	return available, resultErr
@@ -204,17 +204,21 @@ func (td *TaskDir) finishRecheckPayload(stage *payloadStage, directory, verdict 
 }
 
 func (td *TaskDir) loadRecheckSource(interpreter predicate.RecoveryInterpreter) (*recheckSource, error) {
+	return td.loadRecheckSourceContext(context.Background(), interpreter)
+}
+
+func (td *TaskDir) loadRecheckSourceContext(ctx context.Context, interpreter predicate.RecoveryInterpreter) (*recheckSource, error) {
 	_, meta, specHash, metaHash, err := td.loadAndValidatePreparedSet()
 	if err != nil {
 		return nil, err
 	}
-	seal, err := td.readSeal(meta.Predicate, specHash, metaHash)
+	seal, err := td.readSealContext(ctx, meta.Predicate, specHash, metaHash)
 	if err != nil {
 		return nil, err
 	}
 	// readWinner verifies the original payload and rehashes the full raw manifest,
 	// including when an existing derived assessment is reused.
-	outcome, err := td.readWinner(meta, specHash, metaHash)
+	outcome, err := td.readWinnerContext(ctx, meta, specHash, metaHash)
 	if err != nil {
 		return nil, err
 	}
@@ -225,11 +229,11 @@ func (td *TaskDir) loadRecheckSource(interpreter predicate.RecoveryInterpreter) 
 		return nil, task.ErrEvidenceFault
 	}
 
-	sourceOutcomeSHA256, _, err := td.store.fileDigest(filepath.Join(td.Dir, "outcome.json"))
+	sourceOutcomeSHA256, _, err := td.store.fileDigestContext(ctx, filepath.Join(td.Dir, "outcome.json"))
 	if err != nil {
 		return nil, err
 	}
-	sourceSealSHA256, _, err := td.store.fileDigest(filepath.Join(td.Dir, "provider.exit"))
+	sourceSealSHA256, _, err := td.store.fileDigestContext(ctx, filepath.Join(td.Dir, "provider.exit"))
 	if err != nil {
 		return nil, err
 	}
@@ -267,8 +271,12 @@ func recoveryTarget(interpreter predicate.RecoveryInterpreter, source task.Predi
 }
 
 func (td *TaskDir) readCachedRecheck(source *recheckSource) (*RecheckResult, error) {
+	return td.readCachedRecheckContext(context.Background(), source)
+}
+
+func (td *TaskDir) readCachedRecheckContext(ctx context.Context, source *recheckSource) (*RecheckResult, error) {
 	path := filepath.Join(source.recheckDir, recheckReportName)
-	data, err := td.store.readBytes(path, task.MaxControlRecordSize)
+	data, err := td.store.readBytesContext(ctx, path, task.MaxControlRecordSize)
 	if err != nil {
 		return nil, err
 	}
@@ -289,13 +297,13 @@ func (td *TaskDir) readCachedRecheck(source *recheckSource) (*RecheckResult, err
 	if report.AssessmentID != source.assessmentID || report.SourceOutcomeSHA256 != source.sourceOutcomeSHA256 || report.SourceSealSHA256 != source.sourceSealSHA256 || !report.SourcePredicate.Equal(source.outcome.Predicate) || !report.SourcePredicate.Equal(source.seal.Predicate) || report.SourceEvidenceSHA256 != source.outcome.EvidenceSHA256 || !report.TargetPredicate.Equal(source.target) {
 		return nil, task.ErrRecheckConflict
 	}
-	if err = td.validateRecheckPayload(source.recheckDir, &report); err != nil {
+	if err = td.validateRecheckPayloadContext(ctx, source.recheckDir, &report); err != nil {
 		return nil, err
 	}
 	return recheckResult(&report, source.relativeReport, source.relativeAnswer), td.acknowledgeRecord(source.relativeReport)
 }
 
-func (td *TaskDir) validateRecheckPayload(directory string, report *task.RecheckReport) error {
+func (td *TaskDir) validateRecheckPayloadContext(ctx context.Context, directory string, report *task.RecheckReport) error {
 	resultPath := filepath.Join(directory, recheckResultName)
 	resultExists, err := td.store.entryExists(resultPath)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -305,7 +313,7 @@ func (td *TaskDir) validateRecheckPayload(directory string, report *task.Recheck
 		if !resultExists {
 			return task.ErrEvidenceFault
 		}
-		digest, size, digestErr := td.store.fileDigest(resultPath)
+		digest, size, digestErr := td.store.fileDigestContext(ctx, resultPath)
 		if digestErr != nil {
 			return digestErr
 		}

@@ -38,6 +38,7 @@ input. Invalid requests keep exit `2` with scoped usage on the error stream.
 | `schedule history`, `schedule execution` | [Passive execution history and evidence](../skills/agent-integration/references/command-reference.md#schedule-history-and-execution) |
 | `schedule health`, `schedule policy` | [Schedule reliability and quota policy](../skills/agent-integration/references/command-reference.md#schedule-reliability) |
 | `scheduler serve/status/stop/migrate`, `scheduler run` | [User-started host and compatibility runtime](../skills/agent-integration/references/command-reference.md#scheduler-runtime) |
+| `context`, `resolve`, `result read`, `origin` | [Guarded local connector contract](connector-contract.md) |
 | `supervisor status`, `supervisor migrate` | [Operator recovery](#supervisor-recovery) |
 
 Remote handles use the supported controls in the [remote workflow](remote-delegation.md#observe-reconnect-and-collect).

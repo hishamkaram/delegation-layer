@@ -80,7 +80,12 @@ func makePrivateTestDirectory(t *testing.T, path string) {
 
 func bindPrivateForTest(t *testing.T, stateRoot, clientPath, daemonPath string) *Client {
 	t.Helper()
-	client, err := BindPrivate(context.Background(), clientPath, daemonPath, stateRoot, Options{PrivateGenerationGuard: allowPrivateGenerationForTest{}, DaemonStartGuard: allowDaemonStartForTest{}, ObservationTimeout: DefaultObservationTimeout, SuccessfulCleanupAuthorizer: allowSuccessfulCleanupForTest, PrivateTerminalEventRunner: privateInstalledCallbackForTest(t, stateRoot), DaemonWaitOwner: privateFixtureDaemonWaitOwner(t)})
+	return bindPrivateWithDaemonWaitOwnerForTest(t, stateRoot, clientPath, daemonPath, privateFixtureDaemonWaitOwner(t))
+}
+
+func bindPrivateWithDaemonWaitOwnerForTest(t *testing.T, stateRoot, clientPath, daemonPath string, waitOwner DaemonWaitOwner) *Client {
+	t.Helper()
+	client, err := BindPrivate(context.Background(), clientPath, daemonPath, stateRoot, Options{PrivateGenerationGuard: allowPrivateGenerationForTest{}, DaemonStartGuard: allowDaemonStartForTest{}, ObservationTimeout: DefaultObservationTimeout, SuccessfulCleanupAuthorizer: allowSuccessfulCleanupForTest, PrivateTerminalEventRunner: privateInstalledCallbackForTest(t, stateRoot), DaemonWaitOwner: waitOwner})
 	t.Cleanup(func() {
 		if closeErr := client.CloseAfterPending(err); closeErr != nil {
 			t.Error(closeErr)

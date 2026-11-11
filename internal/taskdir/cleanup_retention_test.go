@@ -34,13 +34,19 @@ func TestCleanupRetainsStorePreservesCustomAsOwnerProjection(t *testing.T) {
 	}
 	other := fixture.other(t)
 	projected := errors.Join(errors.New("earlier independent fault"), cleanupAsProjectionError{owner: cause})
+	if !CleanupHasRetainedStore(projected) || !CleanupFault(projected) {
+		t.Fatal("active lifetime cleanup disappeared from dependency classification")
+	}
 	if !CleanupRetainsStore(projected, fixture.store) || CleanupRetainsStore(projected, other) || CleanupRetainsStore(projected, nil) {
 		t.Fatal("custom As lost owner projection or replaced actual Store identity")
 	}
 	fault.maintenance = false
 	must(t, lease.Release())
-	if CleanupRetainsStore(projected, fixture.store) {
+	if CleanupRetainsStore(projected, fixture.store) || CleanupHasRetainedStore(projected) {
 		t.Fatal("custom As retained a settled historical owner")
+	}
+	if !CleanupFault(projected) {
+		t.Fatal("settled historical cleanup lost failure classification")
 	}
 }
 

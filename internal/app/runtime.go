@@ -274,6 +274,13 @@ func scheduleOutputFailure(stderr io.Writer, response Response, err error) int {
 }
 
 func runCommand(a Arguments, deps Dependencies) commandResult {
+	if usesConnectorControl(a) {
+		return runCommandContext(context.Background(), a, deps)
+	}
+	return runLegacyCommand(a, deps)
+}
+
+func runLegacyCommand(a Arguments, deps Dependencies) commandResult {
 	switch a.Command {
 	case "dispatch":
 		return dispatch(a, deps)
@@ -387,6 +394,11 @@ func copyTaskID(id *int64) *int64 {
 }
 
 func mergeCommandClose(result *commandResult, closeFn func() error) {
+	defer func() {
+		if result.response.Connector != nil {
+			scrubConnectorFailure(result)
+		}
+	}()
 	if err := closeFn(); err != nil {
 		result.err = errors.Join(result.err, err)
 		result.code = 1

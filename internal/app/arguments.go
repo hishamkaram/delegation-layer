@@ -19,6 +19,7 @@ import (
 
 // Arguments contains requested values only. Parsing grants no external authority.
 type Arguments struct {
+	Connector            ConnectorArguments
 	LogStream            string
 	LogCursor            string
 	LogOffset            int64
@@ -169,6 +170,9 @@ func registerCommandFlags(fs *flag.FlagSet, a *Arguments, watch *string) {
 		return
 	}
 	fs.BoolVar(&a.JSON, "json", false, "emit versioned JSON")
+	if registerConnectorCommandFlags(fs, a) {
+		return
+	}
 	if a.Command == "supervisor" || a.Command == "scheduler" {
 		if a.Command == "scheduler" && a.SchedulerAction == "run" {
 			fs.IntVar(&a.schedulerHostReadFD, "scheduler-host-read-fd", 0, "private host channel")
@@ -216,6 +220,8 @@ func (a *Arguments) validate(positional []string, watch string) error {
 
 func (a *Arguments) validateCommand(positional []string, watch string) error {
 	switch a.Command {
+	case "context", "resolve", "result", "origin":
+		return validateConnectorArguments(a, positional)
 	case "help", "version", "providers", "tui":
 		return validateNoPositional(a.Command, positional)
 	case "supervisor":
@@ -278,8 +284,21 @@ func (a *Arguments) validatePreparationCommand(positional []string) error {
 }
 
 func (a *Arguments) validateTaskInteraction(positional []string, watch string) error {
+	if a.Command == "cancel" || a.Command == "status" || a.Command == "collect" {
+		if a.remoteCancelID != "" {
+			if err := task.ValidateTaskID(a.remoteCancelID); err != nil {
+				return err
+			}
+		}
+		if err := validateConnectorArguments(a, nil); err != nil {
+			return err
+		}
+	}
 	if err := a.validateTaskCommand(positional, watch); err != nil {
 		return err
+	}
+	if a.Connector.ExpectedRoot != "" && strings.HasPrefix(a.TaskID, "remote:") {
+		return errors.New("connector guards require a local task ID")
 	}
 	if err := a.validateInteractionArguments(); err != nil {
 		return err
@@ -371,6 +390,9 @@ func (a *Arguments) validateTaskCommand(positional []string, watch string) error
 }
 
 func (a *Arguments) validateDispatch(positional []string) error {
+	if err := validateGuardedDispatchArguments(a); err != nil {
+		return err
+	}
 	if a.Device != "" {
 		return a.validateRemoteDispatch(positional)
 	}

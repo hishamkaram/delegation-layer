@@ -142,7 +142,7 @@ func (td *TaskDir) PrepareStopContext(ctx context.Context, requestID, cause stri
 			resultErr = errors.Join(resultErr, td.store.maintLock.Unlock())
 		}
 	}()
-	r, err := td.newStopRequest(requestID, cause, deadline)
+	r, err := td.newStopRequestContext(ctx, requestID, cause, deadline)
 	if err != nil {
 		return nil, err
 	}
@@ -190,12 +190,12 @@ func validateStopPreparation(ctx context.Context, requestID, cause string) error
 	return task.ValidateStopRequestID(requestID)
 }
 
-func (td *TaskDir) newStopRequest(id, cause string, deadline time.Time) (*task.StopRequestRecord, error) {
-	req, meta, spec, hash, err := td.loadAndValidatePreparedSet()
+func (td *TaskDir) newStopRequestContext(ctx context.Context, id, cause string, deadline time.Time) (*task.StopRequestRecord, error) {
+	req, meta, spec, hash, err := td.loadAndValidatePreparedSetContext(ctx)
 	if err != nil {
 		return nil, err
 	}
-	_, err = td.readWinner(meta, spec, hash)
+	_, err = td.readWinnerContext(ctx, meta, spec, hash)
 	if err == nil {
 		return nil, task.ErrTerminalTask
 	}

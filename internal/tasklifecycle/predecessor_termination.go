@@ -15,7 +15,7 @@ func PredecessorTerminated(root string, td *taskdir.TaskDir, req *task.TaskRecor
 }
 
 func PredecessorTerminatedContext(ctx context.Context, root string, td *taskdir.TaskDir, req *task.TaskRecord, options SupervisorOptions) error {
-	inspection, err := td.Inspect()
+	inspection, err := td.InspectContext(ctx)
 	if err != nil {
 		return err
 	}
@@ -68,7 +68,7 @@ func reconcilePredecessor(ctx context.Context, root string, td *taskdir.TaskDir,
 	if observation.State != pueue.StateEnded {
 		return nil, errors.Join(pueue.ErrUnknown, response.MaintenanceError)
 	}
-	return td.Inspect()
+	return td.InspectContext(ctx)
 }
 
 // releaseHandedOffPredecessor releases a predecessor whose provider turn ended
@@ -107,7 +107,7 @@ func releaseHandedOffPredecessor(ctx context.Context, td *taskdir.TaskDir, req *
 // eligible closure returns its validated proof so callers can read the
 // recorded termination cause. Callers keep their own runner-lease checks.
 func closureInterruption(ctx context.Context, td *taskdir.TaskDir) (guardian.ClosureProof, bool, error) {
-	inspection, err := td.Inspect()
+	inspection, err := td.InspectContext(ctx)
 	if err != nil {
 		return guardian.ClosureProof{}, false, err
 	}
