@@ -23,11 +23,15 @@ func ContinueContext(ctx context.Context, request DispatchRequest, options Conti
 		return continuationFailure(result, ContinueResolveRoot, "resolve-state-root", err)
 	}
 	result.Root = root
-	predecessor, meta, brief, err := LoadContinuationInputContext(ctx, root, request, options.Dispatch)
+	predecessor, meta, brief, err := loadContinuationPredecessorContext(ctx, root, request.TaskID, options.Dispatch)
 	if err != nil {
 		return continuationFailure(result, ContinueLoadPredecessor, "load-predecessor", err)
 	}
 	result.RootID = predecessor.RootID
+	brief, err = continuationBrief(request, brief)
+	if err != nil {
+		return continuationFailure(result, ContinueValidation, "validate-request", err)
+	}
 	result.Resources, err = checkContinuationResources(ctx, request, root, options.Dispatch)
 	if err != nil {
 		return continuationFailure(result, ContinueResources, "check-resources", err)

@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/hishamkaram/delegation-layer/internal/admission"
+	"github.com/hishamkaram/delegation-layer/internal/config"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 	"github.com/hishamkaram/delegation-layer/internal/tasklifecycle"
@@ -233,4 +234,149 @@ func newBriefFixture(t *testing.T) (*taskdir.Store, *taskdir.TaskDir, *task.Task
 	store, td, req := testsupport.NewAppTestTask(t, false)
 	t.Cleanup(func() { testsupport.CloseAppTestTask(t, store, td) })
 	return store, td, req
+}
+
+// Caller brief errors are correctable only after the complete predecessor read
+// and its owned handles have closed successfully. No admission work may start.
+func TestContinueInvalidCallerBriefIsRequestValidation(t *testing.T) {
+	for _, name := range []string{"missing", "oversized", "conflicting"} {
+		t.Run(name, func(t *testing.T) {
+			store, td, _ := newBriefFixture(t)
+			request := tasklifecycle.DispatchRequest{Root: store.Root, TaskID: td.TaskID}
+			want := error(config.ErrBriefNotFound)
+			switch name {
+			case "missing":
+				request.BriefPath = filepath.Join(t.TempDir(), "missing.md")
+			case "oversized":
+				request.BriefBytes = bytes.Repeat([]byte{'x'}, task.MaxBriefSize+1)
+				want = config.ErrBriefTooLarge
+			case "conflicting":
+				request.BriefPath, request.BriefBytes = "unused.md", []byte("replacement")
+				want = nil
+			}
+			result := tasklifecycle.ContinueContext(t.Context(), request, tasklifecycle.ContinuationOptions{Dispatch: continuationOpenOptions})
+			var stage *admission.StageError
+			if result.Failure == nil || !errors.As(result.Failure, &stage) || stage.Stage() != "validate-request" || result.Phase != tasklifecycle.ContinueValidation {
+				t.Fatalf("caller brief failure attributed to predecessor: phase=%v failure=%v", result.Phase, result.Failure)
+			}
+			if want != nil && !errors.Is(result.Failure, want) {
+				t.Fatalf("caller input cause was lost: %v", result.Failure)
+			}
+			if result.Dispatch != nil || result.Resources != nil || result.Workspace != nil {
+				t.Fatal("invalid caller brief started successor work")
+			}
+		})
+	}
+}
+
+func TestContinuationInputOptionalBriefPreservesExactBytes(t *testing.T) {
+	store, td, _ := newBriefFixture(t)
+	inherited, err := td.ReadBrief()
+	if err != nil {
+		t.Fatal(err)
+	}
+	override := edgeBrief(513)
+	path := filepath.Join(t.TempDir(), "replacement.md")
+	writeBriefFile(t, path, override)
+	for _, test := range []struct {
+		name    string
+		path    string
+		content []byte
+		want    []byte
+	}{
+		{"omitted", "", nil, inherited},
+		{"file", path, nil, override},
+		{"bytes", "", override, override},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_, _, got, readErr := tasklifecycle.LoadContinuationInputContext(t.Context(), store.Root, tasklifecycle.DispatchRequest{TaskID: td.TaskID, BriefPath: test.path, BriefBytes: test.content}, continuationOpenOptions)
+			if readErr != nil || !bytes.Equal(got, test.want) {
+				t.Fatalf("optional brief changed bytes: %v", readErr)
+			}
+			clear(got)
+			again, readErr := td.ReadBrief()
+			if readErr != nil || !bytes.Equal(again, inherited) || !bytes.Equal(override, edgeBrief(513)) {
+				t.Fatal("returned brief aliases caller input or stored predecessor")
+			}
+		})
+	}
+}
+
+func TestContinuePredecessorFaultsPrecedeCallerOverride(t *testing.T) {
+	for _, name := range []string{"missing", "changed-brief", "ownership"} {
+		t.Run(name, func(t *testing.T) {
+			store, td, _ := newBriefFixture(t)
+			request := tasklifecycle.DispatchRequest{Root: store.Root, TaskID: td.TaskID, BriefPath: filepath.Join(t.TempDir(), "missing-override.md")}
+			var want error
+			switch name {
+			case "missing":
+				request.TaskID, want = string(bytes.Repeat([]byte{'9'}, 32)), os.ErrNotExist
+			case "changed-brief":
+				writeBriefFile(t, filepath.Join(td.Dir, "brief.md"), []byte("changed"))
+				want = task.ErrIdentityMismatch
+			case "ownership":
+				// The predecessor owner must refuse a directory in place of its
+				// optional private ownership-record file before reading overrides.
+				if err := os.Mkdir(filepath.Join(td.Dir, "runner-migration.json"), 0o700); err != nil {
+					t.Fatal(err)
+				}
+				want = task.ErrEvidenceFault
+			}
+			result := tasklifecycle.ContinueContext(t.Context(), request, tasklifecycle.ContinuationOptions{Dispatch: continuationOpenOptions})
+			var stage *admission.StageError
+			if (want != nil && !errors.Is(result.Failure, want)) || !errors.As(result.Failure, &stage) || stage.Stage() != "load-predecessor" || result.Phase != tasklifecycle.ContinueLoadPredecessor {
+				t.Fatalf("predecessor fault relabeled as caller input: %v", result.Failure)
+			}
+			if result.Dispatch != nil || result.Resources != nil || result.Workspace != nil {
+				t.Fatal("unreadable predecessor started successor work")
+			}
+		})
+	}
+}
+
+func TestContinuePredecessorStoreCloseFailurePrecedesOverrideRead(t *testing.T) {
+	store, td, _ := newBriefFixture(t)
+	options := tasklifecycle.DispatchOptions{OpenStore: func(root string, create bool) (*taskdir.Store, error) {
+		opened, err := taskdir.OpenStore(root)
+		if err != nil {
+			return nil, err
+		}
+		// A real public lease retains the Store's maintenance handle. The input
+		// loader must report its Close refusal before attempting caller I/O.
+		lease, err := opened.AcquireRemoteByteUse(t.Context(), td.TaskID, true, false)
+		if err != nil {
+			return nil, errors.Join(err, opened.Close())
+		}
+		t.Cleanup(func() {
+			if closeErr := errors.Join(lease.Close(), opened.Close()); closeErr != nil {
+				t.Error(closeErr)
+			}
+		})
+		return opened, nil
+	}}
+	result := tasklifecycle.ContinueContext(t.Context(), tasklifecycle.DispatchRequest{Root: store.Root, TaskID: td.TaskID, BriefPath: filepath.Join(t.TempDir(), "missing-override.md")}, tasklifecycle.ContinuationOptions{Dispatch: options})
+	var stage *admission.StageError
+	if !errors.Is(result.Failure, task.ErrLockBusy) || errors.Is(result.Failure, config.ErrBriefNotFound) || !errors.As(result.Failure, &stage) || stage.Stage() != "load-predecessor" || result.Phase != tasklifecycle.ContinueLoadPredecessor {
+		t.Fatalf("predecessor Close failure did not retain precedence: %v", result.Failure)
+	}
+	if result.Dispatch != nil || result.Resources != nil || result.Workspace != nil {
+		t.Fatal("predecessor Close refusal started successor work")
+	}
+}
+
+func TestContinuePredecessorPathErrorIsNotCallerInput(t *testing.T) {
+	store, td, _ := newBriefFixture(t)
+	missingStore := filepath.Join(store.Root, "missing-store")
+	options := tasklifecycle.DispatchOptions{OpenStore: func(string, bool) (*taskdir.Store, error) {
+		return taskdir.OpenStore(missingStore)
+	}}
+	result := tasklifecycle.ContinueContext(t.Context(), tasklifecycle.DispatchRequest{Root: store.Root, TaskID: td.TaskID, BriefPath: filepath.Join(t.TempDir(), "missing-override.md")}, tasklifecycle.ContinuationOptions{Dispatch: options})
+	var stage *admission.StageError
+	var nativeRead *os.PathError
+	if !errors.As(result.Failure, &nativeRead) || !errors.As(result.Failure, &stage) || stage.Stage() != "load-predecessor" || result.Phase != tasklifecycle.ContinueLoadPredecessor {
+		t.Fatalf("predecessor-native PathError was relabeled as caller input: %v", result.Failure)
+	}
+	if errors.Is(result.Failure, config.ErrBriefNotFound) || result.Dispatch != nil || result.Resources != nil || result.Workspace != nil {
+		t.Fatal("predecessor failure read caller input or started successor work")
+	}
 }

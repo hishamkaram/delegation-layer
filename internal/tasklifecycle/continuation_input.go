@@ -13,11 +13,25 @@ func LoadContinuationInput(root string, a DispatchRequest, options DispatchOptio
 }
 
 func LoadContinuationInputContext(ctx context.Context, root string, a DispatchRequest, options DispatchOptions) (req *task.TaskRecord, meta *task.MetaRecord, brief []byte, resultErr error) {
+	req, meta, brief, err := loadContinuationPredecessorContext(ctx, root, a.TaskID, options)
+	if err != nil {
+		return req, meta, brief, err
+	}
+	brief, err = continuationBrief(a, brief)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	return req, meta, brief, nil
+}
+
+// The predecessor store owns record, ownership and inherited-brief validation.
+// Join all owned closes before a caller override can be read or classified.
+func loadContinuationPredecessorContext(ctx context.Context, root, id string, options DispatchOptions) (req *task.TaskRecord, meta *task.MetaRecord, brief []byte, resultErr error) {
 	store, err := options.openStore(root, false)
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	td, err := store.OpenTask(a.TaskID)
+	td, err := store.OpenTask(id)
 	if err != nil {
 		return nil, nil, nil, errors.Join(err, store.Close())
 	}
@@ -36,13 +50,19 @@ func LoadContinuationInputContext(ctx context.Context, root string, a DispatchRe
 		meta = &migratedMeta
 	}
 	brief, err = td.ReadBrief()
-	if err == nil && (a.BriefPath != "" || a.BriefBytes != nil) {
-		brief, err = ReadBriefInput(a.BriefPath, a.BriefBytes)
-	}
 	if err != nil {
 		return nil, nil, nil, err
 	}
 	return req, meta, brief, nil
+}
+
+// An absent override inherits the already validated bytes. Explicit input uses
+// the same source exclusivity and limits as ordinary dispatch.
+func continuationBrief(request DispatchRequest, inherited []byte) ([]byte, error) {
+	if request.BriefPath == "" && request.BriefBytes == nil {
+		return inherited, nil
+	}
+	return ReadBriefInput(request.BriefPath, request.BriefBytes)
 }
 
 func loadContinuationPrior(root, id string, options DispatchOptions) (prior *task.PriorSession, source ContinuationSessionSource, resultErr error) {
