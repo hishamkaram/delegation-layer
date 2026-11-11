@@ -57,6 +57,8 @@ type interactiveInvocation struct {
 	writeFault   error
 	closeFault   error
 	closeOnce    sync.Once
+	// The runner lease owns mismatch latching; this callback only borrows it.
+	validateProject func(context.Context) error
 	// outboundOnce closes the frame queue: at machine Done, or when the engine ends.
 	outboundOnce sync.Once
 }
@@ -150,6 +152,12 @@ func (c *interactiveInvocation) writeFrames() {
 	defer close(c.writerDone)
 	for frame := range c.outbound {
 		data := append(bytes.Clone(frame.data), '\n')
+		if c.validateProject != nil {
+			if err := c.validateProject(c.budget.workContext); err != nil {
+				c.writeFault = err
+				return
+			}
+		}
 		n, err := c.input.Write(data)
 		if err == nil && n != len(data) {
 			err = io.ErrShortWrite

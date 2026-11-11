@@ -144,6 +144,9 @@ func validateConnectorArguments(a *Arguments, positional []string) error {
 		return err
 	}
 	if a.Connector.FenceUnattributedPartial {
+		if a.Connector.ExpectedSpecSHA256 != "" {
+			return task.ValidateSHA256(a.Connector.ExpectedSpecSHA256)
+		}
 		return nil
 	}
 	if err := validateConnectorGuardFields(*a); err != nil {

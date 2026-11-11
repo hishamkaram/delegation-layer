@@ -228,7 +228,7 @@ func (td *TaskDir) SealWithIdentity(invocation string, exitCode int, exitErr str
 		return nil, err
 	}
 	defer state.mu.Unlock()
-	if state.activeWriters != 0 || state.poisoned != nil {
+	if state.hasUnsettledExecution() {
 		return nil, fmt.Errorf("%w: active or failed raw capture", task.ErrEvidenceFault)
 	}
 	_, meta, specHash, metaHash, err := td.loadAndValidatePreparedSet()

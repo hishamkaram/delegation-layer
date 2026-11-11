@@ -241,7 +241,7 @@ func connectorContextInspection(ctx context.Context, a Arguments, reader *taskdi
 	if a.Connector.GatewayID != "" {
 		registered := false
 		response.Connector.OriginRegistered = &registered
-		if slices.Contains(observation.Features, task.NamespaceAdmissionFeature) {
+		if slices.Contains(observation.Features, task.NamespaceAdmissionFeature) && slices.Contains(observation.Features, task.NamespaceMutationFeature) {
 			state, readErr := reader.InspectOriginAdmissionContext(ctx, a.Connector.GatewayID, observation.RootToken)
 			if readErr != nil {
 				return connectorFailure(response, readErr)
@@ -254,7 +254,12 @@ func connectorContextInspection(ctx context.Context, a Arguments, reader *taskdi
 }
 
 func connectorInventoryInspection(ctx context.Context, a Arguments, reader *taskdir.ReadOnlyStore, response Response) commandResult {
-	response.Connector = &ConnectorResponse{ConnectorContextObservation: taskdir.ConnectorContextObservation{ContractVersion: 1, RootToken: a.Connector.ExpectedRoot, Features: []string{task.NamespaceAdmissionFeature}}}
+	response.Connector = &ConnectorResponse{ConnectorContextObservation: taskdir.ConnectorContextObservation{ContractVersion: 1, RootToken: a.Connector.ExpectedRoot, Features: []string{}}}
+	features, err := reader.ConnectorFeaturesContext(ctx)
+	if err != nil {
+		return connectorFailure(response, err)
+	}
+	response.Connector.Features = features
 	inventory, err := reader.OriginInventoryContext(ctx, a.Connector.GatewayID, a.Connector.Generation, a.Connector.Cursor, a.Connector.Limit, a.Connector.ExpectedRoot)
 	response.Connector.Inventory = &inventory
 	if err != nil {
@@ -268,7 +273,12 @@ func connectorPassiveTaskContext(ctx context.Context, a Arguments, deps Dependen
 	if err != nil {
 		return connectorFailure(response, err)
 	}
-	response.Connector = &ConnectorResponse{ConnectorContextObservation: taskdir.ConnectorContextObservation{ContractVersion: 1, Features: []string{task.NamespaceAdmissionFeature}, RootToken: a.Connector.ExpectedRoot, ProjectToken: a.Connector.ExpectedProject}}
+	response.Connector = &ConnectorResponse{ConnectorContextObservation: taskdir.ConnectorContextObservation{ContractVersion: 1, Features: []string{}, RootToken: a.Connector.ExpectedRoot, ProjectToken: a.Connector.ExpectedProject}}
+	features, err := reader.ConnectorFeaturesContext(ctx)
+	if err != nil {
+		return connectorFailure(response, err)
+	}
+	response.Connector.Features = features
 	response.TaskID = a.TaskID
 	var result commandResult
 	if a.Command == "result" {
@@ -355,13 +365,20 @@ func connectorMutationContext(ctx context.Context, a Arguments, deps Dependencie
 	}
 	defer func() { closeObservationStore(&result, store) }()
 	response.RootID, response.TaskID = store.RootID, a.TaskID
-	response.Connector = &ConnectorResponse{ConnectorContextObservation: taskdir.ConnectorContextObservation{ContractVersion: 1, Features: []string{task.NamespaceAdmissionFeature}, RootToken: a.Connector.ExpectedRoot, ProjectToken: a.Connector.ExpectedProject}}
+	response.Connector = &ConnectorResponse{ConnectorContextObservation: taskdir.ConnectorContextObservation{ContractVersion: 1, Features: []string{}, RootToken: a.Connector.ExpectedRoot, ProjectToken: a.Connector.ExpectedProject}}
+	features, err := store.ConnectorFeaturesContext(ctx)
+	if err != nil {
+		return connectorFailure(response, err)
+	}
+	response.Connector.Features = features
 	if a.Command == "context" {
 		if err = store.EnableConnectorContext(ctx, a.Connector.OfflineCutoverConfirmed); err != nil {
 			return connectorFailure(response, err)
 		}
 		token, tokenErr := store.RootTokenContext(ctx)
 		response.Connector.RootToken = token
+		response.Connector.Features, err = store.ConnectorFeaturesContext(ctx)
+		tokenErr = errors.Join(tokenErr, err)
 		if tokenErr != nil {
 			return connectorFailure(response, tokenErr)
 		}
@@ -382,7 +399,7 @@ func connectorMutationContext(ctx context.Context, a Arguments, deps Dependencie
 	}()
 	var resolved taskdir.NamespaceResolution
 	if a.Connector.FenceUnattributedPartial {
-		resolved, err = store.FencePartialTaskContext(ctx, a.TaskID, nil, true)
+		resolved, err = store.FencePartialTaskContext(ctx, a.TaskID, taskdir.PartialFenceSelection{OperatorUnattributed: true, ExpectedSpecSHA256: a.Connector.ExpectedSpecSHA256})
 	} else {
 		resolved, err = store.FenceTaskNamespaceContext(ctx, a.TaskID, a.Connector.origin)
 		if err == nil && resolved.Resolution == "existing" {
@@ -558,7 +575,7 @@ func attachConnectorDispatchReceipt(ctx context.Context, a Arguments, deps Depen
 	if a.Connector.ExpectedRoot == "" {
 		return result
 	}
-	result.response.Connector = &ConnectorResponse{ConnectorContextObservation: taskdir.ConnectorContextObservation{ContractVersion: 1, Features: []string{task.NamespaceAdmissionFeature}, RootToken: a.Connector.ExpectedRoot, ProjectToken: a.Connector.ExpectedProject}}
+	result.response.Connector = &ConnectorResponse{ConnectorContextObservation: taskdir.ConnectorContextObservation{ContractVersion: 1, Features: []string{}, RootToken: a.Connector.ExpectedRoot, ProjectToken: a.Connector.ExpectedProject}}
 	if taskdir.CreationNotAttempted(result.err) || errors.Is(result.err, taskdir.ErrOriginClosed) {
 		result.response.Connector.CreationAttempt = "not_attempted"
 		if !taskdir.CleanupFault(result.err) && task.AllErrorCauses(result.err, func(cause error) bool {
@@ -568,12 +585,20 @@ func attachConnectorDispatchReceipt(ctx context.Context, a Arguments, deps Depen
 			result.response.Failure = &DispatchFailureResponse{Code: "creation_not_attempted", Stage: "task-namespace", NextAction: "retry_later"}
 		}
 	}
-	if result.response.TaskRecord != "created" {
+	if result.response.TaskRecord != "created" && result.code != 0 {
 		return result
 	}
 	reader, err := taskdir.OpenReadOnlyStoreContext(ctx, a.Root, deps.storeDependencies().registry())
 	if err != nil {
 		return connectorFailure(result.response, errors.Join(result.err, err))
+	}
+	features, featureErr := reader.ConnectorFeaturesContext(ctx)
+	result.response.Connector.Features = features
+	if featureErr != nil || result.response.TaskRecord != "created" {
+		if err = errors.Join(featureErr, reader.Close()); err != nil {
+			return connectorFailure(result.response, errors.Join(result.err, err))
+		}
+		return result
 	}
 	receipt, readErr := reader.ReadConnectorReceiptContext(ctx, a.TaskID)
 	if err = errors.Join(readErr, reader.Close()); err != nil {
@@ -603,7 +628,7 @@ func fenceAttributedPartialContext(ctx context.Context, a Arguments, store *task
 	if err = matchConnectorReceipt(a, *receipt); err != nil {
 		return existing, err
 	}
-	return store.FencePartialTaskContext(ctx, a.TaskID, identity, false)
+	return store.FencePartialTaskContext(ctx, a.TaskID, taskdir.PartialFenceSelection{Frozen: identity, ExpectedSpecSHA256: a.Connector.ExpectedSpecSHA256})
 }
 
 type ConnectorOriginBarrierResponse struct {

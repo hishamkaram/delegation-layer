@@ -9,6 +9,9 @@ import (
 // NamespaceAdmissionFeature requires every writer to use root-scoped ID exclusion.
 const NamespaceAdmissionFeature = "namespace-admission-v1"
 
+// NamespaceMutationFeature excludes membership mutation independently of live tasks.
+const NamespaceMutationFeature = "namespace-mutation-lease-v1"
+
 // GatewayOrigin is immutable request correlation, never task lifecycle authority.
 type GatewayOrigin struct {
 	GatewayID            string `json:"gateway_id"`

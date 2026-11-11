@@ -442,7 +442,7 @@ func ValidateRootRecord(r *RootRecord) error {
 		return err
 	}
 	for _, feature := range r.RequiredFeatures {
-		if feature != NamespaceAdmissionFeature {
+		if feature != NamespaceAdmissionFeature && feature != NamespaceMutationFeature {
 			return fmt.Errorf("%w: required feature %q", ErrUnsupportedSchema, feature)
 		}
 	}

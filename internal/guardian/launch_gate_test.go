@@ -23,7 +23,7 @@ func TestRunnerLifetimeLaunchGatePreservesProviderInvocation(t *testing.T) {
 
 	cmd := exec.Command(provider, "--help", "value with spaces")
 	cmd.ExtraFiles = []*os.File{extra}
-	gate, err := NewLaunchGateFactory(runner)(cmd)
+	gate, err := NewLaunchGateFactory(runner)(cmd, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

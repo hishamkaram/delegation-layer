@@ -221,22 +221,37 @@ func (s *Store) RequireConnectorEnabled(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if !slices.Contains(record.RequiredFeatures, task.NamespaceAdmissionFeature) {
+	if !slices.Contains(record.RequiredFeatures, task.NamespaceAdmissionFeature) || !slices.Contains(record.RequiredFeatures, task.NamespaceMutationFeature) {
 		return ErrConnectorDisabled
 	}
-	return nil
+	return s.verifyNamespaceMutationLock(ctx)
+}
+
+// ConnectorFeaturesContext returns the actual root's immutable feature projection.
+func (s *Store) ConnectorFeaturesContext(ctx context.Context) ([]string, error) {
+	record, err := readStoreRootRecord(ctx, s)
+	if err != nil {
+		return nil, err
+	}
+	if slices.Contains(record.RequiredFeatures, task.NamespaceMutationFeature) {
+		if err = s.verifyNamespaceMutationLock(ctx); err != nil {
+			return nil, err
+		}
+	}
+	return append([]string{}, record.RequiredFeatures...), nil
+}
+
+func (r *ReadOnlyStore) ConnectorFeaturesContext(ctx context.Context) ([]string, error) {
+	return r.store.ConnectorFeaturesContext(ctx)
 }
 
 func (r *ReadOnlyStore) InspectConnectorContext(ctx context.Context, cwd string) (ConnectorContextObservation, error) {
 	result := ConnectorContextObservation{ContractVersion: 1, Features: []string{}}
-	record, err := readStoreRootRecord(ctx, r.store)
+	features, err := r.store.ConnectorFeaturesContext(ctx)
 	if err != nil {
 		return result, err
 	}
-	result.Features = slices.Clone(record.RequiredFeatures)
-	if result.Features == nil {
-		result.Features = []string{}
-	}
+	result.Features = features
 	result.RootToken, err = r.store.RootTokenContext(ctx)
 	if err != nil || cwd == "" {
 		return result, err
@@ -266,10 +281,13 @@ func (s *Store) EnableConnectorContext(ctx context.Context, offlineCutoverConfir
 	if err != nil {
 		return err
 	}
-	if slices.Contains(record.RequiredFeatures, task.NamespaceAdmissionFeature) {
+	changed, err := s.prepareConnectorFeaturesContext(ctx, record)
+	if err != nil {
+		return err
+	}
+	if !changed {
 		return s.barrierDir(s.Root)
 	}
-	record.RequiredFeatures = append(record.RequiredFeatures, task.NamespaceAdmissionFeature)
 	data, err := marshalControlRecord(record)
 	if err != nil {
 		return err
@@ -416,16 +434,16 @@ func (s *Store) taskNamespaceContext(ctx context.Context, id string) (*LockFile,
 	return lock, nil
 }
 
-// NamespaceCleanupError retains namespace and its ancestor maintenance lease
+// NamespaceCleanupError retains namespace and its operation ancestor leases
 // after an unlock fault. The caller may retry Release; it grants no new action.
 type NamespaceCleanupError struct {
-	store                  *Store
-	lock                   *LockFile
-	cause                  error
-	namespaceReleased      bool
-	namespaceClosed        bool
-	maintenanceReleased    bool
-	maintenanceTransferred bool
+	store                *Store
+	lock                 *LockFile
+	cause                error
+	namespaceReleased    bool
+	namespaceClosed      bool
+	ancestors            *connectorAncestors
+	ancestorsTransferred bool
 }
 
 func (e *NamespaceCleanupError) Error() string         { return e.cause.Error() }
@@ -447,11 +465,10 @@ func (e *NamespaceCleanupError) Release() error {
 		}
 		e.namespaceClosed = true
 	}
-	if !e.maintenanceReleased && !e.maintenanceTransferred {
-		if err := e.store.maintLock.Unlock(); err != nil {
+	if !e.ancestorsTransferred {
+		if err := e.ancestors.release(); err != nil {
 			return err
 		}
-		e.maintenanceReleased = true
 	}
 	e.store = nil
 	return nil
@@ -462,7 +479,7 @@ func (s *Store) closeNamespace(lock *LockFile) error {
 		return nil
 	}
 	if err := lock.Unlock(); err != nil {
-		return &NamespaceCleanupError{store: s, lock: lock, cause: err}
+		return &NamespaceCleanupError{store: s, lock: lock, ancestors: &connectorAncestors{store: s}, cause: err}
 	}
 	return lock.closeIdle()
 }
@@ -527,10 +544,11 @@ func (s *Store) FenceTaskNamespaceContext(ctx context.Context, id string, origin
 			return result, err
 		}
 	}
-	if err := s.maintLock.LockSHNonblockingContext(ctx); err != nil {
+	ancestors, err := s.beginConnectorMutationContext(ctx, false)
+	if err != nil {
 		return result, err
 	}
-	defer s.finishConnectorMaintenance(&resultErr)
+	defer s.finishConnectorAncestors(&resultErr, ancestors)
 	namespace, err := s.taskNamespaceContext(ctx, id)
 	if err != nil {
 		return result, err
@@ -587,30 +605,43 @@ func (s *Store) commitNamespaceRefusalContext(ctx context.Context, candidate Nam
 	return NamespaceResolution{Resolution: "permanently_refused", Refusal: winner}, nil
 }
 
+// PartialFenceSelection names the immutable evidence or explicit operator
+// authority for one partial-recovery attempt. A supplied digest always guards
+// the actual task.json bytes, independently of attribution.
+type PartialFenceSelection struct {
+	Frozen               *RecordedTaskIdentity
+	OperatorUnattributed bool
+	ExpectedSpecSHA256   string
+}
+
 // FencePartialTaskContext is explicit recovery only. A nil frozen request is
 // permitted solely with local operator authorization, never a generic scan.
-// Lock order: maintenance -> admission -> lifetime -> run -> nonblocking namespace.
-func (s *Store) FencePartialTaskContext(ctx context.Context, id string, frozen *RecordedTaskIdentity, operatorUnattributed bool) (result NamespaceResolution, resultErr error) {
+// Lock order: maintenance -> mutation -> admission -> lifetime -> run -> nonblocking namespace.
+func (s *Store) FencePartialTaskContext(ctx context.Context, id string, selection PartialFenceSelection) (result NamespaceResolution, resultErr error) {
 	defer func() {
 		if resultErr != nil {
 			result = NamespaceResolution{Resolution: "unresolved"}
 		}
 	}()
-	if err := s.validatePartialFenceRequest(id, frozen, operatorUnattributed); err != nil {
+	if err := s.validatePartialFenceRequest(id, selection); err != nil {
 		return result, err
 	}
 	if err := s.RequireConnectorEnabled(ctx); err != nil {
 		return result, err
 	}
-	if err := s.maintLock.LockSHNonblockingContext(ctx); err != nil {
+	ancestors, err := s.beginConnectorMutationContext(ctx, false)
+	if err != nil {
 		return result, err
 	}
-	defer s.finishConnectorMaintenance(&resultErr)
+	defer s.finishConnectorAncestors(&resultErr, ancestors)
 	exists, err := s.TaskEntryExists(id)
 	if err != nil {
 		return result, err
 	}
 	if !exists {
+		if selection.ExpectedSpecSHA256 != "" {
+			return result, fmt.Errorf("%w: expected spec requires recorded task bytes", task.ErrEvidenceFault)
+		}
 		return NamespaceResolution{Resolution: "unresolved"}, nil
 	}
 	td, err := s.newTaskHandle(id, true)
@@ -619,13 +650,13 @@ func (s *Store) FencePartialTaskContext(ctx context.Context, id string, frozen *
 	}
 	defer func() { resultErr = errors.Join(resultErr, td.Close()) }()
 	return td.withPartialFenceExclusionContext(ctx, func() (NamespaceResolution, error) {
-		return td.fencePartialPreparationContext(ctx, frozen)
+		return td.fencePartialPreparationContext(ctx, selection)
 	})
 }
 
 // fencePartialPreparationContext runs only under maintenance, admission,
 // lifetime and run exclusion. It owns the final namespace proof and commit.
-func (td *TaskDir) fencePartialPreparationContext(ctx context.Context, frozen *RecordedTaskIdentity) (result NamespaceResolution, resultErr error) {
+func (td *TaskDir) fencePartialPreparationContext(ctx context.Context, selection PartialFenceSelection) (result NamespaceResolution, resultErr error) {
 	namespace, err := td.store.taskNamespaceContext(ctx, td.TaskID)
 	if err != nil {
 		return result, err
@@ -638,9 +669,10 @@ func (td *TaskDir) fencePartialPreparationContext(ctx context.Context, frozen *R
 	if err != nil && !task.RecordAbsent(err) {
 		return result, err
 	}
-	if frozen != nil && (current == nil || !bytes.Equal(current.data, frozen.data)) {
-		return result, task.ErrRequestConflict
+	if err = selection.matchIdentity(current); err != nil {
+		return result, err
 	}
+	frozen := selection.Frozen
 	completeErr := td.preparedIdentityCompleteContext(ctx, current)
 	if completeErr == nil {
 		return NamespaceResolution{Resolution: "existing"}, nil
@@ -663,14 +695,36 @@ func (td *TaskDir) fencePartialPreparationContext(ctx context.Context, frozen *R
 	return td.store.commitNamespaceRefusalContext(ctx, candidate)
 }
 
-func (s *Store) validatePartialFenceRequest(id string, frozen *RecordedTaskIdentity, operatorUnattributed bool) error {
+// matchIdentity applies every supplied guard to the same recorded bytes.
+func (selection PartialFenceSelection) matchIdentity(current *RecordedTaskIdentity) error {
+	if selection.ExpectedSpecSHA256 != "" {
+		if current == nil {
+			return fmt.Errorf("%w: expected spec requires recorded task bytes", task.ErrEvidenceFault)
+		}
+		if task.ComputeSHA256(current.data) != selection.ExpectedSpecSHA256 {
+			return task.ErrRequestConflict
+		}
+	}
+	if selection.Frozen != nil && (current == nil || !bytes.Equal(current.data, selection.Frozen.data)) {
+		return task.ErrRequestConflict
+	}
+	return nil
+}
+
+func (s *Store) validatePartialFenceRequest(id string, selection PartialFenceSelection) error {
 	if err := task.ValidateTaskID(id); err != nil {
 		return err
 	}
-	if frozen == nil {
-		if !operatorUnattributed {
-			return errors.New("partial refusal requires frozen request or explicit local operator selection")
+	if selection.ExpectedSpecSHA256 != "" {
+		if err := task.ValidateSHA256(selection.ExpectedSpecSHA256); err != nil {
+			return err
 		}
+	}
+	frozen := selection.Frozen
+	if (frozen == nil && !selection.OperatorUnattributed) || (frozen != nil && selection.OperatorUnattributed) {
+		return errors.New("partial refusal requires exactly one frozen request or explicit local operator selection")
+	}
+	if frozen == nil {
 		return nil
 	}
 	if err := task.ValidateTaskRecord(&frozen.request); err != nil {
@@ -692,14 +746,16 @@ func (td *TaskDir) withPartialFenceExclusionContext(ctx context.Context, operati
 }
 
 // ConnectorTaskCleanupError retains the exact task exclusions and their
-// ancestor maintenance lease after cleanup fails. Release grants no work.
+// operation ancestor leases after cleanup fails. Release grants no work.
 type ConnectorTaskCleanupError struct {
-	store                  *Store
-	task                   *TaskDir
-	owner                  *LifetimeOwnerLease
-	admissionHeld, runHeld bool
-	maintenanceTransferred bool
-	cause                  error
+	store                     *Store
+	task                      *TaskDir
+	owner                     *LifetimeOwnerLease
+	admissionHeld, runHeld    bool
+	ancestors                 *connectorAncestors
+	creationNamespace         *LockFile
+	creationNamespaceReleased bool
+	cause                     error
 }
 
 func (e *ConnectorTaskCleanupError) Error() string         { return e.cause.Error() }
@@ -740,18 +796,27 @@ func (e *ConnectorTaskCleanupError) Release() error {
 	if err := e.task.Close(); err != nil {
 		return err
 	}
-	if !e.maintenanceTransferred {
-		if err := e.store.maintLock.Unlock(); err != nil {
+	if e.creationNamespace != nil {
+		if !e.creationNamespaceReleased {
+			if err := e.creationNamespace.Unlock(); err != nil {
+				return err
+			}
+			e.creationNamespaceReleased = true
+		}
+		if err := e.creationNamespace.closeIdle(); err != nil {
 			return err
 		}
-		e.maintenanceTransferred = true
+		e.creationNamespace = nil
+	}
+	if err := e.ancestors.release(); err != nil {
+		return err
 	}
 	e.store = nil
 	return nil
 }
 
 func (td *TaskDir) withConnectorTaskExclusionContext(ctx context.Context, createOwner bool, operation func() error) (resultErr error) {
-	cleanup := &ConnectorTaskCleanupError{store: td.store, task: td}
+	cleanup := &ConnectorTaskCleanupError{store: td.store, task: td, ancestors: &connectorAncestors{store: td.store}}
 	defer func() {
 		cleanup.cause = resultErr
 		// Transfer the ancestor lease from a nested namespace cleanup to this
@@ -760,7 +825,7 @@ func (td *TaskDir) withConnectorTaskExclusionContext(ctx context.Context, create
 		task.AnyErrorNode(resultErr, func(node error) bool {
 			var namespace *NamespaceCleanupError
 			if errors.As(node, &namespace) && namespace.RetainedStore() == td.store {
-				namespace.maintenanceTransferred = true
+				namespace.ancestorsTransferred = true
 			}
 			return false
 		})
@@ -999,7 +1064,7 @@ func (s *Store) requireOriginAdmissionContext(ctx context.Context, origin *task.
 	return nil
 }
 
-// OriginBarrierContext excludes every creation commit with maintenance EX.
+// OriginBarrierContext excludes membership mutations without blocking live tasks.
 // Contention is pending; callers retry the SAME explicit recovery transition.
 func (s *Store) OriginBarrierContext(ctx context.Context, gateway, recovery, expected, generation, rootToken string) (result *OriginAdmission, resultErr error) {
 	defer func() {
@@ -1010,11 +1075,12 @@ func (s *Store) OriginBarrierContext(ctx context.Context, gateway, recovery, exp
 	if err := validateOriginBarrierInput(gateway, recovery, expected, generation); err != nil {
 		return nil, err
 	}
-	if err := s.maintLock.LockEXNonblockingContext(ctx); err != nil {
+	ancestors, err := s.beginConnectorMutationContext(ctx, true)
+	if err != nil {
 		return nil, err
 	}
-	defer s.finishConnectorMaintenance(&resultErr)
-	if err := s.requireOriginRootContext(ctx, rootToken); err != nil {
+	defer s.finishConnectorAncestors(&resultErr, ancestors)
+	if err = s.requireOriginRootContext(ctx, rootToken); err != nil {
 		return nil, err
 	}
 	old, err := s.readOriginAdmissionContext(ctx, gateway)
@@ -1178,7 +1244,7 @@ func originCompletenessToken(state OriginAdmission, membership string) (string, 
 	}{state, membership})
 }
 
-// OriginReopenContext rechecks canonical membership under EX immediately before
+// OriginReopenContext rechecks canonical membership under mutation EX before
 // enabling this generation. A stale scan can never reopen admission.
 func (s *Store) OriginReopenContext(ctx context.Context, gateway, recovery, generation, receipt, rootToken string) (result *OriginAdmission, resultErr error) {
 	defer func() {
@@ -1186,11 +1252,12 @@ func (s *Store) OriginReopenContext(ctx context.Context, gateway, recovery, gene
 			result = nil
 		}
 	}()
-	if err := s.maintLock.LockEXNonblockingContext(ctx); err != nil {
+	ancestors, err := s.beginConnectorMutationContext(ctx, true)
+	if err != nil {
 		return nil, err
 	}
-	defer s.finishConnectorMaintenance(&resultErr)
-	if err := s.requireOriginRootContext(ctx, rootToken); err != nil {
+	defer s.finishConnectorAncestors(&resultErr, ancestors)
+	if err = s.requireOriginRootContext(ctx, rootToken); err != nil {
 		return nil, err
 	}
 	state, err := s.readOriginAdmissionContext(ctx, gateway)
@@ -1262,9 +1329,43 @@ func (s *Store) originTaskEntryContext(ctx context.Context, gateway, id string) 
 	}
 	td := &TaskDir{store: s, TaskID: id, Dir: filepath.Join(s.Root, "tasks", id)}
 	spec, err := s.readBytesContext(ctx, filepath.Join(td.Dir, "task.json"), task.MaxControlRecordSize)
+	if task.RecordAbsent(err) {
+		return s.originTaskAfterAbsentContext(ctx, gateway, td)
+	}
+	if err != nil {
+		return nil, err
+	}
+	return s.originTaskSpecContext(ctx, gateway, td, spec)
+}
+
+func (s *Store) originTaskAfterAbsentContext(ctx context.Context, gateway string, td *TaskDir) (result *OriginInventoryEntry, resultErr error) {
+	namespace, err := s.openExistingLock(filepath.Join(s.Root, "task-namespace", td.TaskID+".lock"), LockLevelNone)
+	if err != nil {
+		return nil, fmt.Errorf("%w: unclassified task entry has no namespace owner: %w", task.ErrEvidenceFault, err)
+	}
+	if err = namespace.LockEXNonblockingContext(ctx); err != nil {
+		return nil, errors.Join(err, namespace.closeIdle())
+	}
+	defer func() { resultErr = errors.Join(resultErr, s.closeNamespace(namespace)) }()
+	refusal, err := s.ReadNamespaceRefusalContext(ctx, td.TaskID)
+	if err != nil {
+		return nil, err
+	}
+	if refusal != nil {
+		verified, verifyErr := s.verifyNamespaceRefusalOwnedContext(ctx, td.TaskID, refusal)
+		if verifyErr != nil {
+			return nil, verifyErr
+		}
+		return originRefusalEntry(gateway, td.TaskID, verified), nil
+	}
+	spec, err := s.readBytesContext(ctx, filepath.Join(td.Dir, "task.json"), task.MaxControlRecordSize)
 	if err != nil {
 		return nil, fmt.Errorf("%w: unclassified task entry prevents complete inventory: %w", task.ErrEvidenceFault, err)
 	}
+	return s.originTaskSpecContext(ctx, gateway, td, spec)
+}
+
+func (s *Store) originTaskSpecContext(ctx context.Context, gateway string, td *TaskDir, spec []byte) (*OriginInventoryEntry, error) {
 	request, err := td.decodeTaskRequest(spec)
 	if err != nil {
 		return nil, err
@@ -1283,7 +1384,7 @@ func (s *Store) originTaskEntryContext(ctx context.Context, gateway, id string) 
 	if receipt.RootToken != root {
 		return nil, task.ErrIdentityMismatch
 	}
-	return &OriginInventoryEntry{Receipt: receipt, TaskID: id, Resolution: "existing", Origin: request.Origin, SpecSHA256: receipt.SpecSHA256, BriefSHA256: receipt.BriefSHA256}, nil
+	return &OriginInventoryEntry{Receipt: receipt, TaskID: td.TaskID, Resolution: "existing", Origin: request.Origin, SpecSHA256: receipt.SpecSHA256, BriefSHA256: receipt.BriefSHA256}, nil
 }
 
 func (s *Store) originRefusalEntryContext(ctx context.Context, gateway, id string, expected *NamespaceRefusal) (*OriginInventoryEntry, error) {
@@ -1291,10 +1392,15 @@ func (s *Store) originRefusalEntryContext(ctx context.Context, gateway, id strin
 	if err != nil {
 		return nil, err
 	}
+	return originRefusalEntry(gateway, id, refusal), nil
+}
+
+// originRefusalEntry projects only an already verified canonical refusal.
+func originRefusalEntry(gateway, id string, refusal *NamespaceRefusal) *OriginInventoryEntry {
 	if refusal.Origin != nil && refusal.Origin.GatewayID != gateway {
-		return nil, nil
+		return nil
 	}
-	return &OriginInventoryEntry{TaskID: id, Resolution: "permanently_refused", Origin: refusal.Origin}, nil
+	return &OriginInventoryEntry{TaskID: id, Resolution: "permanently_refused", Origin: refusal.Origin}
 }
 
 func (s *Store) appendOriginRefusalEntriesContext(ctx context.Context, gateway string, entries map[string]OriginInventoryEntry) error {
@@ -1343,10 +1449,11 @@ func (r *ReadOnlyStore) OriginInventoryContext(ctx context.Context, gateway, gen
 }
 
 // ConnectorMaintenanceCleanupError retains the exact ancestor lease after a
-// failed unlock. Release retries cleanup only; it never grants new work.
+// failed ancestor release. Release retries cleanup only; it never grants new work.
 type ConnectorMaintenanceCleanupError struct {
-	store *Store
-	cause error
+	store     *Store
+	ancestors *connectorAncestors
+	cause     error
 }
 
 func (e *ConnectorMaintenanceCleanupError) Error() string         { return e.cause.Error() }
@@ -1356,7 +1463,7 @@ func (e *ConnectorMaintenanceCleanupError) Release() error {
 	if e.store == nil {
 		return nil
 	}
-	if err := e.store.maintLock.Unlock(); err != nil {
+	if err := e.ancestors.release(); err != nil {
 		return err
 	}
 	e.store = nil
@@ -1364,12 +1471,7 @@ func (e *ConnectorMaintenanceCleanupError) Release() error {
 }
 
 func (s *Store) finishConnectorMaintenance(resultErr *error) {
-	if CleanupRetainsStore(*resultErr, s) {
-		return
-	}
-	if err := s.maintLock.Unlock(); err != nil {
-		*resultErr = errors.Join(*resultErr, &ConnectorMaintenanceCleanupError{store: s, cause: err})
-	}
+	s.finishConnectorAncestors(resultErr, &connectorAncestors{store: s})
 }
 
 // Publication retains the exact candidate through bounded absent/matching/

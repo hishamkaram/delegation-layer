@@ -8,7 +8,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -96,6 +98,79 @@ func (f *connectorFixture) public(t *testing.T, args ...string) (Response, int) 
 	return response, code
 }
 
+type connectorInventoryDirectoryGate struct {
+	taskdir.BaseFaultInjector
+	directory string
+	entered   chan struct{}
+	release   chan struct{}
+	once      sync.Once
+}
+
+func (g *connectorInventoryDirectoryGate) OnDirBarrier(path string) error {
+	if path == g.directory {
+		g.once.Do(func() { close(g.entered) })
+		<-g.release
+	}
+	return nil
+}
+
+func startConnectorInventoryDirectoryCreation(t *testing.T, f *connectorFixture) func() {
+	t.Helper()
+	_, meta, err := f.task.PreparedRecords()
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := *f.request
+	request.TaskID = strings.Repeat("e", 32)
+	request.Origin, request.ConnectorContext = nil, nil
+	proposed := *meta
+	proposed.TaskID = request.TaskID
+	gate := &connectorInventoryDirectoryGate{directory: filepath.Join(f.store.Root, "tasks", request.TaskID), entered: make(chan struct{}), release: make(chan struct{})}
+	f.store.SetFaultInjector(gate)
+	done := make(chan error, 1)
+	var once sync.Once
+	join := func() {
+		once.Do(func() {
+			close(gate.release)
+			if createErr := <-done; createErr != nil {
+				t.Error("inventory fixture creator:", createErr)
+			}
+		})
+	}
+	t.Cleanup(join)
+	go func() {
+		directory, createErr := f.store.CreateTaskContext(t.Context(), request.TaskID, &request, []byte("brief"), &proposed)
+		if directory != nil {
+			createErr = errors.Join(createErr, directory.Close())
+		}
+		done <- createErr
+	}()
+	select {
+	case <-gate.entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("creator did not publish the paused directory")
+	}
+	return join
+}
+
+func TestConnectorPublicInventoryRetriesVisibleTaskPreparation(t *testing.T) {
+	f := newConnectorFixture(t)
+	join := startConnectorInventoryDirectoryCreation(t, f)
+	defer join()
+	var stdout, stderr bytes.Buffer
+	code := Run([]string{"origin", "inventory", "--gateway-id", "gateway", "--generation", "generation", "--expected-root", f.rootToken, "--root", f.store.Root, "--json"}, &stdout, &stderr, f.deps)
+	var response Response
+	if err := json.Unmarshal(stdout.Bytes(), &response); err != nil {
+		t.Fatalf("inventory response exit=%d output=%q diagnostics=%q: %v", code, stdout.String(), stderr.String(), err)
+	}
+	if code != 3 {
+		t.Errorf("active ordinary creator inventory exit=%d, want retryable exit3: %+v", code, response)
+	}
+	if response.Connector != nil && response.Connector.Inventory != nil {
+		t.Errorf("active ordinary creator published inventory proof: %+v", response.Connector.Inventory)
+	}
+}
+
 func TestConnectorPublicPassiveResolveNeverSubmits(t *testing.T) {
 	f := newConnectorFixture(t)
 	response, code := f.public(t, "resolve", f.request.TaskID)
@@ -104,6 +179,9 @@ func TestConnectorPublicPassiveResolveNeverSubmits(t *testing.T) {
 	}
 	if response.Connector.Receipt.Origin != f.origin {
 		t.Fatal("receipt changed immutable origin")
+	}
+	if !slices.Equal(response.Connector.Features, []string{task.NamespaceAdmissionFeature, task.NamespaceMutationFeature}) {
+		t.Fatalf("passive resolve guessed root features: %v", response.Connector.Features)
 	}
 	if _, err := f.task.ReadSubmission(); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("passive resolve submitted: %v", err)
@@ -753,7 +831,7 @@ func TestConnectorOperatorPartialFencePreservesRecordedAttribution(t *testing.T)
 	if err := os.Remove(filepath.Join(f.task.Dir, "meta.json")); err != nil {
 		t.Fatal(err)
 	}
-	result, err := f.store.FencePartialTaskContext(t.Context(), f.request.TaskID, nil, true)
+	result, err := f.store.FencePartialTaskContext(t.Context(), f.request.TaskID, taskdir.PartialFenceSelection{OperatorUnattributed: true})
 	if err != nil || result.Resolution != "existing" {
 		t.Fatalf("operator selection replaced known attribution: %+v err=%v", result, err)
 	}
@@ -761,6 +839,177 @@ func TestConnectorOperatorPartialFencePreservesRecordedAttribution(t *testing.T)
 	if err != nil || refusal != nil {
 		t.Fatalf("operator selection persisted unattributed refusal: %+v err=%v", refusal, err)
 	}
+}
+
+func newConnectorOrdinaryTask(t *testing.T, f *connectorFixture) (*taskdir.TaskDir, string) {
+	t.Helper()
+	_, meta, err := f.task.PreparedRecords()
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := *f.request
+	request.TaskID = strings.Repeat("e", 32)
+	request.Origin, request.ConnectorContext = nil, nil
+	proposed := *meta
+	proposed.TaskID = request.TaskID
+	directory, err := f.store.CreateTaskContext(t.Context(), request.TaskID, &request, []byte("brief"), &proposed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if closeErr := directory.Close(); closeErr != nil {
+			t.Error(closeErr)
+		}
+	})
+	_, _, spec, _, err := directory.PreparedIdentity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return directory, spec
+}
+
+func (f *connectorFixture) operatorPartialFence(t *testing.T, id, spec string) (Response, int) {
+	t.Helper()
+	args := []string{"resolve", id, "--fence-unattributed-partial", "--root", f.store.Root, "--expected-root", f.rootToken, "--expected-project", f.projectToken, "--json"}
+	if spec != "" {
+		args = append(args, "--expected-spec-sha256", spec)
+	}
+	var stdout, stderr bytes.Buffer
+	code := Run(args, &stdout, &stderr, f.deps)
+	var response Response
+	if err := json.Unmarshal(stdout.Bytes(), &response); err != nil {
+		t.Fatalf("operator fence response exit=%d output=%q diagnostics=%q: %v", code, stdout.String(), stderr.String(), err)
+	}
+	return response, code
+}
+
+func requireNoConnectorRefusal(t *testing.T, f *connectorFixture, id string) {
+	t.Helper()
+	refusal, err := f.store.ReadNamespaceRefusalContext(t.Context(), id)
+	if err != nil || refusal != nil {
+		t.Fatalf("unexpected namespace refusal: %+v err=%v", refusal, err)
+	}
+}
+
+func requireUnattributedConnectorRefusal(t *testing.T, f *connectorFixture, id string) {
+	t.Helper()
+	refusal, err := f.store.ReadNamespaceRefusalContext(t.Context(), id)
+	if err != nil || refusal == nil || !refusal.Unattributed || refusal.Origin != nil {
+		t.Fatalf("operator fence did not preserve unattributed selection: %+v err=%v", refusal, err)
+	}
+}
+
+func TestConnectorOperatorPartialFenceRejectsMalformedSpec(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "must-remain-absent")
+	args := []string{"resolve", strings.Repeat("e", 32), "--fence-unattributed-partial", "--root", root, "--expected-root", strings.Repeat("a", 64), "--expected-project", "selected-project", "--expected-spec-sha256", "not-a-sha256", "--json"}
+	var stdout, stderr bytes.Buffer
+	code := Run(args, &stdout, &stderr, Dependencies{Environment: []string{}})
+	if code != 2 {
+		t.Errorf("malformed operator spec exit=%d, want usage exit2: output=%q diagnostics=%q", code, stdout.String(), stderr.String())
+	}
+	if _, err := os.Stat(root); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("malformed operator guard changed its absent root: %v", err)
+	}
+}
+
+func TestConnectorOperatorPartialFenceHonorsSpec(t *testing.T) {
+	for _, guard := range []struct {
+		name     string
+		matching bool
+	}{{"mismatch", false}, {"matching", true}} {
+		t.Run(guard.name, func(t *testing.T) {
+			f := newConnectorFixture(t)
+			directory, spec := newConnectorOrdinaryTask(t, f)
+			if err := os.Remove(filepath.Join(directory.Dir, "meta.json")); err != nil {
+				t.Fatal(err)
+			}
+			if !guard.matching {
+				spec = strings.Repeat("f", 64)
+			}
+			response, code := f.operatorPartialFence(t, directory.TaskID, spec)
+			if !guard.matching {
+				if code != 1 {
+					t.Errorf("mismatching operator spec exit=%d, want conflict exit1: %+v", code, response)
+				}
+				requireNoConnectorRefusal(t, f, directory.TaskID)
+				return
+			}
+			if code != 0 || response.Connector == nil || response.Connector.Resolution != "permanently_refused" {
+				t.Fatalf("matching partial operator fence failed: %+v code=%d", response, code)
+			}
+			requireUnattributedConnectorRefusal(t, f, directory.TaskID)
+		})
+	}
+}
+
+func TestConnectorOperatorPartialFenceRequiresRequestForSpec(t *testing.T) {
+	f := newConnectorFixture(t)
+	directory, spec := newConnectorOrdinaryTask(t, f)
+	for _, name := range []string{"meta.json", "task.json"} {
+		if err := os.Remove(filepath.Join(directory.Dir, name)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	response, code := f.operatorPartialFence(t, directory.TaskID, spec)
+	if response.Connector != nil && response.Connector.Resolution == "permanently_refused" {
+		t.Errorf("missing request bytes yielded guarded refusal proof: %+v code=%d", response, code)
+	}
+	requireNoConnectorRefusal(t, f, directory.TaskID)
+}
+
+func TestConnectorOperatorPartialFenceWithoutSpecAllowsRequestlessPartial(t *testing.T) {
+	f := newConnectorFixture(t)
+	directory, _ := newConnectorOrdinaryTask(t, f)
+	for _, name := range []string{"meta.json", "task.json"} {
+		if err := os.Remove(filepath.Join(directory.Dir, name)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	response, code := f.operatorPartialFence(t, directory.TaskID, "")
+	if code != 0 || response.Connector == nil || response.Connector.Resolution != "permanently_refused" {
+		t.Fatalf("unguarded operator recovery changed: %+v code=%d", response, code)
+	}
+	requireUnattributedConnectorRefusal(t, f, directory.TaskID)
+}
+
+func TestConnectorOperatorPartialFenceCompleteTaskHonorsSpec(t *testing.T) {
+	for _, guard := range []struct {
+		name     string
+		matching bool
+	}{{"mismatch", false}, {"matching", true}} {
+		t.Run(guard.name, func(t *testing.T) {
+			f := newConnectorFixture(t)
+			directory, spec := newConnectorOrdinaryTask(t, f)
+			wantCode := 0
+			if !guard.matching {
+				spec, wantCode = strings.Repeat("f", 64), 1
+			}
+			response, code := f.operatorPartialFence(t, directory.TaskID, spec)
+			if code != wantCode {
+				t.Errorf("complete task operator guard exit=%d, want %d: %+v", code, wantCode, response)
+			}
+			if guard.matching && (response.Connector == nil || response.Connector.Resolution != "existing") {
+				t.Errorf("matching complete task lost existing identity: %+v", response)
+			}
+			requireNoConnectorRefusal(t, f, directory.TaskID)
+		})
+	}
+}
+
+func TestConnectorOperatorPartialFenceMatchingSpecPreservesAttribution(t *testing.T) {
+	f := newConnectorFixture(t)
+	_, _, spec, _, err := f.task.PreparedIdentity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.Remove(filepath.Join(f.task.Dir, "meta.json")); err != nil {
+		t.Fatal(err)
+	}
+	response, code := f.operatorPartialFence(t, f.task.TaskID, spec)
+	if code != 0 || response.Connector == nil || response.Connector.Resolution != "existing" {
+		t.Errorf("operator guard replaced existing attribution: %+v code=%d", response, code)
+	}
+	requireNoConnectorRefusal(t, f, f.task.TaskID)
 }
 
 // The project is an empty, fixture-owned directory. Restore its name before
@@ -944,5 +1193,96 @@ func TestConnectorDoesNotBroadenSchedulerRunContext(t *testing.T) {
 	code := RunContext(t.Context(), []string{"status", strings.Repeat("a", 32), "--root", t.TempDir(), "--json"}, &stdout, &stderr, Dependencies{})
 	if code != 2 || !strings.Contains(stderr.String(), "context execution requires a scheduler command") || stdout.Len() != 0 {
 		t.Fatalf("scheduler context executed finite command: code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+}
+
+func TestConnectorInventoryBusyCleanupIsFatalNotPending(t *testing.T) {
+	f := newConnectorFixture(t)
+	reader, err := taskdir.OpenStore(f.store.Root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if closeErr := reader.Close(); closeErr != nil {
+			t.Error(closeErr)
+		}
+	})
+	joinCreator := startConnectorInventoryDirectoryCreation(t, f)
+	defer joinCreator()
+	reader.SetFaultInjector(&joinedCleanupFault{name: ".maintenance.lock", cause: task.ErrLockBusy})
+	inventory, cause := reader.OriginInventoryContext(t.Context(), "gateway", "generation", "", 10, f.rootToken)
+	var retained *taskdir.ConnectorMaintenanceCleanupError
+	errors.As(cause, &retained)
+	t.Cleanup(func() {
+		reader.SetFaultInjector(nil)
+		if retained != nil {
+			if releaseErr := retained.Release(); releaseErr != nil {
+				t.Error(releaseErr)
+			}
+		}
+	})
+	if retained == nil || !errors.Is(cause, task.ErrLockBusy) || inventory.Complete || inventory.CompletenessReceipt != "" || len(inventory.Entries) != 0 {
+		t.Fatalf("fixture lost busy cleanup or yielded completeness: %+v %v", inventory, cause)
+	}
+	result := connectorFailure(newResponse("origin"), cause)
+	if result.code != 1 {
+		t.Fatalf("inventory cleanup fault became retryable busy: %+v", result)
+	}
+	reader.SetFaultInjector(nil)
+	if err = retained.Release(); err != nil {
+		t.Fatal(err)
+	}
+	if historical := connectorFailure(newResponse("origin"), cause); historical.code != 1 {
+		t.Fatalf("historical inventory cleanup fault became pending: %+v", historical)
+	}
+}
+
+func TestConnectorSuccessfulResponsesUseActualRootFeatures(t *testing.T) {
+	f := newConnectorFixture(t)
+	for _, args := range [][]string{
+		{"context", "inspect"},
+		{"context", "enable-connector", "--offline-cutover-confirmed"},
+		{"origin", "inventory", "--gateway-id", "gateway", "--generation", "generation", "--expected-root", f.rootToken},
+	} {
+		t.Run(strings.Join(args[:2], "_"), func(t *testing.T) {
+			var output, diagnostics bytes.Buffer
+			args = append(args, "--root", f.store.Root, "--json")
+			code := Run(args, &output, &diagnostics, f.deps)
+			var response Response
+			if err := json.Unmarshal(output.Bytes(), &response); err != nil {
+				t.Fatal(err)
+			}
+			if code != 0 || response.Connector == nil || !slices.Equal(response.Connector.Features, []string{task.NamespaceAdmissionFeature, task.NamespaceMutationFeature}) {
+				t.Fatalf("actual feature projection: code=%d response=%+v diagnostics=%s", code, response, diagnostics.String())
+			}
+		})
+	}
+	_, _, spec, _, err := f.task.PreparedIdentity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, code := f.operatorPartialFence(t, f.request.TaskID, spec)
+	if code != 0 || response.Connector == nil || !slices.Equal(response.Connector.Features, []string{task.NamespaceAdmissionFeature, task.NamespaceMutationFeature}) {
+		t.Fatalf("operator resolve guessed root features: code=%d response=%+v", code, response)
+	}
+}
+
+func TestConnectorInspectionRejectsBrokenEnabledMutationAuthority(t *testing.T) {
+	f := newConnectorFixture(t)
+	path := filepath.Join(f.store.Root, "task-namespace.lock")
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	var output, diagnostics bytes.Buffer
+	code := Run([]string{"context", "inspect", "--root", f.store.Root, "--json"}, &output, &diagnostics, f.deps)
+	var response Response
+	if err := json.Unmarshal(output.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if code != 1 || response.Connector == nil || response.Connector.RootToken != "" || response.Connector.ProjectToken != "" || len(response.Connector.Features) != 0 {
+		t.Fatalf("broken enabled root advertised usable context: code=%d response=%+v diagnostics=%s", code, response, diagnostics.String())
+	}
+	if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("inspection recreated required mutation lock: %v", err)
 	}
 }

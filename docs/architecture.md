@@ -80,13 +80,17 @@ therefore remain unchanged in the diagrams above.
 
 The [local connector contract](connector-contract.md) adds guarded public CLI
 operations through `internal/app`. `internal/taskdir` retains root/context,
-namespace refusal and immutable origin-generation evidence under its existing
-maintenance/admission/lifetime/run exclusions. All task creators enter the same
+namespace refusal and immutable origin-generation evidence under maintenance,
+admission/lifetime/run exclusions and a short root-wide namespace mutation lease.
+The mutation lease separates recovery membership changes from live guardians'
+longer maintenance ownership. All task creators enter the same
 store boundary before preparing files; there is no separate task engine or
 connector database. Receipts and inventory derive from canonical requests and
 refusals. Execution closure uses the existing pure lifetime resolver and exact
 owner evidence, while `internal/resultread` streams complete verification before
-releasing bounded bytes. Existing lifecycle and terminal frontend owners in the
+releasing bounded bytes. Guarded runners retain project-directory custody in the
+existing runner lease; the authenticated child launch gate borrows its descriptor
+and validates the initial cwd before provider execution. Existing lifecycle and terminal frontend owners in the
 diagrams remain unchanged.
 
 ## Remote execution boundary

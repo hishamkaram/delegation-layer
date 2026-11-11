@@ -24,6 +24,269 @@ func enableConnectorFixture(t *testing.T, store *Store) string {
 	return root
 }
 
+type connectorInventoryCreationGate struct {
+	BaseFaultInjector
+	directory        string
+	beforeTaskRecord bool
+	failure          error
+	entered          chan struct{}
+	release          chan struct{}
+	enteredOnce      sync.Once
+	releaseOnce      sync.Once
+}
+
+func (g *connectorInventoryCreationGate) pause() error {
+	g.enteredOnce.Do(func() { close(g.entered) })
+	<-g.release
+	return g.failure
+}
+
+func (g *connectorInventoryCreationGate) OnDirBarrier(path string) error {
+	if !g.beforeTaskRecord && path == g.directory {
+		return g.pause()
+	}
+	return nil
+}
+
+func (g *connectorInventoryCreationGate) OnBeforeStageCreate(_, destination string) error {
+	if g.beforeTaskRecord && destination == filepath.Join(g.directory, "task.json") {
+		return g.pause()
+	}
+	return nil
+}
+
+func (g *connectorInventoryCreationGate) requireBoundary(t *testing.T) {
+	t.Helper()
+	if _, err := os.Stat(g.directory); err != nil {
+		t.Fatal("creator has not published its task directory:", err)
+	}
+	if _, err := os.Stat(filepath.Join(g.directory, "task.json")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("creator already published its task record: %v", err)
+	}
+	_, admissionErr := os.Stat(filepath.Join(g.directory, ".admission.lock"))
+	if g.beforeTaskRecord {
+		if admissionErr != nil {
+			t.Fatal("prepared-record fixture has no admission lock:", admissionErr)
+		}
+		return
+	}
+	if !errors.Is(admissionErr, os.ErrNotExist) {
+		t.Fatalf("directory fixture already has an admission lock: %v", admissionErr)
+	}
+}
+
+func startConnectorInventoryCreation(t *testing.T, store *Store, req *task.TaskRecord, meta *task.MetaRecord, brief []byte, gate *connectorInventoryCreationGate) func() error {
+	t.Helper()
+	store.SetFaultInjector(gate)
+	done := make(chan initializationCreateResult, 1)
+	go func() {
+		directory, err := store.CreateTaskContext(t.Context(), req.TaskID, req, brief, meta)
+		done <- initializationCreateResult{taskDir: directory, err: err}
+	}()
+	var once sync.Once
+	var creationErr error
+	join := func() error {
+		once.Do(func() {
+			gate.releaseOnce.Do(func() { close(gate.release) })
+			created := <-done
+			creationErr = created.err
+			if created.taskDir != nil {
+				if err := created.taskDir.Close(); err != nil {
+					t.Errorf("close inventory fixture task: %v", err)
+				}
+			}
+		})
+		return creationErr
+	}
+	t.Cleanup(func() {
+		if err := join(); err != nil && !errors.Is(err, gate.failure) {
+			t.Errorf("inventory fixture creator: %v", err)
+		}
+	})
+	ctx, cancel := context.WithTimeout(t.Context(), taskInitializationTestTimeout)
+	defer cancel()
+	select {
+	case <-gate.entered:
+	case <-ctx.Done():
+		t.Fatal("creator did not reach the inventory fixture boundary:", ctx.Err())
+	}
+	return join
+}
+
+func TestConnectorInventoryRetriesActiveTaskCreation(t *testing.T) {
+	for _, phase := range []struct {
+		name             string
+		beforeTaskRecord bool
+	}{{"before_admission_lock", false}, {"before_task_record", true}} {
+		t.Run(phase.name, func(t *testing.T) {
+			store := testStore(t)
+			root := enableConnectorFixture(t, store)
+			_, err := store.OriginBarrierContext(t.Context(), "gateway", "recovery", "", "generation", root)
+			must(t, err)
+			reader, err := OpenReadOnlyStoreContext(t.Context(), store.Root, store.predicates)
+			must(t, err)
+			t.Cleanup(func() { must(t, reader.Close()) })
+			req, meta, brief := preparedInput(t, store)
+			gate := &connectorInventoryCreationGate{directory: filepath.Join(store.Root, "tasks", req.TaskID), beforeTaskRecord: phase.beforeTaskRecord, entered: make(chan struct{}), release: make(chan struct{})}
+			join := startConnectorInventoryCreation(t, store, req, meta, brief, gate)
+			gate.requireBoundary(t)
+			requireConnectorOriginBusy(t, store, root)
+			inventory, err := reader.OriginInventoryContext(t.Context(), "gateway", "generation", "", 10, root)
+			if !errors.Is(err, task.ErrLockBusy) {
+				t.Errorf("active creator inventory error = %v, want retryable lock contention", err)
+			}
+			if inventory.Complete || inventory.CompletenessReceipt != "" || len(inventory.Entries) != 0 {
+				t.Errorf("active creator yielded inventory completeness: %+v", inventory)
+			}
+			must(t, join())
+			inventory, err = reader.OriginInventoryContext(t.Context(), "gateway", "generation", "", 10, root)
+			must(t, err)
+			if !inventory.Complete || inventory.CompletenessReceipt == "" || len(inventory.Entries) != 0 {
+				t.Fatalf("completed ordinary creation did not permit inventory: %+v", inventory)
+			}
+		})
+	}
+}
+
+func TestConnectorInventoryRejectsOwnerlessFailedTaskCreation(t *testing.T) {
+	store := testStore(t)
+	root := enableConnectorFixture(t, store)
+	_, err := store.OriginBarrierContext(t.Context(), "gateway", "recovery", "", "generation", root)
+	must(t, err)
+	reader, err := OpenReadOnlyStoreContext(t.Context(), store.Root, store.predicates)
+	must(t, err)
+	t.Cleanup(func() { must(t, reader.Close()) })
+	req, meta, brief := preparedInput(t, store)
+	failure := errors.New("fixture task creation interrupted before its immutable request")
+	gate := &connectorInventoryCreationGate{directory: filepath.Join(store.Root, "tasks", req.TaskID), beforeTaskRecord: true, failure: failure, entered: make(chan struct{}), release: make(chan struct{})}
+	join := startConnectorInventoryCreation(t, store, req, meta, brief, gate)
+	if err = join(); !errors.Is(err, failure) {
+		t.Fatalf("creator did not retain the injected interruption: %v", err)
+	}
+	inventory, err := reader.OriginInventoryContext(t.Context(), "gateway", "generation", "", 10, root)
+	if !errors.Is(err, task.ErrEvidenceFault) || errors.Is(err, task.ErrLockBusy) {
+		t.Fatalf("ownerless creation inventory error = %v, want actionable evidence fault", err)
+	}
+	if inventory.Complete || inventory.CompletenessReceipt != "" || len(inventory.Entries) != 0 {
+		t.Fatalf("ownerless partial yielded inventory completeness: %+v", inventory)
+	}
+}
+
+func connectorInventoryAfterCreation(t *testing.T, transition func(*Store, string, context.CancelFunc)) (OriginInventory, error) {
+	t.Helper()
+	store := testStore(t)
+	root := enableConnectorFixture(t, store)
+	_, err := store.OriginBarrierContext(t.Context(), "gateway", "recovery", "", "generation", root)
+	must(t, err)
+	reader, err := OpenReadOnlyStoreContext(t.Context(), store.Root, store.predicates)
+	must(t, err)
+	t.Cleanup(func() { must(t, reader.Close()) })
+	req, meta, brief := preparedInput(t, store)
+	creatorGate := &connectorInventoryCreationGate{directory: filepath.Join(store.Root, "tasks", req.TaskID), beforeTaskRecord: true, entered: make(chan struct{}), release: make(chan struct{})}
+	joinCreator := startConnectorInventoryCreation(t, store, req, meta, brief, creatorGate)
+	readerGate := newInitializationLockBarrier(req.TaskID + ".lock")
+	reader.store.SetFaultInjector(readerGate)
+	type inventoryResult struct {
+		inventory OriginInventory
+		err       error
+	}
+	done := make(chan inventoryResult, 1)
+	joined := false
+	t.Cleanup(func() {
+		readerGate.unblock()
+		creationErr := joinCreator()
+		if !joined {
+			<-done
+		}
+		if creationErr != nil {
+			t.Error("inventory fixture creator:", creationErr)
+		}
+	})
+	inventoryContext, cancelInventory := context.WithCancel(t.Context())
+	defer cancelInventory()
+	go func() {
+		inventory, inventoryErr := reader.OriginInventoryContext(inventoryContext, "gateway", "generation", "", 10, root)
+		done <- inventoryResult{inventory: inventory, err: inventoryErr}
+	}()
+	ctx, cancel := context.WithTimeout(t.Context(), taskInitializationTestTimeout)
+	defer cancel()
+	select {
+	case <-readerGate.entered:
+	case early := <-done:
+		joined = true
+		must(t, joinCreator())
+		t.Fatalf("inventory returned before reconciling the creation owner: %+v %v", early.inventory, early.err)
+	case <-ctx.Done():
+		t.Fatal("inventory did not borrow the existing namespace:", ctx.Err())
+	}
+	must(t, joinCreator())
+	if transition != nil {
+		transition(store, req.TaskID, cancelInventory)
+	}
+	readerGate.unblock()
+	observed := <-done
+	joined = true
+	return observed.inventory, observed.err
+}
+
+func TestConnectorInventoryRereadsTaskAfterCreatorReleasesNamespace(t *testing.T) {
+	inventory, err := connectorInventoryAfterCreation(t, nil)
+	must(t, err)
+	if !inventory.Complete || inventory.CompletenessReceipt == "" || len(inventory.Entries) != 0 {
+		t.Fatalf("completed ordinary creator did not permit a fresh inventory: %+v", inventory)
+	}
+}
+
+func TestConnectorInventoryRereadsRefusalBeforeBorrow(t *testing.T) {
+	inventory, err := connectorInventoryAfterCreation(t, func(store *Store, id string, _ context.CancelFunc) {
+		directory := filepath.Join(store.Root, "tasks", id)
+		must(t, os.Remove(filepath.Join(directory, "task.json")))
+		must(t, os.Remove(filepath.Join(directory, "meta.json")))
+		refused, fenceErr := store.FencePartialTaskContext(t.Context(), id, PartialFenceSelection{OperatorUnattributed: true})
+		must(t, fenceErr)
+		if refused.Resolution != "permanently_refused" {
+			t.Fatalf("fixture failed to publish refusal winner: %+v", refused)
+		}
+	})
+	must(t, err)
+	if !inventory.Complete || inventory.CompletenessReceipt == "" || len(inventory.Entries) != 1 || inventory.Entries[0].Resolution != "permanently_refused" || inventory.Entries[0].Receipt != nil {
+		t.Fatalf("refusal winner was lost or self-contended: %+v", inventory)
+	}
+}
+
+func TestConnectorInventoryCancellationBeforeBorrowHasNoCompleteness(t *testing.T) {
+	inventory, err := connectorInventoryAfterCreation(t, func(_ *Store, _ string, cancel context.CancelFunc) { cancel() })
+	if !errors.Is(err, context.Canceled) || inventory.Complete || inventory.CompletenessReceipt != "" || len(inventory.Entries) != 0 {
+		t.Fatalf("cancelled namespace observation yielded completeness: %+v %v", inventory, err)
+	}
+}
+
+func TestConnectorInventoryAcceptsCompleteLegacyTaskWithoutNamespace(t *testing.T) {
+	store := testStore(t)
+	req, meta, brief := preparedInput(t, store)
+	directory, err := store.CreateTaskContext(t.Context(), req.TaskID, req, brief, meta)
+	must(t, err)
+	must(t, directory.Close())
+	root := enableConnectorFixture(t, store)
+	_, err = store.OriginBarrierContext(t.Context(), "gateway", "recovery", "", "generation", root)
+	must(t, err)
+	reader, err := OpenReadOnlyStoreContext(t.Context(), store.Root, store.predicates)
+	must(t, err)
+	t.Cleanup(func() { must(t, reader.Close()) })
+	namespace := filepath.Join(store.Root, "task-namespace", req.TaskID+".lock")
+	if _, err = os.Stat(namespace); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("legacy task unexpectedly has a namespace owner: %v", err)
+	}
+	inventory, err := reader.OriginInventoryContext(t.Context(), "gateway", "generation", "", 10, root)
+	must(t, err)
+	if !inventory.Complete || inventory.CompletenessReceipt == "" || len(inventory.Entries) != 0 {
+		t.Fatalf("complete legacy ordinary task blocked inventory: %+v", inventory)
+	}
+	if _, err = os.Stat(namespace); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("passive inventory initialized a legacy namespace: %v", err)
+	}
+}
+
 func TestConnectorNamespaceRefusalExcludesOrdinaryCreation(t *testing.T) {
 	store := testStore(t)
 	req, meta, brief := preparedInput(t, store)
@@ -126,10 +389,10 @@ func TestConnectorUnattributedPartialRequiresExplicitProofAndRetainsEvidence(t *
 	directory := filepath.Join(store.Root, "tasks", req.TaskID)
 	must(t, store.mkdir(directory, nil))
 	must(t, os.WriteFile(filepath.Join(directory, "brief.md"), brief, 0o600))
-	if _, err := store.FencePartialTaskContext(t.Context(), req.TaskID, nil, false); err == nil {
+	if _, err := store.FencePartialTaskContext(t.Context(), req.TaskID, PartialFenceSelection{}); err == nil {
 		t.Fatal("automatic unattributed fence accepted")
 	}
-	result, err := store.FencePartialTaskContext(t.Context(), req.TaskID, nil, true)
+	result, err := store.FencePartialTaskContext(t.Context(), req.TaskID, PartialFenceSelection{OperatorUnattributed: true})
 	must(t, err)
 	if result.Resolution != "permanently_refused" || !result.Refusal.Unattributed {
 		t.Fatalf("partial fence = %+v", result)
@@ -173,7 +436,7 @@ func TestConnectorPartialFenceRechecksCompletedPreparation(t *testing.T) {
 		operator bool
 	}{{"frozen", frozen, false}, {"operator", nil, true}} {
 		t.Run(selection.name, func(t *testing.T) {
-			result, fenceErr := store.FencePartialTaskContext(t.Context(), req.TaskID, selection.request, selection.operator)
+			result, fenceErr := store.FencePartialTaskContext(t.Context(), req.TaskID, PartialFenceSelection{Frozen: selection.request, OperatorUnattributed: selection.operator})
 			must(t, fenceErr)
 			if result.Resolution != "existing" {
 				t.Fatalf("complete preparation was refused: %+v", result)
@@ -611,7 +874,7 @@ func TestConnectorPartialFenceCleanupRetainsTaskUntilNamespaceSettles(t *testing
 			must(t, cleanup.Release())
 		}
 	})
-	resolution, err := store.FencePartialTaskContext(t.Context(), req.TaskID, nil, true)
+	resolution, err := store.FencePartialTaskContext(t.Context(), req.TaskID, PartialFenceSelection{OperatorUnattributed: true})
 	if resolution.Resolution == "permanently_refused" || !errors.As(err, &namespace) || !errors.As(err, &cleanup) {
 		t.Fatalf("nested cleanup owners lost: %+v %v", resolution, err)
 	}
@@ -750,5 +1013,127 @@ func TestConnectorInventoryReceiptsPreserveFrozenProjectIdentity(t *testing.T) {
 		if entry.SpecSHA256 != expected.SpecSHA256 || entry.BriefSHA256 != expected.BriefSHA256 || !reflect.DeepEqual(*entry.Origin, expected.Origin) {
 			t.Fatal("inventory correlation differs from receipt")
 		}
+	}
+}
+
+func TestConnectorOriginBarrierAllowsUnrelatedLifetimeOwner(t *testing.T) {
+	store := testStore(t)
+	root := enableConnectorFixture(t, store)
+	td := preparedTask(t, store)
+	control, err := OpenStore(store.Root)
+	must(t, err)
+	t.Cleanup(func() { must(t, control.Close()) })
+	owner, err := td.AcquireLifetimeOwner(t.Context())
+	must(t, err)
+	t.Cleanup(func() { must(t, owner.Release()) })
+	state, err := control.OriginBarrierContext(t.Context(), "gateway", "recovery", "", "generation", root)
+	must(t, err)
+	if state == nil || state.AdmissionOpen || state.Generation != "generation" {
+		t.Fatalf("unrelated lifetime owner blocked barrier: %+v", state)
+	}
+}
+
+func TestConnectorOriginReopenAllowsUnrelatedLifetimeOwner(t *testing.T) {
+	store := testStore(t)
+	root := enableConnectorFixture(t, store)
+	td := preparedTask(t, store)
+	control, err := OpenStore(store.Root)
+	must(t, err)
+	t.Cleanup(func() { must(t, control.Close()) })
+	_, err = control.OriginBarrierContext(t.Context(), "gateway", "recovery", "", "generation", root)
+	must(t, err)
+	inventory, err := control.OriginInventoryContext(t.Context(), "gateway", "generation", "", 10, root)
+	must(t, err)
+	owner, err := td.AcquireLifetimeOwner(t.Context())
+	must(t, err)
+	t.Cleanup(func() { must(t, owner.Release()) })
+	state, err := control.OriginReopenContext(t.Context(), "gateway", "recovery", "generation", inventory.CompletenessReceipt, root)
+	must(t, err)
+	if state == nil || !state.AdmissionOpen || state.Generation != "generation" {
+		t.Fatalf("unrelated lifetime owner blocked reopen: %+v", state)
+	}
+}
+
+func TestConnectorPartialFenceAppliesSpecToFrozenSelection(t *testing.T) {
+	store := testStore(t)
+	enableConnectorFixture(t, store)
+	td := preparedTask(t, store)
+	must(t, os.Remove(filepath.Join(td.Dir, "meta.json")))
+	frozen, err := store.RecordedTaskIdentityContext(t.Context(), td.TaskID)
+	must(t, err)
+	result, err := store.FencePartialTaskContext(t.Context(), td.TaskID, PartialFenceSelection{Frozen: frozen, ExpectedSpecSHA256: strings.Repeat("f", 64)})
+	if !errors.Is(err, task.ErrRequestConflict) || result.Resolution != "unresolved" {
+		t.Fatalf("frozen selection ignored supplied spec: %+v %v", result, err)
+	}
+	refusal, err := store.ReadNamespaceRefusalContext(t.Context(), td.TaskID)
+	must(t, err)
+	if refusal != nil {
+		t.Fatal("mismatching frozen selection committed refusal")
+	}
+}
+
+func TestConnectorPartialFenceRequiresAbsentEntrySpecEvidence(t *testing.T) {
+	store := testStore(t)
+	enableConnectorFixture(t, store)
+	before := snapshotTree(t, store.Root)
+	result, err := store.FencePartialTaskContext(t.Context(), strings.Repeat("a", 32), PartialFenceSelection{OperatorUnattributed: true, ExpectedSpecSHA256: strings.Repeat("f", 64)})
+	if !errors.Is(err, task.ErrEvidenceFault) || result.Resolution != "unresolved" {
+		t.Fatalf("absent task entry yielded spec proof: %+v %v", result, err)
+	}
+	if !reflect.DeepEqual(before, snapshotTree(t, store.Root)) {
+		t.Fatal("absent guarded entry caused filesystem mutation")
+	}
+}
+
+func TestConnectorPartialFenceHashesActualRequestBytes(t *testing.T) {
+	store := testStore(t)
+	enableConnectorFixture(t, store)
+	td := preparedTask(t, store)
+	must(t, os.Remove(filepath.Join(td.Dir, "meta.json")))
+	path := filepath.Join(td.Dir, "task.json")
+	original, err := os.ReadFile(path)
+	must(t, err)
+	var formatted bytes.Buffer
+	must(t, json.Indent(&formatted, original, "", "  "))
+	actual := append(formatted.Bytes(), '\n')
+	if bytes.Equal(original, actual) {
+		t.Fatal("fixture did not change request representation")
+	}
+	must(t, os.WriteFile(path, actual, 0o600))
+	result, err := store.FencePartialTaskContext(t.Context(), td.TaskID, PartialFenceSelection{OperatorUnattributed: true, ExpectedSpecSHA256: task.ComputeSHA256(actual)})
+	must(t, err)
+	if result.Resolution != "permanently_refused" || result.Refusal == nil || !result.Refusal.Unattributed {
+		t.Fatalf("exact request bytes failed operator spec proof: %+v", result)
+	}
+}
+
+func TestConnectorInventoryDoesNotRepairMissingOrUnsafeNamespace(t *testing.T) {
+	for _, unsafe := range []bool{false, true} {
+		name := "missing"
+		if unsafe {
+			name = "symlink"
+		}
+		t.Run(name, func(t *testing.T) {
+			store := testStore(t)
+			root := enableConnectorFixture(t, store)
+			_, err := store.OriginBarrierContext(t.Context(), "gateway", "recovery", "", "generation", root)
+			must(t, err)
+			td := preparedTask(t, store)
+			must(t, td.Close())
+			must(t, os.Remove(filepath.Join(td.Dir, "task.json")))
+			namespace := filepath.Join(store.Root, "task-namespace", td.TaskID+".lock")
+			must(t, os.Remove(namespace))
+			if unsafe {
+				must(t, os.Symlink(filepath.Join(td.Dir, "brief.md"), namespace))
+			}
+			before := snapshotTree(t, store.Root)
+			inventory, err := store.OriginInventoryContext(t.Context(), "gateway", "generation", "", 10, root)
+			if !errors.Is(err, task.ErrEvidenceFault) || inventory.Complete || inventory.CompletenessReceipt != "" || len(inventory.Entries) != 0 {
+				t.Fatalf("unsafe owner yielded completeness: %+v %v", inventory, err)
+			}
+			if !reflect.DeepEqual(before, snapshotTree(t, store.Root)) {
+				t.Fatal("inventory repaired or changed unsafe namespace")
+			}
+		})
 	}
 }

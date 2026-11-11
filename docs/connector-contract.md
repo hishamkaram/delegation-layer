@@ -15,15 +15,19 @@ delegate context enable-connector --root ABS --offline-cutover-confirmed --json
 
 Inspection is passive: an absent root fails without initialization. The response
 contains `connector.contract_version: 1`, `features`, `root_token` and, when a
-project was supplied, `project_token`. Readiness requires
-`namespace-admission-v1`. With `--gateway-id`, `origin_registered` is false for
+project was supplied, `project_token`. Guarded connector operations require both
+`namespace-admission-v1` and `namespace-mutation-lease-v1`; version 1 alone is
+insufficient. With `--gateway-id`, `origin_registered` is false for
 an unregistered origin; otherwise `origin_barrier` reports its gateway, recovery,
 generation and `admission_open`. Inspection never chooses a generation.
 
 Enablement is a one-way operator cutover on an existing root. Before attesting,
 stop old frontends/writers and drain their tasks. The flag records that explicit
 operator assertion; it cannot prove old processes have stopped. Enablement
-preserves RootID and physical root identity and adds a required root feature.
+preserves RootID and physical root identity and adds the required root features.
+It can also upgrade an admission-only candidate root. The root-wide namespace
+mutation lock is made durable before its required feature is published; an
+enabled root with a missing or unsafe lock fails instead of recreating it.
 An older strict reader refuses the upgraded root on its next open. A process
 that already opened the old root still requires operator closure.
 
@@ -40,6 +44,17 @@ root guard and compare the exact saved project token when a request exists;
 they do not require its workspace to remain present. For an absent request,
 the echoed project token is validated input, not a verified project receipt.
 No directory is automatically rebound to a replacement.
+
+Guarded execution retains the selected project directory through the existing
+runner lease. Preflight commands for that project and the provider
+child borrow it through the authenticated launch gate; after authorization the
+child checks the directory identity, changes directory through its descriptor
+and closes the inherited descriptor before provider execution. A detected
+parent-side mismatch remains a refusal even if the pathname is restored before
+sealing. A child gate refusal prevents provider execution and accepted output.
+These checks protect the initial working directory and observed mismatches;
+they do not make later third-party absolute path access atomic or provide an OS
+sandbox. Ordinary unguarded tasks retain their existing launch behavior.
 
 ## Guarded task operations
 
@@ -103,8 +118,12 @@ partial task and no guessed origin. Fencing preserves evidence and creates no
 task outcome. Completeness and attribution are checked under the same exclusions
 as the refusal commit: a complete prepared task stays `existing`, and explicit
 unattributed recovery cannot erase recorded attribution. A supplied spec digest
-must match the actual immutable request bytes, including on complete tasks;
-an absent ID has no request digest to compare. Passive reads and identical retries verify the refusal file and
+must match the actual immutable request bytes, including on complete tasks.
+Operator-only partial recovery with a supplied digest fails if those bytes
+cannot be read, including an absent task or missing request; it creates no
+refusal in that case. Ordinary `--fence-if-absent` can refuse a wholly absent ID
+without claiming a request digest match: that refusal prohibits every later
+request for the ID. Passive reads and identical retries verify the refusal file and
 containing directories with sync and matching readback before reporting durable
 refusal. Busy owners, missing locks and persistence failures provide no refusal
 proof.
@@ -154,6 +173,9 @@ Release quota only after this canonical closure proof, a matching fresh
 successful `stop.terminated`, or verified permanent namespace refusal. Never
 release from an accepted outcome alone. Bound passive polling and retry busy
 observations; observation must not prevent an active local cancellation.
+Canonical closure verification briefly borrows existing task exclusions. A
+competing collection or publication can therefore report retryable busy; a
+busy observation supplies no closure proof.
 
 ## Verified result ranges
 
@@ -173,6 +195,8 @@ streams, then scans the complete payload length and digest before releasing
 any selected bytes. Hidden-tail corruption and cancellation return no range.
 Memory for payload selection is bounded; verification still reads the whole
 result on every request.
+Each range also revalidates the sealed raw evidence. Total retrieval work grows
+with both raw evidence and payload size for every requested page.
 
 Canonical validators can also scan the whole accepted payload or sealed raw
 streams during guarded dispatch, resolve/status, collect, cancel and existing
@@ -211,8 +235,13 @@ delegate origin reopen --gateway-id G --recovery-id R --generation NEXT \
 
 First registration requires the operator's explicit generation and recovery ID;
 omit `--expected-generation` only when no origin is registered. A barrier closes
-admission and advances to a fresh generation under the existing store maintenance
-owner. All producers check current origin generation before creating fragments.
+admission and advances to a fresh generation under a short root-wide namespace
+mutation exclusion. Creation, absent-ID fencing and partial refusal hold its shared side through
+their membership changes; barrier and reopen hold its exclusive side. Each
+operation retains its existing maintenance reference and inner ownership order.
+Contention returns busy without waiting indefinitely. A live task's longer
+maintenance ownership does not by itself block this transition. All producers
+check current origin generation before creating fragments.
 The barrier excludes new canonical task creation; it does not revoke execution authority
 for an already canonical prepared task. Existing-task recovery still requires
 its immutable request guards and the ordinary stop/refusal and admission owners.
@@ -221,18 +250,25 @@ Retry the same explicit transition after contention or an uncertain reply.
 Inventory derives membership from canonical tasks and refusals. Existing-task
 entries include an optional `receipt`, with the same fields as the task receipt.
 Its project token and execution options derive from the frozen canonical request,
-even if the project directory has since disappeared or been replaced. Taskless
-refusal entries omit the receipt because they have no recorded project identity.
+even if the project directory has since disappeared or been replaced. Refusal
+entries omit request receipts and spec/brief identity; their permanent refusal
+is the membership fact. When `task.json` is initially absent, classification
+borrows the existing namespace exclusion and rereads the evidence. An active
+creator holding that exclusion returns busy (exit 3), rather than a misleading
+permanent evidence fault. An already readable request retains the direct
+classification path.
 Missing or unmapped project attribution remains ownerless for administrative
 recovery; consumers must never substitute the project used to query inventory.
 Raw CLI receipt tokens remain local to the connector and require the same wire
 hashing described above. Pages are sorted
-by task ID, with limit 1..200 and `--cursor` from `next_cursor`. Entries retain
+by task ID, with limit 1..200 and `--cursor` from `next_cursor`. Existing-task entries retain
 immutable origin/spec/brief identity; they do not copy mutable lifecycle state.
 Require the same `membership_sha256` across every accumulated page; discard and
 restart the scan if it changes. A concurrent local fence can add a refusal,
 including an ID before the current cursor, while admission is closed. Only
 `complete: true` has a `completeness_receipt`. Reopen verifies that receipt
-and unchanged complete membership under maintenance exclusion. Changed or unknown
+and unchanged complete membership under namespace mutation exclusion. Changed or unknown
 evidence fails closed. Page output and control duration are bounded; scanning
 large histories still consumes work proportional to canonical history size.
+Reopen holds the mutation exclusion through that scan, so its retryable busy
+window for new creation and refusals also grows with history.

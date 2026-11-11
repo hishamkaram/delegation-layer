@@ -59,6 +59,13 @@ func Run(td *taskdir.TaskDir, permit *taskdir.StartPermit, plan Plan, opts Optio
 		result.Error = errors.Join(err, i.discard())
 		return result
 	}
+	if request.ConnectorContext != nil {
+		if _, supported := opts.Lifetime.(ProjectLifetime); !supported {
+			result.Error = errors.Join(task.ErrInvalidPermit, errors.New("connector execution requires a project-aware lifetime"), i.discard())
+			return result
+		}
+		opts.project = permit
+	}
 	if err = validateProtocolOptions(request.RequestedConfig.Interactive, opts); err != nil {
 		result.Error = errors.Join(err, i.discard())
 		return result
@@ -69,6 +76,7 @@ func Run(td *taskdir.TaskDir, permit *taskdir.StartPermit, plan Plan, opts Optio
 			result.Error = errors.Join(err, i.discard())
 			return result
 		}
+		i.interaction.validateProject = opts.validateProject
 	}
 	return runPreparedInvocation(i, request, plan, opts, allowRuntimeRefresh)
 }
@@ -117,9 +125,15 @@ func prepareLaunchPlan(i *invocation, request *task.TaskRecord, plan Plan, opts 
 	if startErr != nil {
 		return launchPlan, startErr
 	}
+	if err := opts.validateProject(i.budget.workContext); err != nil {
+		return launchPlan, err
+	}
 	refreshedPlan, preflightErr := opts.preflight(i.budget, plan)
 	if preflightErr != nil {
 		return launchPlan, preflightErr
+	}
+	if err := opts.validateProject(i.budget.workContext); err != nil {
+		return launchPlan, err
 	}
 	if err := validatePreflightPlan(plan, refreshedPlan); err != nil {
 		return launchPlan, err
@@ -161,6 +175,10 @@ func finishInvocation(i *invocation, plan Plan, startErr error, opts Options) (r
 	}
 	if i.interaction.userChannel() {
 		result.Error = errors.Join(result.Error, i.td.SealInteraction())
+	}
+	if result.Error == nil {
+		// Budget completion cancels observation work, not finalization custody.
+		result.Error = opts.validateProject(context.WithoutCancel(i.budget.workContext))
 	}
 	if result.Error == nil {
 		result.Outcome, result.CleanupError, result.Error = sealAndPublish(i.td, i, plan, startErr, opts)
@@ -334,7 +352,17 @@ func (i *invocation) prepareLaunchFiles(plan Plan) ([]string, error) {
 
 func (i *invocation) start(opts Options) error {
 	start := func() error { return opts.start(i.cmd) }
-	if opts.Lifetime != nil {
+	if opts.project != nil {
+		start = func() error {
+			return opts.project.WithProjectDirectory(i.budget.workContext, func(directory *os.File, expected task.DirectoryIdentity) error {
+				lifetime, supported := opts.Lifetime.(ProjectLifetime)
+				if !supported {
+					return task.ErrInvalidPermit
+				}
+				return lifetime.StartProjectCommand(i.cmd, directory, expected, func() error { return opts.start(i.cmd) })
+			})
+		}
+	} else if opts.Lifetime != nil {
 		start = func() error { return opts.Lifetime.StartCommand(i.cmd, func() error { return opts.start(i.cmd) }) }
 	}
 	err := i.budget.authorizeAndStart(opts, start)

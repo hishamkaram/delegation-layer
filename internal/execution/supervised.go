@@ -3,10 +3,12 @@ package execution
 import (
 	"context"
 	"errors"
+	"os"
 	"os/exec"
 	"time"
 
 	"github.com/hishamkaram/delegation-layer/internal/task"
+	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 )
 
 // PreflightScope borrows an already-supervised lifetime. Its context cancels
@@ -18,6 +20,7 @@ type PreflightScope struct {
 	authorize          func() error
 	start              func(func() error) error
 	lifetime           Lifetime
+	project            *taskdir.StartPermit
 	prepareEnvironment func(context.Context, []string) ([]string, error)
 }
 
@@ -61,6 +64,20 @@ func (s PreflightScope) StartCommand(cmd *exec.Cmd, start func() error) error {
 	if s.lifetime == nil {
 		return s.Start(start)
 	}
+	if s.project != nil {
+		return s.Start(func() error {
+			return s.project.WithProjectDirectory(s.ctx, func(directory *os.File, identity task.DirectoryIdentity) error {
+				if cmd.Dir != identity.Path {
+					return s.lifetime.StartCommand(cmd, start)
+				}
+				lifetime, supported := s.lifetime.(ProjectLifetime)
+				if !supported {
+					return task.ErrInvalidPermit
+				}
+				return lifetime.StartProjectCommand(cmd, directory, identity, start)
+			})
+		})
+	}
 	return s.Start(func() error { return s.lifetime.StartCommand(cmd, start) })
 }
 
@@ -74,7 +91,12 @@ func (s PreflightScope) FinishCommand(cmd *exec.Cmd) error {
 	if s.lifetime == nil {
 		return nil
 	}
-	return s.lifetime.FinishCommand(context.WithoutCancel(s.ctx), cmd)
+	ctx := context.WithoutCancel(s.ctx)
+	err := s.lifetime.FinishCommand(ctx, cmd)
+	if s.project != nil {
+		err = errors.Join(err, s.project.RunnerLease().ValidateProject(ctx))
+	}
+	return err
 }
 
 // deadlineContext exposes the timer owner's deadline. Done comes from a derived
@@ -101,6 +123,7 @@ func (b *budgetOwner) runScopedPlan(opts Options, plan Plan, work func(Preflight
 		authorize:          func() error { return b.authorize(opts, "preflight-authorized") },
 		start:              func(start func() error) error { return b.authorizeAndStart(opts, start) },
 		lifetime:           opts.Lifetime,
+		project:            opts.project,
 		prepareEnvironment: opts.PrepareEnvironment,
 	}
 	if err := scope.Authorize(); err != nil {
