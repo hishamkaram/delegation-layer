@@ -268,6 +268,15 @@ search path so its files cannot shadow a standard-library module. Patch the name
 the consumer actually imports. `make test-native-harness` discovers acceptance
 tests; `make test-python` includes them once with all maintained Python tests.
 
+The shared process registry owns Start, uncertain starts and exact Wait for each
+child. Interactive pipe consumers can pass
+`borrowed_input=BorrowedInput(input_fd=...)` instead of finite stdin. The caller
+keeps that read descriptor valid through Start, then closes its copy immediately
+on return or error. The caller owns the nonblocking, deadline-bounded writer and
+closes it to deliver EOF. The port does not close or change the borrowed
+descriptor; its receipts record pipe identity without claiming input bytes or
+EOF. Existing bounded stdout capture can be combined with this input port.
+
 `scripts/release_verification/` separately owns release build, installation and
 gate policy, with tests in `scripts/release_tests/`. It may consume shared bounded
 source evidence from acceptance; acceptance does not import release verification.

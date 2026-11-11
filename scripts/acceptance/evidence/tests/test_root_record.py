@@ -26,7 +26,8 @@ class RootRecordContractTests(unittest.TestCase):
 
     def test_legacy_and_known_capability_preserve_identity(self):
         expected = self.read_with({})
-        for features in ([], ["namespace-admission-v1"]):
+        for features in ([], ["namespace-admission-v1"], ["namespace-mutation-lease-v1"],
+                         ["namespace-admission-v1", "namespace-mutation-lease-v1"]):
             with self.subTest(features=features):
                 self.assertEqual(self.read_with({"required_features": features}), expected)
 

@@ -99,7 +99,8 @@ def _state_root_identity(state: Path, label: str) -> tuple[str, tuple[datetime, 
     _exact_keys(root, {"schema_version", "root_id", "created_at"}, {"required_features"}, label=label)
     features = root.get("required_features", [])
     require(isinstance(features, list) and all(
-        isinstance(feature, str) and feature == "namespace-admission-v1" for feature in features
+        isinstance(feature, str) and feature in ("namespace-admission-v1", "namespace-mutation-lease-v1")
+        for feature in features
     ), f"{label} has unsupported required features")
     require(type(root.get("schema_version")) is int and root["schema_version"] == 1,
             f"{label} schema mismatch")
