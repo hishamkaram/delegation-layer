@@ -47,7 +47,7 @@ func prepareDispatchContinuationContext(ctx context.Context, store *taskdir.Stor
 		request.RequestedConfig.OutputSilenceTimeout = predecessor.RequestedConfig.OutputSilenceTimeout
 	}
 	if err = ValidateContinuationEnvironment(meta); err != nil {
-		return options, nil, err
+		return options, nil, withContinuationFailure(ContinuationPredecessorEnvironmentUnrecorded, err)
 	}
 	prior, err := ResolvePredecessorContext(ctx, store, PredecessorOptions{Admission: continuationOptions.staticAdmission(), Supervisor: continuationOptions.Creation.Admission.Supervisor}, *request, predecessorID)
 	if err != nil {
@@ -67,18 +67,18 @@ func continuationOptionsForTask(store *taskdir.Store, options DispatchOptions, i
 	result = options
 	td, err := store.OpenTask(id)
 	if err != nil {
-		return options, nil, nil, err
+		return options, nil, nil, withContinuationFailure(ContinuationPredecessorRecordsUnavailable, err)
 	}
 	defer func() { resultErr = errors.Join(resultErr, td.Close()) }()
 	predecessor, meta, err := td.PreparedRecords()
 	if err != nil {
-		return options, nil, nil, err
+		return options, nil, nil, withContinuationFailure(ContinuationPredecessorRecordsUnavailable, err)
 	}
 	if meta == nil {
-		return options, nil, nil, errors.New("continuation unavailable: predecessor metadata is not recorded")
+		return options, nil, nil, withContinuationFailure(ContinuationPredecessorRecordsUnavailable, errors.New("continuation unavailable: predecessor metadata is not recorded"))
 	}
 	if options.ContinuationProfiles == nil {
-		return options, nil, nil, task.ErrEvidenceFault
+		return options, nil, nil, withContinuationFailure(ContinuationProfilesUnavailable, task.ErrEvidenceFault)
 	}
 	result.Creation.Admission.Profiles = options.ContinuationProfiles(*meta, options.Creation.Admission.Profiles.Environment())
 	return result, predecessor, meta, nil

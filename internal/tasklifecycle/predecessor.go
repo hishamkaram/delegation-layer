@@ -16,7 +16,7 @@ import (
 func preparePredecessorResolution(ctx context.Context, store *taskdir.Store, td *taskdir.TaskDir, predecessorReq *task.TaskRecord, predecessorMeta *task.MetaRecord, options supervisorcore.AdmissionOptions) (handedOff, submitted bool, resultErr error) {
 	inspection, err := td.InspectContext(ctx)
 	if err != nil {
-		return false, false, err
+		return false, false, withContinuationFailure(ContinuationPredecessorObservationFailed, err)
 	}
 	if inspection.Terminal() {
 		return false, true, nil
@@ -27,11 +27,11 @@ func preparePredecessorResolution(ctx context.Context, store *taskdir.Store, td 
 	}
 	if submission, submitErr := td.ReadSubmission(); submitErr == nil {
 		if repairErr := supervisorcore.RepairQueueForSubmittedTask(ctx, store, submission, predecessorMeta, options); repairErr != nil {
-			return false, false, repairErr
+			return false, false, withContinuationFailure(ContinuationPredecessorReconciliationFailed, repairErr)
 		}
 		return false, true, nil
 	} else if !errors.Is(submitErr, os.ErrNotExist) {
-		return false, false, submitErr
+		return false, false, withContinuationFailure(ContinuationPredecessorSubmissionUnavailable, submitErr)
 	}
 	return false, false, nil
 }
@@ -42,23 +42,23 @@ func ResolvePredecessor(store *taskdir.Store, options PredecessorOptions, reques
 
 func ResolvePredecessorContext(ctx context.Context, store *taskdir.Store, options PredecessorOptions, request task.TaskRecord, id string) (prior *task.PriorSession, resultErr error) {
 	if err := task.ValidateTaskID(id); err != nil {
-		return nil, err
+		return nil, withContinuationFailure(ContinuationPredecessorRecordsUnavailable, err)
 	}
 	td, err := store.OpenTask(id)
 	if err != nil {
-		return nil, err
+		return nil, withContinuationFailure(ContinuationPredecessorRecordsUnavailable, err)
 	}
 	defer func() { resultErr = errors.Join(resultErr, td.Close()) }()
 	predecessorReq, predecessorMeta, err := td.PreparedRecords()
 	if err != nil {
-		return nil, err
+		return nil, withContinuationFailure(ContinuationPredecessorRecordsUnavailable, err)
 	}
 	prior, err = ContinuationPrior(td, predecessorReq)
 	if err != nil {
-		return nil, err
+		return nil, withContinuationFailure(ContinuationPredecessorSessionUnavailable, err)
 	}
 	if _, admissionErr := admissioncore.ValidateContinuation(options.Admission, store.Root, *predecessorReq, *predecessorMeta, prior, request); admissionErr != nil {
-		return nil, admissionErr
+		return nil, withContinuationFailure(ContinuationValidationFailed, admissionErr)
 	}
 	handedOff, submitted, err := preparePredecessorResolution(ctx, store, td, predecessorReq, predecessorMeta, options.Supervisor)
 	if err != nil {
@@ -68,7 +68,7 @@ func ResolvePredecessorContext(ctx context.Context, store *taskdir.Store, option
 		return prior, nil
 	}
 	if !submitted {
-		return nil, task.ErrRequestConflict
+		return nil, withContinuationFailure(ContinuationPredecessorSubmissionUnavailable, task.ErrRequestConflict)
 	}
 	if err = PredecessorTerminatedContext(ctx, store.Root, td, predecessorReq, SupervisorOptions{AdmissionStore: store, Options: options.Supervisor.Control, Lookup: options.Supervisor.Lookup(), OpenStore: options.Supervisor.OpenStore, Routing: options.Supervisor.Routing}); err != nil {
 		return nil, err

@@ -39,6 +39,9 @@ func dispatchFailure(err error, taskRecord string) DispatchFailureResponse {
 	if code == "retry_later" {
 		failure.ReasonCode = runtimeRestartPendingReason
 	}
+	if code == "continuation_unavailable" {
+		failure.ReasonCode = continuationFailureReason(err)
+	}
 	if supervisorFailureCode(code) {
 		failure.ReasonCode = supervisorcore.FailureReason(err)
 		if taskRecord == "not_created" && failure.ReasonCode == "historical_target_not_ready" {
@@ -62,6 +65,27 @@ func dispatchFailure(err error, taskRecord string) DispatchFailureResponse {
 		failure.Inspection = inspectionFailureResponse(err)
 	}
 	return failure
+}
+
+func continuationFailureReason(err error) string {
+	reason := tasklifecycle.ContinuationReason(err)
+	switch reason {
+	case tasklifecycle.ContinuationPredecessorRecordsUnavailable,
+		tasklifecycle.ContinuationPredecessorEnvironmentUnrecorded,
+		tasklifecycle.ContinuationProfilesUnavailable,
+		tasklifecycle.ContinuationPredecessorSessionUnavailable,
+		tasklifecycle.ContinuationValidationFailed,
+		tasklifecycle.ContinuationPredecessorObservationFailed,
+		tasklifecycle.ContinuationPredecessorReconciliationFailed,
+		tasklifecycle.ContinuationPredecessorSubmissionUnavailable,
+		tasklifecycle.ContinuationPredecessorRunnerLeaseObservationFailed,
+		tasklifecycle.ContinuationPredecessorRunnerLeaseBusy,
+		tasklifecycle.ContinuationPredecessorOutcomeUnavailable,
+		tasklifecycle.ContinuationPredecessorSessionHandoffFailed:
+		return string(reason)
+	default:
+		return ""
+	}
 }
 
 // providerCapabilityChangedReason marks an unavailable provider whose whole
