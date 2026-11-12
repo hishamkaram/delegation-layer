@@ -24,6 +24,14 @@ python3 "${REPO_ROOT}/scripts/acceptance/hermetic/cli.py" \
 python3 "${REPO_ROOT}/scripts/acceptance/supervisor/cli.py" \
     --source-root "${REPO_ROOT}" --pueue "${PUEUE_TEST_CLIENT}" \
     --pueued "${PUEUE_TEST_DAEMON}" --output "${ACCEPTANCE_OUTPUT}/native"
+NATIVE_BOOTSTRAP_TEST=TestPrivateSupervisorNativeBootstrap
+NATIVE_BOOTSTRAP_PACKAGE=./internal/pueue/internal/control
+# Go exits successfully for an empty selection; require the owned case first.
+SELECTED_BOOTSTRAP_TESTS=$(go test -race -list "^${NATIVE_BOOTSTRAP_TEST}$" "${NATIVE_BOOTSTRAP_PACKAGE}")
+if ! grep -Fxq "${NATIVE_BOOTSTRAP_TEST}" <<<"${SELECTED_BOOTSTRAP_TESTS}"; then
+    echo "ERROR: Native supervisor bootstrap test was not selected." >&2
+    exit 1
+fi
 DELEGATE_TEST_PUEUE="${PUEUE_TEST_CLIENT}" \
 DELEGATE_TEST_PUEUED="${PUEUE_TEST_DAEMON}" \
-    go test -race -count=1 -run '^TestPrivateSupervisorNativeBootstrap$' ./internal/pueue
+    go test -race -count=1 -v -run "^${NATIVE_BOOTSTRAP_TEST}$" "${NATIVE_BOOTSTRAP_PACKAGE}"
