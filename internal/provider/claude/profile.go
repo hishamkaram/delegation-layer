@@ -72,9 +72,9 @@ func nativePermissionForReference(mode string, reference task.PredicateRef) stri
 // retained unscoped revisions are matched by isUnscopedReference.
 func nativeDefaultPermissionReferences(mode string) []task.PredicateRef {
 	return []task.PredicateRef{
-		ReferenceForMode(mode), projectionReference(mode), advisoryReference(mode), scopedReference(mode), preAttributionReferenceForMode(mode),
+		ReferenceForMode(mode), followUpReference(mode), projectionReference(mode), advisoryReference(mode), scopedReference(mode), preAttributionReferenceForMode(mode),
 		previousNativeProbeReferenceForMode(mode), historicalNativeReferenceForMode(mode),
-		interactionReference(mode), advisoryInteractionReference(mode), scopedInteractionReference(mode), unscopedInteractionReference(mode),
+		interactionReference(mode), followUpInteractionReference(mode), advisoryInteractionReference(mode), scopedInteractionReference(mode), unscopedInteractionReference(mode),
 		preAttributionInteractionReference(mode), previousInteractionReference(mode), historicalInteractionReference(mode),
 	}
 }
@@ -101,7 +101,7 @@ func nativeReferencesForRequest(request task.TaskRecord, permissionMode string) 
 	mode := request.Mode
 	if request.RequestedConfig.Interactive {
 		return interactionReference(mode), []task.PredicateRef{
-			historicalInteractionReference(mode), previousInteractionReference(mode), preAttributionInteractionReference(mode),
+			followUpInteractionReference(mode), historicalInteractionReference(mode), previousInteractionReference(mode), preAttributionInteractionReference(mode),
 			unscopedInteractionReference(mode), scopedInteractionReference(mode), advisoryInteractionReference(mode),
 		}
 	}
@@ -109,7 +109,7 @@ func nativeReferencesForRequest(request task.TaskRecord, permissionMode string) 
 		return legacyNativeReferenceForMode(mode), nil
 	}
 	return ReferenceForMode(mode), []task.PredicateRef{
-		historicalNativeReferenceForMode(mode), previousNativeProbeReferenceForMode(mode), preAttributionReferenceForMode(mode),
+		followUpReference(mode), historicalNativeReferenceForMode(mode), previousNativeProbeReferenceForMode(mode), preAttributionReferenceForMode(mode),
 		unscopedReference(mode), scopedReference(mode), advisoryReference(mode), projectionReference(mode),
 	}
 }
@@ -555,6 +555,8 @@ func nativePolicyProofSource(definitionDigest string, facts nativePolicyFacts, h
 func interactionCompletionPolicy(mode string, reference task.PredicateRef) completionPolicy {
 	switch {
 	case reference.Equal(interactionReference(mode)):
+		return authenticationFollowUpCompletion
+	case reference.Equal(followUpInteractionReference(mode)):
 		return advisoryFollowUpCompletion
 	case reference.Equal(advisoryInteractionReference(mode)):
 		return advisoryScopedCompletion

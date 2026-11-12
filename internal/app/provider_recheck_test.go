@@ -60,14 +60,14 @@ func isScopedRecheckSource(reference task.PredicateRef) bool {
 }
 
 // isCurrentRecheckTarget reports whether reference is one of the eight exact
-// current follow-up revisions: print native-permissions-v6 (read-only) and -v7
-// (write), interactive-v7, and CCR v7 and v7-modeled.
+// current revisions: Claude print native-permissions-v7 (read-only) and -v8
+// (write), interactive-v8, and the unchanged CCR v7 and v7-modeled.
 func isCurrentRecheckTarget(reference task.PredicateRef) bool {
 	switch reference.Version + "@" + reference.SHA256 {
-	case "native-permissions-v6@ad2a736b3818a894ff05cf199232b5f3ca68b12a3adedf46162a34ee13b4529e",
-		"native-permissions-v7@59e9269aec10199c1d2f1aa1dbc96e3722323a9a5280441afd71befd9835585c",
-		"interactive-v7@5ced78e26beaa8dce20007741b0d802093fb290f86cef312a247b5797806ae9a",
-		"interactive-v7@dafdd1952e3b31110f3a63c4478819a26020b3c0692722e0bfde79d78898778d",
+	case "native-permissions-v7@2530e7b7bcf98a8220c6b7e638ccd56f2630ff9c28f815f0c7442b6269ba9b56",
+		"native-permissions-v8@a7491fea08920b25ac7545225aaf9762a69e5198c3aca2179fff901817e97472",
+		"interactive-v8@01cf5f4ac1c18ed58d505d6e28c190c2b67710a3e03253bb131f2467fc571a41",
+		"interactive-v8@c1bdfb35404669479813bfc43e42788e7d1c0e66b11a3502aab4aa02b6f01e5c",
 		"ccr-foreground-v7@7447125836ee96e2d8d16760d4dcb90c78d619bf75ef50f6343a012ffaf213cb",
 		"ccr-foreground-v7@568f56184cec02f9a853099eaf2a4b3b827baec1df97af735013d02b53ae6a6d",
 		"ccr-foreground-v7-modeled@92e13e9d0405eb9b097a78289d9e5e3b017c62f54e48dec8cb1627840732c647",

@@ -205,3 +205,44 @@ func TestScheduleHistoryFailureRetainsJoinedCause(t *testing.T) {
 		}
 	}
 }
+
+func TestScheduleHistoryIncludesCachedResult(t *testing.T) {
+	_, store, definition := scheduleFixture(t)
+	first, _, _ := seedScheduleHistory(t, store, definition)
+	writer, ok := store.(contract.ReliabilityStore)
+	if !ok {
+		t.Fatal("store lacks result owner")
+	}
+	fact := contract.ResultFact{TaskID: first.TaskID, ObservedAt: first.Due.Add(3 * time.Second), Verdict: "rejected", Code: "provider_authentication_failed", OutcomeSHA256: strings.Repeat("d", 64)}
+	if err := writer.RecordResult(t.Context(), fact); err != nil {
+		t.Fatal(err)
+	}
+	page := requireScheduleHistoryPage(t, scheduleHistory(t.Context(), store, Arguments{ScheduleAction: "history", ScheduleID: definition.ScheduleID, ScheduleLimit: 10}, newResponse("schedule")))
+	data, err := json.Marshal(page)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wire struct {
+		Entries []struct {
+			Occurrence *struct {
+				TaskID   string     `json:"task_id"`
+				Code     string     `json:"result_code"`
+				Status   string     `json:"result_status"`
+				Observed *time.Time `json:"result_observed_at"`
+			} `json:"occurrence"`
+		} `json:"entries"`
+	}
+	if err := json.Unmarshal(data, &wire); err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range wire.Entries {
+		if entry.Occurrence != nil && entry.Occurrence.TaskID == first.TaskID {
+			got := entry.Occurrence
+			if got.Code != fact.Code || got.Status != fact.Verdict || got.Observed == nil || !got.Observed.Equal(fact.ObservedAt) {
+				t.Fatalf("cached result missing: %+v", got)
+			}
+			return
+		}
+	}
+	t.Fatal("cached occurrence missing")
+}

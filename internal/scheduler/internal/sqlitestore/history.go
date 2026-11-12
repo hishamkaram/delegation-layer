@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"math"
+	"strings"
 
 	"github.com/hishamkaram/delegation-layer/internal/scheduler/contract"
 	"github.com/hishamkaram/delegation-layer/internal/task"
@@ -52,6 +53,9 @@ func (s *Store) History(ctx context.Context, page contract.HistoryPage) (contrac
 	WHERE schedule_id = ? AND (due_unix_nanos < ? OR (? AND due_unix_nanos = ?))
 	ORDER BY due_unix_nanos DESC LIMIT ?`, page.ScheduleID, before, inclusive, before, page.Limit+1)
 		if err != nil {
+			return err
+		}
+		if err = attachHistoryResults(ctx, tx, occurrences); err != nil {
 			return err
 		}
 		spans, err := querySkipSpans(ctx, tx, page, before, inclusive)
@@ -119,4 +123,44 @@ func mergeHistory(page contract.HistoryPage, occurrences []contract.Occurrence, 
 		}
 	}
 	return result, nil
+}
+
+// attachHistoryResults reads one bounded page from the existing cache in the
+// history transaction. It never opens task directories or repairs projections.
+func attachHistoryResults(ctx context.Context, tx *sql.Tx, occurrences []contract.Occurrence) error {
+	if len(occurrences) == 0 {
+		return nil
+	}
+	args := make([]any, len(occurrences))
+	indexes := make(map[string]int, len(occurrences))
+	for i, o := range occurrences {
+		args[i] = o.TaskID
+		indexes[o.TaskID] = i
+	}
+	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(args)), ",")
+	rows, err := tx.QueryContext(ctx, `SELECT task_id,observed_at,verdict,coalesce(code,''),coalesce(outcome_sha256,''),quota_until FROM occurrence_results WHERE task_id IN (`+placeholders+`)`, args...)
+	if err != nil {
+		return classify(err)
+	}
+	return scanEach(rows, func(rows *sql.Rows) error {
+		var fact contract.ResultFact
+		var observed int64
+		var quota sql.NullInt64
+		if err := rows.Scan(&fact.TaskID, &observed, &fact.Verdict, &fact.Code, &fact.OutcomeSHA256, &quota); err != nil {
+			return err
+		}
+		fact.ObservedAt = contract.InstantFromUnixNanos(observed)
+		if quota.Valid {
+			fact.QuotaNotBefore = contract.InstantFromUnixNanos(quota.Int64)
+		}
+		if err := contract.ValidateResultFact(fact); err != nil {
+			return storedFault("history result", err)
+		}
+		index, ok := indexes[fact.TaskID]
+		if !ok {
+			return storedFault("history result", task.ErrIdentityMismatch)
+		}
+		occurrences[index].Result = &fact
+		return nil
+	})
 }

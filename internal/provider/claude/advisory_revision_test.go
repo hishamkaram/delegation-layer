@@ -66,18 +66,18 @@ func TestFollowUpRevisionsPinIdentityAndEveryContractEdit(t *testing.T) {
 		{Mode, "native-permissions-v5", "native-permissions-v6", followUpReadDigest},
 		{WorkspaceWriteMode, "native-permissions-v6", "native-permissions-v7", followUpWriteDigest},
 	} {
-		reference := ReferenceForMode(revision.mode)
-		if reference.Version != revision.version || reference.SHA256 != revision.digest || ContractForMode(revision.mode) == AdvisoryNativeContractForMode(revision.mode) {
+		reference := followUpReference(revision.mode)
+		if reference.Version != revision.version || reference.SHA256 != revision.digest || followUpNativeContract(revision.mode) == AdvisoryNativeContractForMode(revision.mode) {
 			t.Fatalf("follow-up revision identity changed: %+v", reference)
 		}
 		version := contractEdit{old: `"version":"` + revision.frozenVersion + `"`, new: `"version":"` + revision.version + `"`}
-		requireContractEdits(t, revision.mode, AdvisoryNativeContractForMode(revision.mode), ContractForMode(revision.mode), []contractEdit{version, policy, quota})
-		if strings.Contains(ContractForMode(revision.mode), policy.old) {
+		requireContractEdits(t, revision.mode, AdvisoryNativeContractForMode(revision.mode), followUpNativeContract(revision.mode), []contractEdit{version, policy, quota})
+		if strings.Contains(followUpNativeContract(revision.mode), policy.old) {
 			t.Fatalf("%s follow-up contract retains the principal-only clause", revision.mode)
 		}
 	}
 	for mode, digest := range map[string]string{Mode: followUpReadInteractiveDigest, WorkspaceWriteMode: followUpWriteInteractiveDigest} {
-		if reference := interactionReference(mode); reference.Version != "interactive-v7" || reference.SHA256 != digest {
+		if reference := followUpInteractionReference(mode); reference.Version != "interactive-v7" || reference.SHA256 != digest {
 			t.Fatalf("interactive follow-up revision identity changed: %+v", reference)
 		}
 	}

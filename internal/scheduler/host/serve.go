@@ -19,6 +19,7 @@ import (
 // service is the sole writer of host state. Pipe readers and control handlers
 // return immutable messages. Only an exact successful Wait permits replacement.
 type service struct {
+	installation *installationProbe
 	config       Config
 	clock        clockwork.Clock
 	journal      *taskdir.ControlDir
@@ -38,12 +39,12 @@ type service struct {
 }
 
 func Serve(ctx context.Context, config Config) error {
-	return serve(ctx, config, clockwork.NewRealClock())
+	return serve(ctx, config, clockwork.NewRealClock(), os.Stat)
 }
 
-func serve(ctx context.Context, config Config, clock clockwork.Clock) (resultErr error) {
-	if ctx == nil || config.Store == nil || !filepath.IsAbs(config.Executable) || !filepath.IsAbs(config.Directory) || config.Environment == nil {
-		return fmt.Errorf("scheduler host requires an existing root and explicit executable, context, cwd and environment")
+func serve(ctx context.Context, config Config, clock clockwork.Clock, stat func(string) (os.FileInfo, error)) (resultErr error) {
+	if ctx == nil || config.Store == nil || !filepath.IsAbs(config.Executable) || !filepath.IsAbs(config.RunnerExecutable) || !filepath.IsAbs(config.Directory) || config.Environment == nil {
+		return fmt.Errorf("scheduler host requires an existing root and explicit executable, selected runner, context, cwd and environment")
 	}
 	config.Args, config.Environment = slices.Clone(config.Args), slices.Clone(config.Environment)
 	lease, err := acquireServeLease(ctx, config.Store)
@@ -65,6 +66,8 @@ func serve(ctx context.Context, config Config, clock clockwork.Clock) (resultErr
 	serverCtx, cancelServer := context.WithCancel(context.WithoutCancel(ctx))
 	s.cancelServer = cancelServer
 	go s.endpoint.accept(serverCtx, s.epoch, s.requests, s.serverDone)
+	s.installation = newInstallationProbe(config, stat)
+	s.installation.start()
 	return s.run(ctx)
 }
 

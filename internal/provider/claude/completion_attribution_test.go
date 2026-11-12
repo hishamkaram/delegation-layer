@@ -386,7 +386,7 @@ func TestAttributedContractVersionsCompletionPolicy(t *testing.T) {
 			t.Fatalf("pre-attribution digest changed: %+v want=%s", test.ref, test.want)
 		}
 	}
-	if ReferenceForMode(Mode).Version != "native-permissions-v6" || ReferenceForMode(WorkspaceWriteMode).Version != "native-permissions-v7" ||
+	if ReferenceForMode(Mode).Version != "native-permissions-v7" || ReferenceForMode(WorkspaceWriteMode).Version != "native-permissions-v8" ||
 		scopedReference(Mode).Version != "native-permissions-v4" || scopedReference(WorkspaceWriteMode).Version != "native-permissions-v5" {
 		t.Fatalf("attributed versions=%+v %+v", ReferenceForMode(Mode), ReferenceForMode(WorkspaceWriteMode))
 	}

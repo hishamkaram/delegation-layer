@@ -90,7 +90,7 @@ func assertAcceptedResponseWrite(t *testing.T, writeFault, wantErr error) {
 	t.Helper()
 	journal := journalFor(t)
 	s := &service{journal: journal, epoch: epochRecord{RootID: "root", Epoch: "0123456789abcdef0123456789abcdef", Sequence: 1, Host: Identity{PID: 1, StartToken: "exact"}}}
-	responses := make(chan wireResponse, 1)
+	responses := make(chan controlResponse, 1)
 	served := make(chan error, 1)
 	request := controlRequest{request: wireRequest{Action: "stop"}, reply: responses, served: served}
 	type result struct {

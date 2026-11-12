@@ -44,8 +44,8 @@ func prepareNativeSuccessorCandidate(request task.TaskRecord, predecessor task.M
 // predicate whose interpretation the current predicate for mode corrects: the
 // pre-attribution revision, the retained unscoped attribution revision, the
 // scoped strict-wire revision, the principal-only advisory revision, and the
-// projection revision sealed before failed-request classification, each of
-// the same mode.
+// projection revision sealed before failed-request classification, and the
+// follow-up revision sealed before authentication diagnosis, each of the same mode.
 func isUpgradableOutputReference(mode string, reference task.PredicateRef) bool {
-	return reference.Equal(projectionReference(mode)) || reference.Equal(advisoryReference(mode)) || reference.Equal(preAttributionReferenceForMode(mode)) || isUnscopedReference(mode, reference) || reference.Equal(scopedReference(mode))
+	return reference.Equal(followUpReference(mode)) || reference.Equal(projectionReference(mode)) || reference.Equal(advisoryReference(mode)) || reference.Equal(preAttributionReferenceForMode(mode)) || isUnscopedReference(mode, reference) || reference.Equal(scopedReference(mode))
 }

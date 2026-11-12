@@ -1,6 +1,9 @@
 package app
 
-import "github.com/hishamkaram/delegation-layer/internal/tasklifecycle"
+import (
+	"github.com/hishamkaram/delegation-layer/internal/task"
+	"github.com/hishamkaram/delegation-layer/internal/tasklifecycle"
+)
 
 func applyTaskObservation(response *Response, observed tasklifecycle.Observation, root string) {
 	fillInspection(response, observed.Inspection)
@@ -69,9 +72,15 @@ func applyRejectedRecovery(response *Response, available *bool) {
 	if response.Status == string(tasklifecycle.ContinuationIdleTimedOut) && response.Continuation != nil && response.Continuation.Resumable {
 		return
 	}
+	if response.Failure != nil && response.Failure.Code != "provider_output_rejected" {
+		return
+	}
 	failure := DispatchFailureResponse{Code: "provider_output_rejected", Stage: "collect", NextAction: "stop_and_report"}
 	if *available {
 		failure.NextAction = "recheck"
+	}
+	if response.Outcome != nil && response.Outcome.Verdict == task.VerdictRejected && response.Outcome.Predicate.Adapter == "claude:print" && task.HasProviderAuthenticationFailure(response.Outcome.Diagnostics) {
+		failure.NextAction = "run_native_provider_login"
 	}
 	response.Failure = &failure
 }

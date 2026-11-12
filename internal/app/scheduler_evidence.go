@@ -92,6 +92,9 @@ func schedulerRejectionCode(outcome *task.OutcomeRecord, attempt *contract.Attem
 		}
 		codes = append(codes, diagnostic.Code)
 	}
+	if task.HasProviderAuthenticationFailure(outcome.Diagnostics) {
+		return contract.EffectiveFailureCode("provider_authentication_failed", attempt)
+	}
 	canonicalCode := "provider_output_rejected"
 	if len(codes) != 0 {
 		sort.Strings(codes)

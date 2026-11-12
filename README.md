@@ -95,6 +95,9 @@ explicit file snapshot. The destination owns supervision and outcomes; a lost
 connection does not authorize another launch. Remote continuation and offline
 recheck are not exposed in the current remote workflow.
 
+Use `schedule health` for occurrence outcomes. `scheduler status` reports host
+and installation readiness; a ready host alone does not prove successful runs.
+
 For recurring work, follow the [scheduler walkthrough](docs/getting-started.md#recurring-tasks)
 to start `delegate scheduler serve` in your own terminal or tmux pane, even
 before saving a definition. Agents and manual commands share the CLI's default

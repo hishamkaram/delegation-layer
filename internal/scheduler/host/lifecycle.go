@@ -146,8 +146,12 @@ func (s *service) fenceStop(ctx context.Context) (bool, error) {
 
 func (s *service) control(ctx context.Context, request controlRequest) (bool, error) {
 	switch request.request.Action {
+	case "health":
+		health := s.installationHealth(ctx)
+		request.reply <- controlResponse{wireResponse: wireResponse{Status: statusWire(s.snapshot())}, health: &health}
+		return false, nil
 	case "status":
-		request.reply <- wireResponse{Status: statusWire(s.snapshot())}
+		request.reply <- controlResponse{wireResponse: wireResponse{Status: statusWire(s.snapshot())}}
 		return false, nil
 	case "stop":
 		committed, err := s.fenceStop(ctx)
@@ -157,7 +161,7 @@ func (s *service) control(ctx context.Context, request controlRequest) (bool, er
 		} else if s.stopIntent.ChildUncertain {
 			response.Code = "identity"
 		}
-		request.reply <- response
+		request.reply <- controlResponse{wireResponse: response}
 		if committed {
 			// H stays held while the bounded handler completes its accepted
 			// response. Server cancellation cannot win its reply select.
@@ -167,7 +171,7 @@ func (s *service) control(ctx context.Context, request controlRequest) (bool, er
 		}
 		return committed, err
 	default:
-		request.reply <- wireResponse{Status: statusWire(s.snapshot()), Code: "invalid_control"}
+		request.reply <- controlResponse{wireResponse: wireResponse{Status: statusWire(s.snapshot()), Code: "invalid_control"}}
 		return false, nil
 	}
 }
@@ -180,7 +184,8 @@ func (s *service) snapshot() Status {
 		child := s.child.identity
 		status.Child = &child
 	}
-	status.Ready = status.State == "ready" && s.child != nil && !s.permanent && !status.StopAccepted
+	status.Ready = false
+	status.HostReady = status.State == "ready" && s.child != nil && !s.permanent && !status.StopAccepted
 	return status
 }
 
@@ -192,6 +197,7 @@ func (s *service) close(ctx context.Context) (closeErr error) {
 		s.readiness.Stop()
 	}
 	closeErr = s.joinStoppedChild()
+	s.joinInstallationProbe()
 	lease, leaseErr := s.awaitStoppedExecution(ctx)
 	closeErr = errors.Join(closeErr, leaseErr)
 	if lease != nil {

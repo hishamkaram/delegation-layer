@@ -34,14 +34,17 @@ type ScheduleSkipResponse struct {
 // ScheduleOccurrenceResponse keeps reservation release separate from the
 // last cached task observation; neither is a fresh liveness observation.
 type ScheduleOccurrenceResponse struct {
-	ScheduleID  string                      `json:"schedule_id"`
-	TaskID      string                      `json:"task_id"`
-	Due         time.Time                   `json:"due"`
-	ArmedAt     time.Time                   `json:"armed_at"`
-	Reservation string                      `json:"reservation"`
-	Release     *ScheduleReleaseResponse    `json:"release,omitempty"`
-	Observation ScheduleObservationResponse `json:"observation"`
-	Failure     *contract.AttemptFailure    `json:"failure,omitempty"`
+	ResultCode       string                      `json:"result_code,omitempty"`
+	ResultStatus     string                      `json:"result_status,omitempty"`
+	ResultObservedAt *time.Time                  `json:"result_observed_at,omitempty"`
+	ScheduleID       string                      `json:"schedule_id"`
+	TaskID           string                      `json:"task_id"`
+	Due              time.Time                   `json:"due"`
+	ArmedAt          time.Time                   `json:"armed_at"`
+	Reservation      string                      `json:"reservation"`
+	Release          *ScheduleReleaseResponse    `json:"release,omitempty"`
+	Observation      ScheduleObservationResponse `json:"observation"`
+	Failure          *contract.AttemptFailure    `json:"failure,omitempty"`
 }
 
 type ScheduleReleaseResponse struct {
@@ -75,6 +78,11 @@ func scheduleOccurrence(item contract.Occurrence) ScheduleOccurrenceResponse {
 	result := ScheduleOccurrenceResponse{
 		ScheduleID: item.ScheduleID, TaskID: item.TaskID, Due: item.Due,
 		ArmedAt: item.ArmedAt, Reservation: "active", Observation: observation, Failure: item.Attempt,
+	}
+	if cached := item.Result; cached != nil {
+		result.ResultCode = cached.Code
+		result.ResultStatus = cached.Verdict
+		result.ResultObservedAt = &cached.ObservedAt
 	}
 	if release := item.Release; release != nil {
 		result.Reservation = "released"
@@ -122,6 +130,9 @@ func writeHumanScheduleHistory(output *strings.Builder, history *ScheduleHistory
 
 func writeHumanScheduleOccurrence(output *strings.Builder, item ScheduleOccurrenceResponse) {
 	fmt.Fprintf(output, "occurrence task_id=%s schedule_id=%s due=%s armed_at=%s reservation=%s\n", item.TaskID, item.ScheduleID, item.Due.Format(time.RFC3339Nano), item.ArmedAt.Format(time.RFC3339Nano), item.Reservation)
+	if item.ResultObservedAt != nil {
+		fmt.Fprintf(output, "result status=%s code=%s observed_at=%s\n", item.ResultStatus, item.ResultCode, item.ResultObservedAt.Format(time.RFC3339Nano))
+	}
 	observation := item.Observation
 	fmt.Fprintf(output, "observation provenance=%s admission=%s liveness=%s publication=%s", observation.Provenance, observation.Admission, observation.Liveness, observation.Publication)
 	if observation.ObservedAt != nil {

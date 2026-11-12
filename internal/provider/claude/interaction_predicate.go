@@ -37,10 +37,9 @@ func advisoryInteractionContract() string {
 	return applyContractEdits(scopedInteractionContract, advisoryInteractionEdits())
 }
 
-// interactionContract binds fresh interactive tasks to the same follow-up
-// completion reducer, projection, and wire as print evidence, stated inline;
-// only question transport and closure differ. Its interactive-v7 text is the
-// frozen interactive-v6 bytes with followUpInteractionEdits applied.
+// interactionContract preserves the interactive-v7 follow-up policy for
+// replay. Its text is the frozen interactive-v6 bytes with
+// followUpInteractionEdits applied; the authentication revision derives from it.
 func interactionContract() string {
 	return applyContractEdits(advisoryInteractionContract(), followUpInteractionEdits())
 }
@@ -79,7 +78,8 @@ type interactionInterpreter struct {
 	historical bool
 	reference  *task.PredicateRef
 	// completion is the reducer bound to this revision's identity: the current
-	// revision projects follow-ups, interactive-v6 keeps its principal-only
+	// revision diagnoses authentication and projects follow-ups, interactive-v7
+	// keeps its follow-up policy, interactive-v6 keeps its principal-only
 	// advisory policy, interactive-v5 keeps its scoped attribution,
 	// interactive-v4 its unscoped attribution, and the zero value is the frozen
 	// single-result policy.
@@ -87,11 +87,11 @@ type interactionInterpreter struct {
 }
 
 func newInteractionInterpreter(mode string) predicate.Interpreter {
-	return interactionInterpreter{mode: mode, completion: advisoryFollowUpCompletion}
+	return interactionInterpreter{mode: mode, completion: authenticationFollowUpCompletion}
 }
 
 func interactionReference(mode string) task.PredicateRef {
-	return task.PredicateRef{Adapter: Provider, Mode: mode, Version: "interactive-v7", SHA256: task.ComputeSHA256([]byte(interactionContract() + mode + "\n"))}
+	return task.PredicateRef{Adapter: Provider, Mode: mode, Version: "interactive-v8", SHA256: task.ComputeSHA256([]byte(authenticationInteractionContract() + mode + "\n"))}
 }
 
 // advisoryInteractionReference is the frozen interactive-v6 revision, which

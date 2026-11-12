@@ -30,3 +30,18 @@ func TestHostWireStatusPreservesNativeRetryTimestamp(t *testing.T) {
 		t.Fatal("untrusted retry timestamp accepted")
 	}
 }
+
+func TestHostWireDecodeRetainsLifecycleReadinessWithoutInstallationReadiness(t *testing.T) {
+	wire := statusWire(Status{State: "ready", HostReady: true})
+	if !wire.Ready {
+		t.Fatal("legacy status lost lifecycle readiness")
+	}
+	status, err := wire.value()
+	if err != nil || !status.HostReady || status.Ready || status.Health != nil {
+		t.Fatalf("unverified wire reply claimed public readiness: %+v %v", status, err)
+	}
+	observed := applyInstallationHealth(status, InstallationHealth{State: "available"})
+	if !observed.HostReady || !observed.Ready {
+		t.Fatalf("available installation lost lifecycle readiness: %+v", observed)
+	}
+}

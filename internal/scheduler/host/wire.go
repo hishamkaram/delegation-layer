@@ -22,7 +22,7 @@ type wireStatus struct {
 
 func statusWire(status Status) wireStatus {
 	wire := wireStatus{
-		State: status.State, Epoch: status.Epoch, Attempt: status.Attempt, Ready: status.Ready, Fault: status.Fault,
+		State: status.State, Epoch: status.Epoch, Attempt: status.Attempt, Ready: status.HostReady, Fault: status.Fault,
 		LastError: status.LastError, StopAccepted: status.StopAccepted, Protocol: status.Protocol,
 		BuildID: status.BuildID, Host: status.Host, Child: status.Child,
 	}
@@ -34,7 +34,7 @@ func statusWire(status Status) wireStatus {
 
 func (wire wireStatus) value() (Status, error) {
 	status := Status{
-		State: wire.State, Epoch: wire.Epoch, Attempt: wire.Attempt, Ready: wire.Ready, Fault: wire.Fault,
+		State: wire.State, Epoch: wire.Epoch, Attempt: wire.Attempt, HostReady: wire.Ready, Fault: wire.Fault,
 		LastError: wire.LastError, StopAccepted: wire.StopAccepted, Protocol: wire.Protocol,
 		BuildID: wire.BuildID, Host: wire.Host, Child: wire.Child,
 	}

@@ -35,7 +35,7 @@ func recoverStoppedFence(ctx context.Context, query Query, epoch epochRecord, re
 	recovered, fenceErr := awaitStoppedFence(ctx, query.Store, epoch)
 	if errors.Is(fenceErr, fs.ErrNotExist) && task.AllErrorCauses(fenceErr, func(cause error) bool { return errors.Is(cause, fs.ErrNotExist) }) {
 		if noHostConnection(requestErr) {
-			observed.Status.State, observed.Status.LastError = "no_host_observed", ""
+			observed.Status.State, observed.Status.LastError, observed.Status.HostReady = "no_host_observed", "", false
 		}
 		return observed, stopReplyError(requestErr)
 	}
@@ -155,6 +155,6 @@ func finishStop(ctx context.Context, result StopResult, requestErr error) (StopR
 			return result, errors.Join(ErrPending, requestErr, err)
 		}
 	}
-	result.Stopped, result.Status.Ready, result.Status.State = true, false, "stopped"
+	result.Stopped, result.Status.Ready, result.Status.HostReady, result.Status.State = true, false, false, "stopped"
 	return result, requestErr
 }
