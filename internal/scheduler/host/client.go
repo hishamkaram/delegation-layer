@@ -23,7 +23,13 @@ func Observe(ctx context.Context, query Query) (Status, error) {
 	if epoch.Kind == foregroundController {
 		return observeForeground(ctx, query, epoch)
 	}
-	response, err := contact(ctx, query, epoch, "status")
+	response, err := exchange[wireHealthResponse](ctx, query, epoch, "health")
+	if err == nil {
+		err = validateResponse(response.Status, epoch)
+	}
+	if err == nil && response.Code != "" && response.Code != "invalid_control" {
+		err = responseError(response.Code)
+	}
 	if err != nil {
 		status := Status{State: "degraded", Epoch: epoch.Epoch, Protocol: epoch.Protocol, BuildID: epoch.BuildID, Host: epoch.Host, LastError: "host_unreachable"}
 		if noHostConnection(err) {
@@ -36,7 +42,8 @@ func Observe(ctx context.Context, query Query) (Status, error) {
 	if err != nil {
 		return Status{State: "degraded", LastError: "host_unreachable"}, errors.Join(ErrIdentity, err)
 	}
-	return status, nil
+	health, healthErr := installationHealthFromResponse(response)
+	return applyInstallationHealth(status, health), healthErr
 }
 
 // Stop captures one exact generation and never redirects its request to a

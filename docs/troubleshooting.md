@@ -71,3 +71,38 @@ Observe the same task/root using
 observation fault. Preserve the warning and follow the same task-observation
 guidance. Neither message authorizes manual state deletion, inferred recovery,
 or a new provider launch.
+
+## Scheduler installation and upgrade observations
+
+After an upgrade, inspect `delegate scheduler status --json`. `host_ready` is
+only lifecycle readiness; `ready` additionally requires available installation
+health. Follow the reported action to inspect or restore the intended installed
+Delegate/runner pair, then restart the foreground scheduler. Observation never
+repairs files, restarts the host or replays missed occurrences. Per-schedule
+outcomes remain in `schedule health` and history.
+
+A pending metadata probe returns unknown health. If kernel filesystem I/O is
+permanently blocked, stopping can remain pending indefinitely while the scheduler host keeps its
+ownership lock. The observation timeout does not cancel kernel I/O. Do not delete state
+or launch a competing host to bypass that ownership.
+
+`delegate doctor --json` reports advisory scheduler compatibility separately
+from top-level issues/exits. `newer_schema` requires a compatible newer build:
+downgrading the executable does not reverse a database migration. Doctor never
+migrates, repairs or creates scheduler storage. Preserve the existing state.
+
+## Unattended Claude authentication
+
+A validated structured `provider_authentication_failed` diagnostic asks for
+native provider login; the task still has `provider_output_rejected`. Follow
+`run_native_provider_login` in the intended native context. Delegate does not
+perform login or automatically retry. Unknown output remains generic rather
+than guessing authentication from arbitrary text.
+
+On macOS, launchd/SSH processes can have different Keychain access from a GUI
+terminal. Successful terminal login does not prove unattended access or which
+account a provider fallback selected. Delegate does not copy/inject credentials,
+change Keychain access, or offer a token-login workaround. Establish the native
+provider login/access in the host's intended context; preserve task evidence if
+it remains unavailable. Authentication diagnostics do not identify an account,
+credential source or the cause of a particular Keychain denial.

@@ -31,6 +31,8 @@ func Registration() commonprovider.Registration {
 		PrepareSuccessor: PrepareSuccessorCandidate,
 		Interpreters: []predicate.Interpreter{
 			NewInterpreter(Mode), NewInterpreter(WorkspaceWriteMode),
+			newFollowUpInterpreter(Mode), newFollowUpInterpreter(WorkspaceWriteMode),
+			newFollowUpInteractionInterpreter(Mode), newFollowUpInteractionInterpreter(WorkspaceWriteMode),
 			newHistoricalNativeInterpreter(Mode),
 			newHistoricalNativeInterpreter(WorkspaceWriteMode),
 			newLegacyNativeInterpreter(),

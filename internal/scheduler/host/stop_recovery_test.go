@@ -129,3 +129,17 @@ func TestHostAcknowledgedStopSurvivesReadbackFailure(t *testing.T) {
 		t.Fatalf("validated acknowledgement was erased by read failure: %+v %v", result, err)
 	}
 }
+
+func TestRefusedStopRetainsLifecycleReadinessWithoutClaimingInstallationHealth(t *testing.T) {
+	config := testConfig(t, "hold")
+	query := queryFor(t, config)
+	if err := query.Store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	epoch := epochRecord{RootID: config.Store.RootID, Epoch: "0123456789abcdef0123456789abcdef", Host: Identity{PID: 1, StartToken: "exact"}}
+	response := wireResponse{Status: wireStatus{State: "ready", Ready: true, Epoch: epoch.Epoch}}
+	result, err := recoverStoppedFence(t.Context(), query, epoch, response, errors.New("stop refused"))
+	if err == nil || result.Accepted || result.Status.Ready || !result.Status.HostReady || result.Status.Health != nil {
+		t.Fatalf("refused stop confused lifecycle and installation readiness: %+v %v", result, err)
+	}
+}

@@ -92,7 +92,7 @@ func (c *channel) stopSending() error {
 	return c.writeErr
 }
 
-func readFrame[T childFrame | wireRequest | wireResponse](input *bufio.Reader, frame *T) error {
+func readFrame[T childFrame | wireRequest | wireResponse | wireHealthResponse](input *bufio.Reader, frame *T) error {
 	var data []byte
 	for len(data) <= maxFrameSize {
 		part, err := input.ReadSlice('\n')
@@ -111,7 +111,7 @@ func readFrame[T childFrame | wireRequest | wireResponse](input *bufio.Reader, f
 	return fmt.Errorf("%w: oversized host frame", task.ErrControlRecordTooBig)
 }
 
-func writeFrame[T childFrame | wireRequest | wireResponse](writer io.Writer, frame T) error {
+func writeFrame[T childFrame | wireRequest | wireResponse | wireHealthResponse](writer io.Writer, frame T) error {
 	data, err := task.MarshalCanonical(frame)
 	if err != nil {
 		return err

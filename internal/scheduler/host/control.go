@@ -28,9 +28,21 @@ type wireResponse struct {
 	Code     string     `json:"code,omitempty"`
 }
 
+type wireHealthResponse struct {
+	Status   wireStatus          `json:"status"`
+	Accepted bool                `json:"accepted"`
+	Code     string              `json:"code,omitempty"`
+	Health   *InstallationHealth `json:"health,omitempty"`
+}
+
+type controlResponse struct {
+	wireResponse
+	health *InstallationHealth
+}
+
 type controlRequest struct {
 	request wireRequest
-	reply   chan wireResponse
+	reply   chan controlResponse
 	served  <-chan error
 }
 
@@ -56,7 +68,7 @@ func serveConnection(ctx context.Context, conn *net.UnixConn, epoch epochRecord,
 	if err := authenticateRequest(conn, epoch, request); err != nil {
 		return err
 	}
-	reply := make(chan wireResponse, 1)
+	reply := make(chan controlResponse, 1)
 	served = make(chan error, 1)
 	select {
 	case requests <- controlRequest{request: request, reply: reply, served: served}:
@@ -65,13 +77,27 @@ func serveConnection(ctx context.Context, conn *net.UnixConn, epoch epochRecord,
 	}
 	select {
 	case response := <-reply:
-		return writeFrame(conn, response)
+		if request.Action == "health" {
+			return writeFrame(conn, wireHealthResponse{Status: response.Status, Accepted: response.Accepted, Code: response.Code, Health: response.health})
+		}
+		return writeFrame(conn, response.wireResponse)
 	case <-ctx.Done():
 		return ctx.Err()
 	}
 }
 
-func contact(ctx context.Context, query Query, epoch epochRecord, action string) (response wireResponse, resultErr error) {
+func contact(ctx context.Context, query Query, epoch epochRecord, action string) (wireResponse, error) {
+	response, err := exchange[wireResponse](ctx, query, epoch, action)
+	if err == nil {
+		err = validateResponse(response.Status, epoch)
+	}
+	if err == nil && response.Code != "" {
+		err = responseError(response.Code)
+	}
+	return response, err
+}
+
+func exchange[T wireResponse | wireHealthResponse](ctx context.Context, query Query, epoch epochRecord, action string) (response T, resultErr error) {
 	conn, err := (&net.Dialer{}).DialContext(ctx, "unix", epoch.Endpoint)
 	if err != nil {
 		return response, err
@@ -102,18 +128,11 @@ func contact(ctx context.Context, query Query, epoch epochRecord, action string)
 	if err = writeFrame(conn, request); err != nil {
 		return response, errors.Join(err, ctx.Err())
 	}
-	var candidate wireResponse
+	var candidate T
 	if err = readFrame(bufio.NewReader(conn), &candidate); err != nil {
 		return response, errors.Join(err, ctx.Err())
 	}
-	if err = validateResponse(candidate.Status, epoch); err != nil {
-		return response, err
-	}
-	response = candidate
-	if response.Code != "" {
-		return response, responseError(response.Code)
-	}
-	return response, nil
+	return candidate, nil
 }
 
 func authenticateRequest(conn *net.UnixConn, epoch epochRecord, request wireRequest) error {

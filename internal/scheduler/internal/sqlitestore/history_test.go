@@ -3,6 +3,7 @@ package sqlitestore
 import (
 	"errors"
 	"io/fs"
+	"strings"
 	"testing"
 
 	"github.com/hishamkaram/delegation-layer/internal/scheduler/contract"
@@ -133,4 +134,32 @@ func TestHistoryRefusesTwoEntriesAtOneEndpoint(t *testing.T) {
 	if _, err := store.History(testContext(t), contract.HistoryPage{ScheduleID: testScheduleID, Limit: contract.MaxPageLimit}); !errors.Is(err, task.ErrInvariantFault) {
 		t.Fatalf("duplicate endpoint err=%v, want ErrInvariantFault", err)
 	}
+}
+
+func TestHistoryReadsExistingResultCacheAndClonesIt(t *testing.T) {
+	store, _ := mixedHistory(t)
+	fact := contract.ResultFact{TaskID: testTaskID, ObservedAt: at(6000), Verdict: "rejected", Code: "provider_authentication_failed", OutcomeSHA256: strings.Repeat("a", 64)}
+	if err := store.RecordResult(testContext(t), fact); err != nil {
+		t.Fatal(err)
+	}
+	page, err := store.History(testContext(t), contract.HistoryPage{ScheduleID: testScheduleID, Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range page.Entries {
+		o, ok := entry.Occurrence()
+		if !ok || o.TaskID != fact.TaskID {
+			continue
+		}
+		if o.Result == nil || *o.Result != fact {
+			t.Fatalf("cache=%+v want %+v", o.Result, fact)
+		}
+		o.Result.Code = "changed"
+		again, _ := entry.Occurrence()
+		if again.Result.Code != fact.Code {
+			t.Fatal("history cache aliases caller")
+		}
+		return
+	}
+	t.Fatal("result occurrence missing")
 }

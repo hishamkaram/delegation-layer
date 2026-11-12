@@ -71,7 +71,7 @@ a store, modify files, or probe supervisor liveness. It does not accept custom
 `--runner` or `--pueue-config` modes; ordinary dispatch still supports those modes.
 
 JSON has `schema_version: 1`, `command: "doctor"`, `root`, `installation`,
-`supervisor`, optional `provider`, and bounded `issues` with `code`, `area` and
+`supervisor`, advisory `scheduler`, optional `provider`, and bounded `issues` with `code`, `area` and
 `next_step`. Preserve the process exit separately:
 
 | Observation | Meaning |
@@ -81,6 +81,7 @@ JSON has `schema_version: 1`, `command: "doctor"`, `root`, `installation`,
 | Installation/role statuses | Installation: `observed`, `blocked`, `observation_incomplete`; roles: `available`, `missing`, `unusable`, `observation_incomplete`. |
 | `supervisor.binding` | `not_initialized`, `present`, `binding_absent`, or `observation_incomplete`; persisted binding observation only. Absence does not prove an existing root is unused. |
 | `supervisor.liveness`, `active_work` | Always `not_checked`, `unknown`. |
+| `scheduler` | `verification: read_only`; compatibility is `absent`, `compatible`, `migration_required`, `newer_schema`, `incompatible`, or `observation_incomplete`, with its own bounded `issues`. It never creates/migrates storage or recovers a journal. Scheduler advisories do not change top-level issues or exits. |
 | `provider` | ID, executable and `static_ready`, `blocked`, or `observation_incomplete`; `verification: static_preflight`, `authentication: unknown`. |
 | Exit 0 | Requested observations complete, with no observed blocker. Does not prove runtime compatibility, authentication or task success. |
 | Exit 2 | Invalid request or reliably observed missing/unusable required bundle/provider. |
@@ -383,6 +384,13 @@ and follow [result handling](result-handling.md#schedule-definition-and-host-res
 normal stderr behavior. A valid rule with no future occurrence in the supported
 timestamp range has a distinct range error, not a claim of permanent invalidity.
 
+History occurrence fields `result_code`, `result_status` and
+`result_observed_at` expose the existing validated-result cache. They are
+separate from cached admission/liveness observations and occurrence admission
+failures; absent fields mean unobserved, not success. Reading history does not
+reconcile that cache or open each task. `schedule execution` and `collect` can
+provide more recent evidence for a particular task.
+
 ### Schedule reliability
 
 `schedule health` is a passive stored projection, separate from scheduler-host
@@ -406,7 +414,7 @@ A durable claim allows at most one launch attempt per alerted streak and one
 recovery notice. A crash may lose an alert; uncertain attempts are not retried.
 Historical reconciliation does not replay old alert episodes. Hook failures,
 timeouts or helper uncertainty are recorded independently and never change task
-results. The callback helper uses cooperative containment; missing completion
+results. The managed callback runner is selected through the installed-runner resolver. Missing/unusable runner selection records `unavailable`, without invoking the callback or replaying a claimed notification. The callback helper uses cooperative containment; missing completion
 is not proof that escaped descendants closed.
 
 Quota holds are separate mutable operational policy, disabled by default for
@@ -557,7 +565,24 @@ If the host, terminal/tmux pane or machine stops, automatic recovery ends; the
 user must run serve again.
 
 `scheduler status` is passive: it does not start, migrate, repair or clean
-anything. It observes starting, ready, backoff, degraded, stopping or stopped
+anything. `scheduler.host_ready` describes lifecycle readiness, while `scheduler.ready`
+also requires `scheduler.health.state: available`. Health observes the running
+host's selected Delegate and managed runner using native file identity, mode,
+size and modification time; it is not executable-content or version attestation.
+Missing, unusable or changed files degrade an otherwise-ready host without
+setting `fault`. Unknown/unsupported health also cannot confirm readiness;
+older hosts remain stoppable through their unchanged control protocol.
+Follow `repair_installation_and_restart`, `inspect_installation_health` or
+`restart_scheduler` guidance. Restore the intended installed pair before
+restarting it; status never performs that repair. Valid PATH-selected Pueue
+installations remain supported.
+
+The health observation has a 100ms wait bound and one owned filesystem probe.
+Controls remain responsive while a probe is pending. A permanently blocked
+kernel I/O call can keep the host and its lease pending indefinitely: timeout
+bounds observation, not the I/O itself. Stop completion still requires canonical
+cleanup and host absence; do not start a competing host or delete its state.
+ It observes starting, ready, backoff, degraded, stopping or stopped
 state, or a compatibility runtime's `foreground` generation, and available
 attempt, bounded diagnostic and retry information. Optional
 `scheduler.fault: true` is the host owner's permanent fault decision; degraded state or

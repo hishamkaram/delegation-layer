@@ -78,6 +78,23 @@ func TestSchedulerHookTimeoutDoesNotJoinInheritedOutput(t *testing.T) {
 	}
 }
 
+func TestSchedulerHookMissingRunnerRefusesBeforeCallback(t *testing.T) {
+	directory := t.TempDir()
+	callback := filepath.Join(directory, "notify")
+	if err := os.WriteFile(callback, []byte("#!/bin/sh\n: > \"$0.called\"\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	missing := filepath.Join(directory, "private-missing-runner")
+	hooks := schedulerHooks{dependencies: Dependencies{RunnerExecutable: missing}}
+	got, err := hooks.RunHook(t.Context(), contract.FailureHook{Executable: callback, Threshold: 1, Timeout: time.Second}, hookNotice())
+	if got != "unavailable" || err == nil || strings.Contains(err.Error(), directory) {
+		t.Fatalf("missing runner result %q, error %v", got, err)
+	}
+	if _, statErr := os.Stat(callback + ".called"); !os.IsNotExist(statErr) {
+		t.Fatalf("callback ran before runner resolution: %v", statErr)
+	}
+}
+
 func requiredHookTestExecutable(t *testing.T, name string) string {
 	t.Helper()
 	path, err := exec.LookPath(name)

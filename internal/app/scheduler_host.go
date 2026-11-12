@@ -56,7 +56,8 @@ func serveScheduler(ctx context.Context, a Arguments, deps Dependencies) (result
 	if a.Runner != "" {
 		return failed(response, errors.New("scheduler serve requires the colocated managed delegate-run; omit --runner"), 2)
 	}
-	if _, err = installation.ResolveRunner("", deps.RunnerExecutable); err != nil {
+	runner, err := installation.ResolveRunner("", deps.RunnerExecutable)
+	if err != nil {
 		return failed(response, err, 1)
 	}
 	self, err := schedulerExecutable()
@@ -81,7 +82,7 @@ func serveScheduler(ctx context.Context, a Arguments, deps Dependencies) (result
 		args = append(args, "--pueue-config", a.PueueConfig)
 	}
 	err = host.Serve(ctx, host.Config{
-		Store: store, Executable: self, Args: args,
+		Store: store, Executable: self, RunnerExecutable: runner, Args: args,
 		Environment: deps.Environment, Directory: root,
 	})
 	if err == nil {
@@ -103,10 +104,22 @@ func schedulerHostResultCode(err error) int {
 }
 
 func projectSchedulerStatus(observed host.Status) SchedulerResponse {
-	return SchedulerResponse{
+	result := SchedulerResponse{
+		HostReady: observed.HostReady, Health: observed.Health,
 		State: observed.State, Epoch: observed.Epoch, Attempt: observed.Attempt,
 		Ready: observed.Ready, Fault: observed.Fault, NextRetryAt: observed.NextRetryAt, LastError: observed.LastError,
 	}
+	if observed.HostReady && observed.Health != nil && !observed.Fault && !observed.StopAccepted {
+		switch observed.Health.State {
+		case "degraded":
+			result.NextAction = "repair_installation_and_restart"
+		case "unsupported":
+			result.NextAction = "restart_scheduler"
+		case "unknown":
+			result.NextAction = "inspect_installation_health"
+		}
+	}
+	return result
 }
 
 func controlScheduler(ctx context.Context, a Arguments, deps Dependencies) (result commandResult) {

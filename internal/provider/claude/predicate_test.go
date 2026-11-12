@@ -20,7 +20,7 @@ const (
 
 func TestReferenceBindsImmutableContract(t *testing.T) {
 	ref := Reference()
-	if ref.Adapter != Provider || ref.Mode != Mode || ref.Version != predicateVersion || ref.SHA256 != ContractDigest() {
+	if ref.Adapter != Provider || ref.Mode != Mode || ref.Version != authenticationPredicateVersion || ref.SHA256 != ContractDigest() {
 		t.Fatalf("reference=%+v", ref)
 	}
 	if !strings.HasSuffix(Contract(), "\n") || task.ComputeSHA256([]byte(Contract())) != ref.SHA256 {
@@ -86,7 +86,7 @@ func TestRelaxedRuntimeProbeGetsNewPredicateRevisions(t *testing.T) {
 func TestWorkspaceWriteReferenceRevisionsPreserveAcceptEditsContract(t *testing.T) {
 	current := WorkspaceWriteReference()
 	historical := legacyNativeReferenceForMode(WorkspaceWriteMode)
-	if current.Equal(historical) || current.Version != workspaceWritePredicateVersion || historical.Version != legacyNativeWorkspaceWritePredicateVersion {
+	if current.Equal(historical) || current.Version != authenticationWorkspaceWritePredicateVersion || historical.Version != legacyNativeWorkspaceWritePredicateVersion {
 		t.Fatalf("workspace-write references were not versioned: current=%+v historical=%+v", current, historical)
 	}
 	if !strings.Contains(WorkspaceWriteContract(), "permissionMode=bypassPermissions") || !strings.Contains(nativeWorkspaceWriteContractV1, "permissionMode=acceptEdits") {

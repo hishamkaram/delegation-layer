@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,6 +12,7 @@ import (
 	admissioncore "github.com/hishamkaram/delegation-layer/internal/admission"
 	"github.com/hishamkaram/delegation-layer/internal/config"
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
+	"github.com/hishamkaram/delegation-layer/internal/scheduler"
 	"github.com/hishamkaram/delegation-layer/internal/supervisor/installation"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/tasklifecycle"
@@ -25,8 +27,16 @@ type DoctorReport struct {
 	Root          DoctorRoot         `json:"root"`
 	Installation  DoctorInstallation `json:"installation"`
 	Supervisor    DoctorSupervisor   `json:"supervisor"`
+	Scheduler     DoctorScheduler    `json:"scheduler"`
 	Provider      *DoctorProvider    `json:"provider,omitempty"`
 	Issues        []DoctorIssue      `json:"issues"`
+}
+
+// DoctorScheduler is advisory; its issues never change doctor exit policy.
+type DoctorScheduler struct {
+	Compatibility scheduler.Compatibility `json:"compatibility"`
+	Verification  string                  `json:"verification"`
+	Issues        []DoctorIssue           `json:"issues"`
 }
 
 type DoctorRoot struct {
@@ -93,6 +103,7 @@ func observeDoctor(a Arguments, deps Dependencies, self string, selfErr error) (
 	observation := doctorObservation{report: report}
 	observation.installation(self, selfErr)
 	observation.root(a.Root)
+	observation.scheduler(deps)
 	if a.Provider != "" {
 		observation.provider(a, deps)
 	}
@@ -222,6 +233,10 @@ func writeDoctorHuman(w io.Writer, report DoctorReport) error {
 	if report.Provider != nil {
 		fmt.Fprintf(&output, "provider=%s status=%s authentication=%s\n", report.Provider.ID, report.Provider.Status, report.Provider.Authentication)
 	}
+	fmt.Fprintf(&output, "scheduler compatibility=%s verification=%s\n", report.Scheduler.Compatibility, report.Scheduler.Verification)
+	for _, issue := range report.Scheduler.Issues {
+		fmt.Fprintf(&output, "%s: %s; %s\n", issue.Area, issue.Code, issue.NextStep)
+	}
 	for _, issue := range report.Issues {
 		fmt.Fprintf(&output, "%s: %s; %s\n", issue.Area, issue.Code, issue.NextStep)
 	}
@@ -237,4 +252,28 @@ func doctorProviderNextStep(reason string) string {
 	default:
 		return "Check the selected provider installation, workspace and required provider options; live authentication remains unknown."
 	}
+}
+
+func (o *doctorObservation) scheduler(deps Dependencies) {
+	compatibility := scheduler.CompatibilityObservationIncomplete
+	if o.report.Root.Path != "" && o.report.Root.Status != "observation_incomplete" {
+		compatibility = scheduler.ObserveCompatibility(context.Background(), o.report.Root.Path, deps.storeDependencies().registry())
+	}
+	observed := DoctorScheduler{Compatibility: compatibility, Verification: "read_only", Issues: []DoctorIssue{}}
+	var next string
+	switch compatibility {
+	case scheduler.CompatibilityAbsent, scheduler.CompatibilityCompatible:
+	case scheduler.CompatibilityMigrationRequired:
+		next = "Use a compatible Delegate scheduler owner to migrate this database before using scheduler commands."
+	case scheduler.CompatibilityNewerSchema:
+		next = "Use a Delegate build that supports this scheduler database; downgrading does not reverse migrations."
+	case scheduler.CompatibilityIncompatible:
+		next = "Inspect the scheduler database identity, schema and journal mode with its owning Delegate installation; doctor does not repair it."
+	case scheduler.CompatibilityObservationIncomplete:
+		next = "Retry when scheduler metadata is accessible and no recovery or exclusive writer blocks this read; doctor does not recover journals."
+	}
+	if next != "" {
+		observed.Issues = append(observed.Issues, DoctorIssue{Area: "scheduler", Code: string(compatibility), NextStep: next})
+	}
+	o.report.Scheduler = observed
 }

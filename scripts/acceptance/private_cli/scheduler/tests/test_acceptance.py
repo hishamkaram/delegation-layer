@@ -89,8 +89,10 @@ elif action == "serve":
     (root / "started").write_text(json.dumps({"pid": os.getpid(), "sid": os.getsid(0)}))
     print("finite foreground fixture", flush=True)
     print("private diagnostic", file=sys.stderr, flush=True)
-    expires = time.monotonic() + 5
-    while not (root / "release").exists() and time.monotonic() < expires:
+    # The test owns the release barrier and bounded Wait. A wall-clock exit
+    # races retention assertions on loaded hosts; parent loss still closes it.
+    owner = int(os.environ["DELEGATE_SCHEDULER_FIXTURE_OWNER_PID"])
+    while not (root / "release").exists() and os.getppid() == owner:
         time.sleep(0.01)
     sys.exit(0)
 elif action == "status":
@@ -124,7 +126,8 @@ class SchedulerAcceptanceTests(unittest.TestCase):
         self.addCleanup(self.release_tokens)
         self.state = self.base / "state"
         self.state.mkdir()
-        self.lifetime.env = {"HOME": str(self.base / "home"), "PATH": str(self.base / "provider-bin") + ":/usr/bin:/bin"}
+        self.lifetime.env = {"HOME": str(self.base / "home"), "PATH": str(self.base / "provider-bin") + ":/usr/bin:/bin",
+                             "DELEGATE_SCHEDULER_FIXTURE_OWNER_PID": str(os.getpid())}
 
     def release_tokens(self):
         token = self.lifetime.capture_token

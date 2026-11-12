@@ -72,8 +72,10 @@ is introduced. Provider accounts and native settings remain provider-owned.
 
 `internal/app/doctor.go` composes installed-role filesystem observations,
 resolved-root and persisted-binding reads, and optional static admission checks.
-It does not open/init task storage, probe supervisor liveness or enter the task
-launch/publication lifecycle. The existing component owners and task sequence
+It reads existing scheduler compatibility through the scheduler storage owner
+without initializing/mutating storage, probing supervisor liveness or entering
+the task launch/publication lifecycle. Scheduler findings stay advisory and
+separate from the installer-facing top-level issues/exit policy. The existing component owners and task sequence
 therefore remain unchanged in the diagrams above.
 
 ## Guarded connector boundary
@@ -574,7 +576,12 @@ exit `3` without a top-level error; an owner-derived permanent
 ID. The host owns that fault decision; CLI projections do not infer it from
 diagnostic strings or degraded state. These commands do not start a detached
 host or reset an existing cooldown. Passive `scheduler status` observes the host
-without spawning, migrating, repairing or cleaning anything.
+without spawning, migrating, repairing or cleaning anything. A separate
+health action preserves the legacy status/stop wire contract. The host owns one
+metadata probe of its original selected Delegate/runner and derives installation
+readiness without changing its lifecycle fault/retry authority. Public
+`host_ready` retains the lifecycle fact; `ready` also requires available health.
+Unknown health never proves readiness, and executable contents are never read.
 
 Stop durably fences stopped intent and ends admission. H remains held and the
 host keeps authenticated status/stop responsive while joining its child and
@@ -584,7 +591,10 @@ It then finishes accepted controls and releases E before H. Completed stop
 requires the validated witness and exact host absence; host death before the
 witness remains accepted but pending. A validated authenticated acceptance
 survives a later readback error, alongside that error. Timeout is not completed
-shutdown. Independent tasks keep their owners.
+shutdown. The host also joins its single metadata probe while servicing
+controls. A blocked kernel filesystem call can retain H indefinitely; the
+observation timeout does not cancel that I/O or authorize early lease release.
+Independent tasks keep their owners.
 
 Child crashes can recover while the host lives. Loss of the host/pane or reboot
 requires a new explicit user start. The lifetime guard recognizes an explicit

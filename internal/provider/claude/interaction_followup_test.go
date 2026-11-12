@@ -70,7 +70,7 @@ func TestFrozenInteractiveV6ReplaysLiveShapedTracePrincipalOnly(t *testing.T) {
 			t.Fatalf("%s interactive-v6 replay changed: %+v answer=%q", mode, got, answer)
 		}
 		requireInteractiveRecoveryOwnership(t, registry, mode)
-		if interactionCompletionPolicy(mode, interactionReference(mode)) != advisoryFollowUpCompletion ||
+		if interactionCompletionPolicy(mode, interactionReference(mode)) != authenticationFollowUpCompletion ||
 			interactionCompletionPolicy(mode, advisoryInteractionReference(mode)) != advisoryScopedCompletion {
 			t.Fatalf("%s live completion policy binding changed", mode)
 		}

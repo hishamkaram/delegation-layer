@@ -30,7 +30,7 @@ func runtimeRequirementsForRequest(request task.TaskRecord) commonprovider.Runti
 // print revisions were admitted with the relaxed probe. Probe eligibility is
 // independent of recovery: none is a recheck source.
 func runtimeRequirementsForPredicate(request task.TaskRecord, reference task.PredicateRef) commonprovider.RuntimeCapability {
-	if reference.Equal(ReferenceForMode(request.Mode)) || reference.Equal(projectionReference(request.Mode)) || reference.Equal(advisoryReference(request.Mode)) ||
+	if reference.Equal(followUpReference(request.Mode)) || reference.Equal(followUpInteractionReference(request.Mode)) || reference.Equal(ReferenceForMode(request.Mode)) || reference.Equal(projectionReference(request.Mode)) || reference.Equal(advisoryReference(request.Mode)) ||
 		reference.Equal(scopedReference(request.Mode)) || reference.Equal(preAttributionReferenceForMode(request.Mode)) ||
 		isUnscopedReference(request.Mode, reference) || reference.Equal(interactionReference(request.Mode)) || reference.Equal(advisoryInteractionReference(request.Mode)) ||
 		reference.Equal(scopedInteractionReference(request.Mode)) ||

@@ -117,6 +117,9 @@ func claudeRejectionDiagnostic(input predicate.Input, state eventState, refusal,
 	if claudeQuotaExhausted(input, state, refusal, providerID) {
 		return claudeQuotaDiagnostic()
 	}
+	if claudeAuthenticationFailed(input, state, refusal, providerID) {
+		return task.ProviderAuthenticationFailureDiagnostic()
+	}
 	return claudeRefusalDiagnostic(refusal, state)
 }
 
