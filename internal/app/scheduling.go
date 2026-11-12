@@ -665,7 +665,9 @@ func savedScheduleHostResult(result commandResult, observed SchedulerResponse, o
 			return failed(result.response, observationErr, code)
 		}
 		result.code = 3
-		result.response.Scheduler.NextAction = "inspect_scheduler"
+		if result.response.Scheduler.NextAction == "" {
+			result.response.Scheduler.NextAction = "inspect_scheduler"
+		}
 		result.response.Pending = &PendingResponse{Kind: "scheduler"}
 		return result
 	}
@@ -682,7 +684,9 @@ func savedScheduleHostResult(result commandResult, observed SchedulerResponse, o
 		result.response.Pending = &PendingResponse{Kind: "start_required"}
 		return result
 	}
-	result.response.Scheduler.NextAction = "inspect_scheduler"
+	if result.response.Scheduler.NextAction == "" {
+		result.response.Scheduler.NextAction = "inspect_scheduler"
+	}
 	result.response.Pending = &PendingResponse{Kind: "scheduler"}
 	return result
 }

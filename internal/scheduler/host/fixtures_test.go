@@ -53,7 +53,7 @@ func fixtureConfig(store *taskdir.Store) (Config, error) {
 		return Config{}, err
 	}
 	environment := append(os.Environ(), "DL_HOST_ROOT="+store.Root)
-	return Config{Store: store, Executable: executable, Args: []string{"--host-fixture-child"}, Environment: environment, Directory: directory}, nil
+	return Config{Store: store, Executable: executable, RunnerExecutable: executable, Args: []string{"--host-fixture-child"}, Environment: environment, Directory: directory}, nil
 }
 
 func fixtureChild() (exit int) {
@@ -274,11 +274,16 @@ func receive[T any](t *testing.T, ch <-chan T) T {
 
 func runLocalHost(t *testing.T, config Config, clock clockwork.Clock) <-chan error {
 	t.Helper()
+	return runLocalHostWithStat(t, config, clock, os.Stat)
+}
+
+func runLocalHostWithStat(t *testing.T, config Config, clock clockwork.Clock, stat func(string) (os.FileInfo, error)) <-chan error {
+	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	joined := make(chan struct{})
 	t.Cleanup(func() { cancel(); receive(t, joined) })
-	go func() { defer close(joined); done <- serve(ctx, config, clock) }()
+	go func() { defer close(joined); done <- serve(ctx, config, clock, stat) }()
 	return done
 }
 

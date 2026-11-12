@@ -11,6 +11,7 @@ import (
 
 	"github.com/hishamkaram/delegation-layer/internal/execution"
 	"github.com/hishamkaram/delegation-layer/internal/scheduler/contract"
+	"github.com/hishamkaram/delegation-layer/internal/supervisor/installation"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 )
 
@@ -29,8 +30,9 @@ func (hooks schedulerHooks) RunHook(ctx context.Context, hook contract.FailureHo
 	if info, statErr := os.Stat(hook.Executable); statErr != nil || !info.Mode().IsRegular() || info.Mode().Perm()&0o111 == 0 {
 		return "unavailable", nil
 	}
-	if !filepath.IsAbs(hooks.dependencies.RunnerExecutable) {
-		return "unavailable", errors.New("failure hook requires the selected installed runner")
+	runner, err := installation.ResolveRunner("", hooks.dependencies.RunnerExecutable)
+	if err != nil {
+		return "unavailable", errors.New("failure hook installed runner is unavailable")
 	}
 	input, err := os.CreateTemp("", "delegate-schedule-hook-*")
 	if err != nil {
@@ -56,7 +58,7 @@ func (hooks schedulerHooks) RunHook(ctx context.Context, hook contract.FailureHo
 	command.Stdin = input
 	bounded, cancel := context.WithTimeout(ctx, hook.Timeout)
 	defer cancel()
-	err = execution.RunIsolatedCommandNullOutput(bounded, hooks.dependencies.RunnerExecutable, command)
+	err = execution.RunIsolatedCommandNullOutput(bounded, runner, command)
 	if err == nil {
 		return "succeeded", nil
 	}

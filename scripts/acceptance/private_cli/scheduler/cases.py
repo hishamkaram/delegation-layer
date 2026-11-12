@@ -125,7 +125,7 @@ class SchedulerCase:
         require(scheduler.get("serve_command") == [str(self.delegate.resolve(strict=True)), "--root", str(self.fixture.state), "scheduler", "serve"],
                 "saved schedule returned a different host start command")
 
-    def create(self, *, held: bool, controlled_failure: bool = False) -> None:
+    def create(self, *, held: bool, controlled_failure: bool = False, failure_hook: Path | None = None) -> None:
         # Leave a real startup window before the first due time. A slow host
         # that misses it fails; no timestamp, DB cursor, or wall clock is changed.
         wait_until(lambda: time.time_ns() % MINUTE_NS < 20_000_000_000,
@@ -133,10 +133,11 @@ class SchedulerCase:
         brief = self.brief(held=held, controlled_failure=controlled_failure)
         self.receipt.phase("schedule_create")
         managed = isinstance(self.service, SchedulerHost)
+        hook_arguments = [] if failure_hook is None else ["--failure-hook", str(failure_hook), "--failure-threshold", "1"]
         response = self.command("create", [
             "schedule", "create", "--provider", "pi:json", "--cron", "* * * * *", "--timezone", "UTC",
             "--brief", str(brief), "--cwd", str(self.fixture.workspace), "--permission", "read-only", "--budget", "4m",
-        ], (3,) if managed else (0, 3))
+        ] + hook_arguments, (3,) if managed else (0, 3))
         self.root_id = identity(response.get("root_id"))
         self.schedule_id = identity(json_object(response.get("schedule")).get("id"))
         if managed:

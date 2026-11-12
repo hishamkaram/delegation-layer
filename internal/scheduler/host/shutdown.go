@@ -48,7 +48,10 @@ func (s *service) awaitStoppedExecution(ctx context.Context) (*scheduler.OwnerLe
 }
 
 func (s *service) replyStopping(request controlRequest) {
-	response := wireResponse{Status: statusWire(s.snapshot())}
+	response := controlResponse{wireResponse: wireResponse{Status: statusWire(s.snapshot())}}
+	if request.request.Action == "health" {
+		response.health = &InstallationHealth{State: "unknown", Reason: "installation_host_stopping"}
+	}
 	if request.request.Action == "stop" {
 		response.Accepted = s.status.StopAccepted
 		if !response.Accepted {

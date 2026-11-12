@@ -27,15 +27,17 @@ var (
 	ErrIdentity          = errors.New("scheduler host identity changed")
 )
 
-// Config is an explicit, retained launch context. Environment must be nonnil;
+// Config is an explicit, retained launch context. RunnerExecutable is the
+// installation resolver's selected managed runner. Environment must be nonnil;
 // an empty slice intentionally supplies an empty environment. No launch context
 // is written to durable host records or public diagnostics.
 type Config struct {
-	Store       *taskdir.Store
-	Executable  string
-	Args        []string
-	Environment []string
-	Directory   string
+	Store            *taskdir.Store
+	Executable       string
+	RunnerExecutable string
+	Args             []string
+	Environment      []string
+	Directory        string
 }
 
 // Query consumes an already opened passive reader. Neither Observe nor Stop
@@ -50,20 +52,23 @@ type Identity struct {
 }
 
 // Status is a projection of the host loop and exact owner observations. Ready
-// is derived from State; no response grants launch authority to a client.
+// requires both HostReady and available installation health in observations.
+// No response grants launch authority to a client.
 type Status struct {
-	State        string     `json:"state"`
-	Epoch        string     `json:"epoch,omitempty"`
-	Attempt      uint64     `json:"attempt,omitempty"`
-	Ready        bool       `json:"ready"`
-	Fault        bool       `json:"fault,omitempty"`
-	NextRetryAt  *time.Time `json:"next_retry_at,omitempty"`
-	LastError    string     `json:"last_error,omitempty"`
-	StopAccepted bool       `json:"stop_accepted"`
-	Protocol     int        `json:"protocol"`
-	BuildID      string     `json:"build_id,omitempty"`
-	Host         Identity   `json:"host"`
-	Child        *Identity  `json:"child,omitempty"`
+	State        string              `json:"state"`
+	HostReady    bool                `json:"host_ready"`
+	Health       *InstallationHealth `json:"health,omitempty"`
+	Epoch        string              `json:"epoch,omitempty"`
+	Attempt      uint64              `json:"attempt,omitempty"`
+	Ready        bool                `json:"ready"`
+	Fault        bool                `json:"fault,omitempty"`
+	NextRetryAt  *time.Time          `json:"next_retry_at,omitempty"`
+	LastError    string              `json:"last_error,omitempty"`
+	StopAccepted bool                `json:"stop_accepted"`
+	Protocol     int                 `json:"protocol"`
+	BuildID      string              `json:"build_id,omitempty"`
+	Host         Identity            `json:"host"`
+	Child        *Identity           `json:"child,omitempty"`
 }
 
 type StopResult struct {

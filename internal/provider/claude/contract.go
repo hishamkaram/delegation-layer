@@ -31,8 +31,8 @@ const (
 	// unscoped revisions and differ by digest. Both are frozen for replay.
 	scopedPredicateVersion               = "native-permissions-v4"
 	scopedWorkspaceWritePredicateVersion = "native-permissions-v5"
-	// The advisory revisions, now frozen for replay, and the current follow-up
-	// revisions bind the advisory wire projection under version strings no
+	// The advisory and follow-up revisions are retained for replay. They
+	// bind the advisory wire projection under version strings no
 	// earlier digest of the same mode uses.
 	advisoryPredicateVersion       = "native-permissions-v5"
 	advisoryWorkspaceWriteVersion  = "native-permissions-v6"
@@ -259,7 +259,7 @@ func unscopedNativeContract(mode string) string {
 
 // Contract returns the current native canonical bytes whose digest identifies
 // the interpreter.
-func Contract() string { return followUpNativeContract(Mode) }
+func Contract() string { return authenticationNativeContract(Mode) }
 
 // ContractDigest returns the lowercase SHA-256 digest bound into Reference.
 func ContractDigest() string { return task.ComputeSHA256([]byte(Contract())) }
@@ -270,7 +270,7 @@ func Reference() task.PredicateRef {
 }
 
 // WorkspaceWriteContract returns the current native workspace-write contract.
-func WorkspaceWriteContract() string { return followUpNativeContract(WorkspaceWriteMode) }
+func WorkspaceWriteContract() string { return authenticationNativeContract(WorkspaceWriteMode) }
 
 // WorkspaceWriteReference returns a predicate reference bound to the native
 // bypassPermissions profile. Keeping a distinct reference prevents a read-only
@@ -281,7 +281,7 @@ func WorkspaceWriteReference() task.PredicateRef {
 
 // ContractForMode returns the immutable output contract for mode.
 func ContractForMode(mode string) string {
-	return followUpNativeContract(mode)
+	return authenticationNativeContract(mode)
 }
 
 // ScopedNativeContractForMode returns the frozen scoped native contract that
@@ -327,9 +327,9 @@ func ReferenceForMode(mode string) task.PredicateRef {
 	if contract == "" {
 		return task.PredicateRef{}
 	}
-	version := predicateVersion
+	version := authenticationPredicateVersion
 	if mode == WorkspaceWriteMode {
-		version = workspaceWritePredicateVersion
+		version = authenticationWorkspaceWritePredicateVersion
 	}
 	return task.PredicateRef{Adapter: Provider, Mode: mode, Version: version, SHA256: task.ComputeSHA256([]byte(contract))}
 }

@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"sync"
 
+	"github.com/hishamkaram/delegation-layer/internal/predicate"
 	"github.com/hishamkaram/delegation-layer/internal/scheduler/contract"
 	"github.com/hishamkaram/delegation-layer/internal/scheduler/internal/sqlitestore"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
@@ -104,4 +105,36 @@ func (l *OwnerLease) Close() error {
 	}
 	l.lock = nil
 	return nil
+}
+
+// Compatibility and its classification belong to the scheduler storage owner.
+type Compatibility = sqlitestore.Compatibility
+
+const (
+	CompatibilityAbsent                = sqlitestore.CompatibilityAbsent
+	CompatibilityCompatible            = sqlitestore.CompatibilityCompatible
+	CompatibilityMigrationRequired     = sqlitestore.CompatibilityMigrationRequired
+	CompatibilityNewerSchema           = sqlitestore.CompatibilityNewerSchema
+	CompatibilityIncompatible          = sqlitestore.CompatibilityIncompatible
+	CompatibilityObservationIncomplete = sqlitestore.CompatibilityObservationIncomplete
+)
+
+// CompatibilityOf preserves storage classification through wrapped/joined errors.
+func CompatibilityOf(err error) Compatibility { return sqlitestore.CompatibilityOf(err) }
+
+// ObserveCompatibility reads existing metadata only. It neither creates task
+// state nor acquires scheduler ownership, and closes every read handle it opens.
+func ObserveCompatibility(ctx context.Context, root string, registry predicate.Registry) Compatibility {
+	if _, err := os.Lstat(sqlitestore.DatabasePath(root)); err != nil {
+		return CompatibilityOf(err)
+	}
+	reader, err := taskdir.OpenReadOnlyStoreContext(ctx, root, registry)
+	if err != nil {
+		return CompatibilityObservationIncomplete
+	}
+	store, openErr := OpenReadOnly(ctx, reader)
+	if store != nil {
+		openErr = errors.Join(openErr, store.Close())
+	}
+	return CompatibilityOf(errors.Join(openErr, reader.Close()))
 }

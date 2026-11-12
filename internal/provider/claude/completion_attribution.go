@@ -40,6 +40,9 @@ const (
 	// before failed-request classification, keeps a failed final request
 	// malformed and never correlates a quota.
 	projectionFollowUpCompletion
+	// authenticationFollowUpCompletion adds structured root authentication
+	// diagnosis while retaining the follow-up verdict and answer policy.
+	authenticationFollowUpCompletion
 )
 
 // completionAttribution is the canonical current completion reducer for one
@@ -66,6 +69,12 @@ type completionAttribution struct {
 	project            bool
 	selected           *claudeSelectedAnswer
 	hasFollowUpAnswers bool
+	// Authentication state is private to this immutable policy's reducer.
+	// Each root result consumes the pending same-session assistant error.
+	authentication bool
+	authPending    bool
+	authConsumed   bool
+	principalAuth  bool
 	// failedRequests classifies the documented failed final request, subtype
 	// success with is_error true, as a provider failure instead of malformed
 	// output, and correlates its api_error with the latest same-session
@@ -106,6 +115,8 @@ func newCompletionAttribution(policy completionPolicy) *completionAttribution {
 		return &completionAttribution{scoped: true}
 	case advisoryScopedCompletion:
 		return &completionAttribution{scoped: true, advisory: true}
+	case authenticationFollowUpCompletion:
+		return &completionAttribution{scoped: true, advisory: true, project: true, failedRequests: true, authentication: true}
 	case advisoryFollowUpCompletion:
 		return &completionAttribution{scoped: true, advisory: true, project: true, failedRequests: true}
 	case projectionFollowUpCompletion:
@@ -121,6 +132,7 @@ func newCompletionAttribution(policy completionPolicy) *completionAttribution {
 // policy throughout, the shared current-event rules apply unchanged.
 func applyClaudeCompletionEvent(state *eventState, event claudeCurrentEvent) {
 	attribution := state.attribution
+	attribution.observeAuthentication(state, event)
 	if attribution.rejectsMessageScope(event) {
 		state.markSemantic(event.typeName + " parent_tool_use_id is neither null nor a nonblank string")
 		return
@@ -214,8 +226,11 @@ func (a *completionAttribution) acceptPrincipal(state *eventState, value provide
 		a.nextIndex = 1
 	}
 	a.stage = leadingStart
+	a.consumeAuthentication(completion)
 	a.principalQuota = a.consumeQuota(completion)
+	a.principalAuth = a.authConsumed
 	a.principalFault = completion.fault()
+	a.principalFault.authentication = a.principalAuth
 	a.principalFault.quota = a.principalQuota
 	a.principalFault.quotaAdvice = task.CloneQuotaAdvice(a.quotaConsumed)
 	if a.project {
@@ -229,6 +244,7 @@ func (a *completionAttribution) acceptFollowUp(state *eventState, event claudeCu
 		state.markSemantic(err.Error())
 		return
 	}
+	a.consumeAuthentication(completion)
 	quota := a.consumeQuota(completion)
 	if reason := followUpSequenceFault(a, completion); reason != "" {
 		state.markSemantic(reason)
@@ -256,6 +272,7 @@ func (a *completionAttribution) acceptFollowUp(state *eventState, event claudeCu
 		fault = completionFault{refusal: refusalIncomplete}
 	}
 	if fault.refusal != "" {
+		fault.authentication = a.authConsumed
 		fault.quota = quota
 		fault.quotaAdvice = task.CloneQuotaAdvice(a.quotaConsumed)
 		a.recordFollowUpFault(fault)

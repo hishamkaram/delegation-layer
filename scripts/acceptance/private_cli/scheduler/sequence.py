@@ -1,6 +1,8 @@
 """One real-minute success/failure/restart flow through public history commands."""
 
 from pathlib import Path
+import json
+import shlex
 
 from scripts.acceptance.evidence.files import digest
 from scripts.acceptance.evidence.files import read_json
@@ -153,8 +155,49 @@ def require_overlap_history(case: SchedulerCase) -> None:
     raise RuntimeError("public history omitted the actual overlap skip")
 
 
+def prepare_failure_hook(case: SchedulerCase) -> Path:
+    if case.lifetime.base is None:
+        raise RuntimeError("scheduler fixture lost its owned hook directory")
+    hook = case.lifetime.base / "notify-schedule"
+    notices = case.lifetime.base / "schedule-notices.jsonl"
+    target = shlex.quote(str(notices))
+    with hook.open("x", encoding="utf-8") as stream:
+        stream.write(f"#!/bin/sh\nset -eu\n/bin/cat >> {target}\nprintf '\\n' >> {target}\n")
+    hook.chmod(0o700)
+    return hook
+
+
+def require_hook_notification(case: SchedulerCase, kind: str, task_id: str) -> None:
+    def notified():
+        response = case.command("health-hook-" + kind, ["schedule", "health", case.schedule_id])
+        health = json_object(response.get("schedule_health"))
+        value = health.get("last_notification")
+        if value is None:
+            return False
+        notice = json_object(value)
+        if notice.get("kind") != kind:
+            return False
+        require(notice.get("last_task_id") == task_id, "hook notification task identity changed")
+        require(notice.get("result") in ("claimed", "succeeded"), "production schedule hook did not succeed")
+        return notice.get("result") == "succeeded"
+
+    wait_until(notified, timeout=case.remaining(), description=kind + " callback notification")
+    if case.lifetime.base is None:
+        raise RuntimeError("scheduler fixture lost its owned hook directory")
+    notices = [json_object(json.loads(line)) for line in
+               (case.lifetime.base / "schedule-notices.jsonl").read_text(encoding="utf-8").splitlines()]
+    expected = ("failure",) if kind == "failure" else ("failure", "recovery")
+    require(tuple(notice.get("kind") for notice in notices) == expected,
+            "schedule callback was omitted or repeated across restart")
+    allowed = {"event_id", "schedule_id", "kind", "streak_count", "failure_code", "last_task_id"}
+    require(all(set(notice) <= allowed and notice.get("schedule_id") == case.schedule_id for notice in notices),
+            "callback context exposed unexpected fields or schedule identity")
+    require(notices[-1].get("last_task_id") == task_id, "callback payload task identity changed")
+
+
 def run_successive(case: SchedulerCase) -> None:
-    case.create(held=False, controlled_failure=True)
+    hook = prepare_failure_hook(case)
+    case.create(held=False, controlled_failure=True, failure_hook=hook)
     first, = case.occurrences(1)
     require_occurrences((first,), case.schedule_id, (case.first_due_ns,))
     case.collect(first)
@@ -172,6 +215,7 @@ def run_successive(case: SchedulerCase) -> None:
     collect_failed(case, failed)
     await_release(case, failed)
     require_public_result(case, failed, "rejected")
+    require_hook_notification(case, "failure", failed.task_id)
     failed_snapshot = task_snapshot(case.fixture.state, failed.task_id)
     marker.unlink()
 
@@ -181,6 +225,7 @@ def run_successive(case: SchedulerCase) -> None:
     require_occurrences(rows, case.schedule_id, tuple(case.first_due_ns + i * MINUTE_NS for i in range(3)))
     case.collect(rows[2])
     await_release(case, rows[2])
+    require_hook_notification(case, "recovery", rows[2].task_id)
     case.service.stop()
     require_public_result(case, rows[2], "committed")
     require(task_snapshot(case.fixture.state, first.task_id) == first_snapshot,
@@ -194,4 +239,5 @@ def run_successive(case: SchedulerCase) -> None:
             "public history changed the real-minute occurrence times")
     case.receipt.add_details(actual_minute_occurrences=3, successful_occurrences=2,
                              controlled_failure_task=failed.task_id, resumed_after_restart=True,
+                             callback_kinds=["failure", "recovery"],
                              independent_task_ids=[row.task_id for row in rows])

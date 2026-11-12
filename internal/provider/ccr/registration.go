@@ -51,7 +51,7 @@ type preparationContract struct {
 // native Claude stream contract, including CCR's own exit status and
 // adapter/session identity.
 func Reference(mode string) task.PredicateRef {
-	contract := ccrContract(currentPredicateVersion, claude.ContractForMode(mode), true)
+	contract := ccrContract(currentPredicateVersion, claude.FollowUpNativeContractForMode(mode), true)
 	if contract == "" {
 		return task.PredicateRef{}
 	}
@@ -63,7 +63,7 @@ func Reference(mode string) task.PredicateRef {
 // modeled explicitly, while reconstruction must replay the route probe that
 // selected that fallback.
 func modeledReference(mode string) task.PredicateRef {
-	contract := ccrContract(modeledPredicateVersion, claude.ContractForMode(mode), false)
+	contract := ccrContract(modeledPredicateVersion, claude.FollowUpNativeContractForMode(mode), false)
 	if contract == "" {
 		return task.PredicateRef{}
 	}

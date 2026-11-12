@@ -111,7 +111,14 @@ task ID; observation never launches or retries provider work.
    supervisor repair or process commands. A queue-row end alone cannot prove
    termination. Other pending publication or running/undetermined liveness
    is observed through the same task; it is never permission to redispatch.
-6. Preserve blocked authentication as unresolved, not successful or failed
+6. A validated Claude `provider_authentication_failed` diagnostic can accompany
+   `failure.code: provider_output_rejected` and
+   `failure.next_action: run_native_provider_login`. Report that guidance for
+   the user to perform native Claude login in the intended execution context.
+   Never log in, inject credentials, retry or continue automatically. Existing
+   operational errors, cancellation and idle-continuation decisions retain
+   precedence. Unknown or unstructured failures remain generic.
+7. Preserve blocked authentication as unresolved, not successful or failed
    provider behavior. Apply [failure diagnosis](#failure-diagnosis) without
    inventing login commands or claiming a current local fact proves a past cause.
 
@@ -248,7 +255,7 @@ persistence; preserve any ID and follow the reported storage/error guidance.
 | --- | --- |
 | Create/resume saved the definition and confirmed a compatible ready host; exit `0` | Keep its schedule ID/root. The host will handle future due work; use history/execution for actual occurrence evidence. |
 | Create/resume returns exit `3`, `schedule.saved: true` and `scheduler.next_action: start_required` | The definition remains saved. Preserve the returned schedule ID/root and give `scheduler.serve_command` unchanged to the user to run in an independent terminal or tmux pane. Never start it inside the agent's bounded task, detach it in the background, or submit another create. |
-| Create/resume saved the definition but reports starting, backoff or pending readiness; exit `3` | Keep the same ID and report its host state and available retry time. Use passive scheduler status for later observation; do not create another definition, start a competing host or reset cooldown. |
+| Create/resume saved the definition but reports starting, backoff, unavailable installation health or pending readiness; exit `3` | Keep the same ID and report its host state and available retry time. Use passive scheduler status for later observation; do not create another definition, start a competing host or reset cooldown. |
 | Create/resume saved the definition but the host is temporarily unreachable; exit `3`, pending guidance and no top-level `error` | Preserve `schedule.saved: true` and the same ID. Use passive status to observe the uncertainty. A transport failure does not establish owner death or a permanent host fault. |
 | Create/resume saved the definition and the host reports `scheduler.fault: true`; exit `1` | Report the permanent fault and available `scheduler.last_error`; retain `schedule.saved: true` and the ID. For an incompatible saved definition, the before-Ready check stops automatic child restart. Repeated create, serve or status calls are not a repair. |
 | Scheduler status observes starting, ready, backoff, degraded, stopping or stopped; exit `0` | Observation completed. Report the observed state; exit `0` does not mean ready or that an occurrence succeeded. Status does not start, migrate, repair or clean resources. |

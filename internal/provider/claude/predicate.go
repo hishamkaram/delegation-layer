@@ -272,7 +272,7 @@ func (v interpreter) completionPolicy() completionPolicy {
 	if v.projection {
 		return projectionFollowUpCompletion
 	}
-	return advisoryFollowUpCompletion
+	return authenticationFollowUpCompletion
 }
 
 func readEvidence(raw predicate.Evidence, v interpreter) (eventState, error) {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/hishamkaram/delegation-layer/internal/scheduler/host"
@@ -99,5 +100,60 @@ func TestDefinitionFaultIsNotReplacedByHostGuidance(t *testing.T) {
 	}
 	if result.response.Schedule.NextAction != "inspect_schedule" {
 		t.Fatal("definition inspection guidance was lost")
+	}
+}
+
+func TestSavedSchedulePreservesInstallationRepairGuidance(t *testing.T) {
+	response := newResponse("schedule")
+	response.Schedule = &ScheduleResponse{ID: scheduleTestID}
+	result := savedScheduleHostResult(commandResult{response: response}, SchedulerResponse{State: "degraded", LastError: "installation_changed", NextAction: "repair_installation_and_restart"}, nil)
+	if result.code != 3 || result.err != nil || !result.response.Schedule.Saved || result.response.Scheduler.NextAction != "repair_installation_and_restart" {
+		t.Fatalf("installation guidance lost: %+v", result)
+	}
+}
+
+func TestInstallationHealthProjectsSeparateHostReadinessAndSavedPending(t *testing.T) {
+	for _, tc := range []struct{ state, action string }{
+		{state: "degraded", action: "repair_installation_and_restart"},
+		{state: "unknown", action: "inspect_installation_health"},
+		{state: "unsupported", action: "restart_scheduler"},
+	} {
+		t.Run(tc.state, func(t *testing.T) {
+			observed := projectSchedulerStatus(host.Status{State: "degraded", HostReady: true, Health: &host.InstallationHealth{State: tc.state}})
+			var human strings.Builder
+			writeHumanSchedulerResponse(&human, &observed)
+			if !strings.Contains(human.String(), "host_ready=true ready=false health="+tc.state) {
+				t.Fatalf("human readiness distinction lost: %q", human.String())
+			}
+			if observed.Ready || !observed.HostReady || observed.Fault || observed.NextAction != tc.action {
+				t.Fatalf("installation distinction lost: %+v", observed)
+			}
+			response := newResponse("schedule")
+			response.Schedule = &ScheduleResponse{ID: scheduleTestID}
+			result := savedScheduleHostResult(commandResult{response: response}, observed, nil)
+			if result.code != 3 || result.err != nil || !result.response.Schedule.Saved || result.response.Scheduler.NextAction != tc.action || result.response.Pending == nil {
+				t.Fatalf("saved installation pending changed: %+v", result)
+			}
+		})
+	}
+}
+
+func TestStoppingSchedulerDoesNotRecommendInstallationRepair(t *testing.T) {
+	observed := projectSchedulerStatus(host.Status{State: "stopping", StopAccepted: true, Health: &host.InstallationHealth{State: "unknown", Reason: "installation_host_stopping"}})
+	if observed.State != "stopping" || observed.NextAction != "" {
+		t.Fatalf("stopping guidance became an installation issue: %+v", observed)
+	}
+}
+
+func TestLifecycleFailureKeepsGuidanceWhenInstallationProbeIsPending(t *testing.T) {
+	observed := projectSchedulerStatus(host.Status{State: "degraded", LastError: "child_channel_failed", Health: &host.InstallationHealth{State: "unknown", Reason: "installation_probe_pending"}})
+	if observed.NextAction != "" || observed.LastError != "child_channel_failed" {
+		t.Fatalf("installation probe masked lifecycle failure: %+v", observed)
+	}
+	response := newResponse("schedule")
+	response.Schedule = &ScheduleResponse{ID: scheduleTestID}
+	result := savedScheduleHostResult(commandResult{response: response}, observed, nil)
+	if result.code != 3 || result.response.Scheduler.NextAction != "inspect_scheduler" || result.response.Scheduler.LastError != "child_channel_failed" {
+		t.Fatalf("saved schedule guidance masked lifecycle failure: %+v", result)
 	}
 }

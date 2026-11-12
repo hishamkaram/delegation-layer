@@ -81,7 +81,9 @@ type Occurrence struct {
 	Due         time.Time
 	ArmedAt     time.Time
 	Observation *Observation
-	Attempt     *AttemptFailure
+	// Result is the scheduler-owned cached result, never a fresh task read.
+	Result  *ResultFact
+	Attempt *AttemptFailure
 	// Release is nil while the occurrence is the schedule's active reservation.
 	Release *Release
 }
@@ -105,6 +107,14 @@ func ValidateOccurrence(o Occurrence) error {
 			return err
 		}
 	}
+	if o.Result != nil {
+		if o.Result.TaskID != o.TaskID {
+			return fmt.Errorf("%w: result task", task.ErrIdentityMismatch)
+		}
+		if err := ValidateResultFact(*o.Result); err != nil {
+			return err
+		}
+	}
 	if o.Attempt != nil {
 		if err := ValidateAttempt(*o.Attempt); err != nil {
 			return err
@@ -118,6 +128,10 @@ func ValidateOccurrence(o Occurrence) error {
 
 // clone returns an occurrence whose optional facts no longer alias the input.
 func (o Occurrence) clone() Occurrence {
+	if o.Result != nil {
+		result := *o.Result
+		o.Result = &result
+	}
 	if o.Observation != nil {
 		observation := *o.Observation
 		o.Observation = &observation

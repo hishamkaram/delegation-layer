@@ -149,7 +149,9 @@ func completedCollectionResponse(response Response, completion *tasklifecycle.Co
 		result.code = 1
 		result.response.setError(finalErr)
 	}
-	applyRejectedRecovery(&result.response, completion.RecoveryAvailable)
+	if completion.CollectionError == nil && completion.ReleaseError == nil {
+		applyRejectedRecovery(&result.response, completion.RecoveryAvailable)
+	}
 	return result
 }
 

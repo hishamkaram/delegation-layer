@@ -77,6 +77,7 @@ func (a *completionAttribution) acceptLeadingAcknowledgement(state *eventState, 
 // successful one must be exactly the documented empty zero-turn result. It
 // never writes the principal result, answer, usage, or cost baseline.
 func (a *completionAttribution) recordLeadingAcknowledgement(state *eventState, event claudeCurrentEvent, completion claudeResultCompletion) {
+	a.consumeAuthentication(completion)
 	quota := a.consumeQuota(completion)
 	result, err := decodeClaudeCurrentResult(event.fields, state.init.sessionID, event.value, a.classifiesFailedRequests())
 	if err != nil {
@@ -84,6 +85,7 @@ func (a *completionAttribution) recordLeadingAcknowledgement(state *eventState, 
 		return
 	}
 	fault := a.statedFault(result, completion)
+	fault.authentication = a.authConsumed
 	fault.quota = quota
 	fault.quotaAdvice = task.CloneQuotaAdvice(a.quotaConsumed)
 	switch fault.refusal {

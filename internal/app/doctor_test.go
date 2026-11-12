@@ -11,7 +11,9 @@ import (
 
 	"github.com/hishamkaram/delegation-layer/internal/config"
 	commonprovider "github.com/hishamkaram/delegation-layer/internal/provider"
+	"github.com/hishamkaram/delegation-layer/internal/scheduler"
 	"github.com/hishamkaram/delegation-layer/internal/task"
+	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 )
 
 func doctorBundle(t *testing.T) string {
@@ -177,5 +179,91 @@ func TestDoctorPreservesActionableStaticProviderRejections(t *testing.T) {
 				t.Fatalf("static facts/action lost: %+v code=%d", report, code)
 			}
 		})
+	}
+}
+
+func TestDoctorSchedulerAdvisoryIsSeparateFromExitAndIssues(t *testing.T) {
+	root := t.TempDir()
+	directory := filepath.Join(root, ".scheduler")
+	if err := os.Mkdir(directory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(directory, "schedules.sqlite")
+	if err := os.WriteFile(path, []byte("foreign database"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	report, code := observeDoctor(Arguments{Root: root}, Dependencies{}, doctorBundle(t), nil)
+	encoded, err := json.Marshal(report)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wire struct {
+		Scheduler struct {
+			Compatibility string        `json:"compatibility"`
+			Verification  string        `json:"verification"`
+			Issues        []DoctorIssue `json:"issues"`
+		} `json:"scheduler"`
+	}
+	if err = json.Unmarshal(encoded, &wire); err != nil {
+		t.Fatal(err)
+	}
+	if code != 0 || len(report.Issues) != 0 || wire.Scheduler.Compatibility != "observation_incomplete" || wire.Scheduler.Verification != "read_only" || len(wire.Scheduler.Issues) != 1 {
+		t.Fatalf("scheduler advisory missing or changed doctor policy: %s code=%d", encoded, code)
+	}
+	after, err := os.ReadFile(path)
+	if err != nil || !bytes.Equal(before, after) {
+		t.Fatalf("database changed: %v", err)
+	}
+	entries, err := os.ReadDir(directory)
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("created scheduler sidecars: %v %v", entries, err)
+	}
+}
+
+func TestDoctorSchedulerReadsCurrentDatabaseWithoutMutation(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "state")
+	if err := os.Mkdir(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	state, err := taskdir.InitStore(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if closeErr := state.Close(); closeErr != nil {
+			t.Error(closeErr)
+		}
+	})
+	self := doctorBundle(t)
+	absent, code := observeDoctor(Arguments{Root: state.Root}, Dependencies{}, self, nil)
+	assertDoctorScheduler(t, absent, code, scheduler.CompatibilityAbsent)
+	owner, err := scheduler.AcquireOwnerLease(t.Context(), state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if migrateErr := errors.Join(owner.Migrate(t.Context()), owner.Close()); migrateErr != nil {
+		t.Fatal(migrateErr)
+	}
+	path := filepath.Join(state.Root, ".scheduler", "schedules.sqlite")
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	report, code := observeDoctor(Arguments{Root: state.Root}, Dependencies{}, self, nil)
+	assertDoctorScheduler(t, report, code, scheduler.CompatibilityCompatible)
+	after, err := os.ReadFile(path)
+	if err != nil || !bytes.Equal(before, after) {
+		t.Fatalf("database changed: %v", err)
+	}
+}
+
+func assertDoctorScheduler(t *testing.T, report DoctorReport, code int, want scheduler.Compatibility) {
+	t.Helper()
+	if code != 0 || len(report.Issues) != 0 || report.Scheduler.Compatibility != want || len(report.Scheduler.Issues) != 0 || report.Scheduler.Verification != "read_only" {
+		t.Fatalf("scheduler report=%+v code=%d want=%s", report, code, want)
 	}
 }

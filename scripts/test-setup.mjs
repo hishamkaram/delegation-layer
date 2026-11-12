@@ -114,6 +114,10 @@ try {
   const matching = await fixture("matching");
   const additive = doctorReport(matching.bin);
   additive.future_field = { allowed: true };
+  additive.scheduler = {
+    compatibility: "newer_schema", verification: "read_only",
+    issues: [{ area: "scheduler", code: "newer_schema", next_step: "Use a compatible build." }],
+  };
   additive.installation.roles.future_role = { arbitrary: "additive" };
   await installed(matching, { payload: additive });
   const success = await run(matching);

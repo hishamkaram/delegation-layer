@@ -54,12 +54,12 @@ func TestProjectionRevisionsAreFrozenReplayOnlyIdentities(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, revision := range projectionRevisions {
-		current := ContractForMode(revision.mode)
+		current := followUpNativeContract(revision.mode)
 		start, end := strings.Index(current, projectionCorrectionStart), strings.Index(current, projectionCorrectionEnd)
 		if start < 0 || end < start || task.ComputeSHA256([]byte(current[:start]+current[end+len(projectionCorrectionEnd):])) != revision.digest {
 			t.Fatalf("%s frozen projection bytes no longer derive from the current contract", revision.mode)
 		}
-		if reference := ReferenceForMode(revision.mode); reference != recordedProjectionReference(revision.mode, revision.version, revision.current) {
+		if reference := followUpReference(revision.mode); reference != recordedProjectionReference(revision.mode, revision.version, revision.current) {
 			t.Fatalf("%s current reference changed: %+v", revision.mode, reference)
 		}
 		requireReplayOnlyProjection(t, catalog.Registry(), revision)
@@ -191,7 +191,7 @@ func (c projectionContinuation) requireContinues(t *testing.T, approval string) 
 	successor := catalogAdmission(t, "successor", func() (commonprovider.ProfileCandidate, error) {
 		return c.catalog.SuccessorCandidate(c.fixture.request, meta, c.caller.values)
 	})
-	if successor.Plan.Predicate != recordedProjectionReference(revision.mode, revision.version, revision.current) || successor.Effective.Approval != revision.approval {
+	if successor.Plan.Predicate != ReferenceForMode(revision.mode) || successor.Effective.Approval != revision.approval {
 		t.Fatalf("successor predicate=%+v approval=%q", successor.Plan.Predicate, successor.Effective.Approval)
 	}
 	requireSameAdmission(t, "successor", successor, c.fresh)
