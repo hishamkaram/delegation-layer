@@ -1,4 +1,4 @@
-//go:build linux
+//go:build linux || darwin
 
 package control
 
@@ -21,8 +21,8 @@ func nativeTestProcessToken(t *testing.T, pid int) string {
 }
 
 // The test process records its own PID and serves the exact endpoint, so the
-// kernel-reported SO_PEERCRED peer is the recorded process incarnation.
-func TestObservePrivateExecutionTargetLinuxVerifiesEndpointPeer(t *testing.T) {
+// kernel-reported peer credentials match the recorded process incarnation.
+func TestObservePrivateExecutionTargetNativeVerifiesEndpointPeer(t *testing.T) {
 	fixture := newExecutionTargetFixture(t)
 	fixture.recordPID(t, os.Getpid())
 	fixture.listen(t)
@@ -44,7 +44,7 @@ func TestObservePrivateExecutionTargetLinuxVerifiesEndpointPeer(t *testing.T) {
 	}
 }
 
-func TestObservePrivateExecutionTargetLinuxRejectsUnboundPeer(t *testing.T) {
+func TestObservePrivateExecutionTargetNativeRejectsUnboundPeer(t *testing.T) {
 	t.Run("recorded PID is another live process", func(t *testing.T) {
 		fixture := newExecutionTargetFixture(t)
 		fixture.recordPID(t, os.Getppid())
@@ -75,7 +75,7 @@ func TestObservePrivateExecutionTargetLinuxRejectsUnboundPeer(t *testing.T) {
 	})
 }
 
-func TestObservePrivateExecutionTargetLinuxDeadEndpointIsUnknown(t *testing.T) {
+func TestObservePrivateExecutionTargetNativeDeadEndpointIsUnknown(t *testing.T) {
 	t.Run("refused socket", func(t *testing.T) {
 		fixture := newExecutionTargetFixture(t)
 		fixture.recordPID(t, os.Getpid())

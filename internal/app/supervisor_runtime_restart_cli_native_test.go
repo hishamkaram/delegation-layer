@@ -59,6 +59,14 @@ func (f *runtimeRestartCLINative) ensureOwner(t *testing.T, ctx context.Context)
 	}
 	f.rootID = ready.RootID
 	f.pinRoot(t)
+	reader, err := taskdir.OpenReadOnlyStoreContext(ctx, f.root, predicate.Default())
+	if err != nil {
+		t.Fatalf("original owner bookkeeping: %s", runtimeRestartCLIErrorClass(err))
+	}
+	err = errors.Join(f.ensureCleanupStartup(ctx, reader), reader.Close())
+	if err != nil {
+		t.Fatalf("original owner bookkeeping: %s", runtimeRestartCLIErrorClass(err))
+	}
 }
 
 func (f *runtimeRestartCLINative) binding(t *testing.T) task.SupervisorRef {
@@ -157,6 +165,7 @@ type runtimeRestartCLINative struct {
 	started                        bool
 	rootID                         string
 	startups                       []infrastructure.StartupReference
+	originalOwner                  lifetime.ProcessRef
 }
 
 func newRuntimeRestartCLINative(t *testing.T, client, daemon string) *runtimeRestartCLINative {
@@ -423,11 +432,11 @@ func (f *runtimeRestartCLINative) preflight(t *testing.T, ctx context.Context) i
 	response, code, err := f.command(ctx, "status", "--runtime-restart")
 	control := response.SupervisorControl
 	if err != nil || code != 0 || response.RootID != f.rootID || control == nil || control.RuntimeRestart == nil {
-		t.Fatalf("public passive restart custody: exit=%d err=%v", code, err)
+		t.Fatalf("public passive restart custody: exit=%d facts=%+v", code, f.preflightFailureFacts(ctx, response, err))
 	}
 	observed := control.RuntimeRestart
 	if observed.Custody != infrastructure.RuntimeRestartCustodyAvailable || observed.ObservedAt == "" || observed.OperationPending {
-		t.Fatalf("current resident lacks exact native Wait custody: %+v", observed)
+		t.Fatalf("current resident lacks exact native Wait custody: facts=%+v", f.preflightFailureFacts(ctx, response, nil))
 	}
 	if err = f.rememberStartup(observed.FromStartup); err != nil {
 		t.Fatal(err)
@@ -437,6 +446,63 @@ func (f *runtimeRestartCLINative) preflight(t *testing.T, ctx context.Context) i
 		t.Fatal(err)
 	}
 	return reference
+}
+
+// Failure-only facts separate public transport from native target observation.
+// Every field is an allowlisted enum/bool; paths, tokens and raw causes stay out.
+func (f *runtimeRestartCLINative) preflightFailureFacts(ctx context.Context, response Response, cause error) runtimeRestartCLIPreflightFacts {
+	facts := runtimeRestartCLIPreflightFacts{Platform: runtime.GOOS, PublicCause: runtimeRestartCLIErrorClass(cause), Custody: "missing", OwnerProbe: "reader_unavailable"}
+	if control := response.SupervisorControl; control != nil && control.RuntimeRestart != nil {
+		facts.Custody = "invalid"
+		if custody := control.RuntimeRestart.Custody; custody.Validate() == nil {
+			facts.Custody = string(custody)
+		}
+	}
+	reader, err := taskdir.OpenReadOnlyStoreContext(ctx, f.root, predicate.Default())
+	if err == nil {
+		current, probeErr := infrastructure.ProbeOwner(ctx, reader)
+		facts.KnownOwnerMatches = len(f.startups) > 0 && current == f.startups[len(f.startups)-1]
+		facts.OwnerProbe = runtimeRestartCLIErrorClass(errors.Join(probeErr, reader.Close()))
+	}
+	target, targetErr := pueue.ObservePrivateExecutionTarget(ctx, f.root, pueue.Options{Environment: f.environment})
+	facts.TargetCause = runtimeRestartCLIErrorClass(targetErr)
+	switch target.State() {
+	case pueue.ExecutionTargetUnknown:
+		facts.Target = "unknown"
+	case pueue.ExecutionTargetAbsent:
+		facts.Target = "absent"
+	case pueue.ExecutionTargetRunning:
+		facts.Target = "running"
+	}
+	return facts
+}
+
+type runtimeRestartCLIPreflightFacts struct {
+	Platform, PublicCause, Custody, OwnerProbe, Target, TargetCause string
+	KnownOwnerMatches                                               bool
+}
+
+func runtimeRestartCLIErrorClass(err error) string {
+	for _, match := range []struct {
+		cause error
+		name  string
+	}{
+		{context.Canceled, "canceled"},
+		{context.DeadlineExceeded, "deadline"},
+		{infrastructure.ErrOwnerIncompatible, "owner_incompatible"},
+		{infrastructure.ErrIdentity, "identity"},
+		{pueue.ErrExecutionTargetUnverified, "target_unverified"},
+		{infrastructure.ErrOwnerRequest, "owner_request"},
+		{task.ErrLockBusy, "lock_busy"},
+	} {
+		if errors.Is(err, match.cause) {
+			return match.name
+		}
+	}
+	if err != nil {
+		return "unclassified"
+	}
+	return "ok"
 }
 
 func (f *runtimeRestartCLINative) executionTarget(t *testing.T, ctx context.Context) lifetime.ProcessRef {
@@ -593,25 +659,148 @@ func (f *runtimeRestartCLINative) closeRuntime(ctx context.Context) (resultErr e
 		if closeErr != nil || closed.ProcessClosure != infrastructure.OwnerProcessClosed {
 			return errors.Join(errors.New("owned resident process closure unverified"), closeErr)
 		}
+		if startup == f.startups[0] {
+			if err = f.verifyOriginalOwner(closed); err != nil {
+				return err
+			}
+		}
 	}
 	return nil
 }
 
 func (f *runtimeRestartCLINative) ensureCleanupStartup(ctx context.Context, reader *taskdir.ReadOnlyStore) error {
-	if len(f.startups) == 0 {
-		observed, observeErr := infrastructure.ReadRuntimeRestartPreflight(ctx, reader, infrastructure.StartupReference{})
-		if observeErr != nil {
-			return observeErr
-		}
-		token, formatErr := infrastructure.FormatRuntimeRestartReference(observed.From)
-		if formatErr != nil {
-			return formatErr
-		}
-		if rememberErr := f.rememberStartup(token); rememberErr != nil {
-			return rememberErr
-		}
+	if reader == nil {
+		return os.ErrInvalid
+	}
+	if f.rootID == "" || reader.RootID() != f.rootID || reader.Root() != f.root {
+		return infrastructure.ErrIdentity
+	}
+	if err := requireRuntimeRestartCLIDirectory(f.root, f.rootPin); err != nil {
+		return err
+	}
+	if len(f.startups) != 0 {
+		return nil
+	}
+	observed, process, err := observeRuntimeRestartCLICleanupOwner(ctx, reader)
+	if err != nil {
+		return err
+	}
+	token, err := infrastructure.FormatRuntimeRestartReference(infrastructure.RuntimeRestartReference{RootID: f.rootID, Startup: observed})
+	if err != nil {
+		return err
+	}
+	if err = f.rememberStartup(token); err != nil {
+		return err
+	}
+	f.originalOwner = process
+	return nil
+}
+
+func observeRuntimeRestartCLICleanupOwner(ctx context.Context, reader *taskdir.ReadOnlyStore) (infrastructure.StartupReference, lifetime.ProcessRef, error) {
+	observed, err := infrastructure.ProbeOwner(ctx, reader)
+	if err != nil {
+		return infrastructure.StartupReference{}, lifetime.ProcessRef{}, err
+	}
+	selected, err := infrastructure.ObserveOwnerProcessClosed(ctx, reader, observed)
+	if err != nil || selected.ProcessClosure != infrastructure.OwnerProcessPending {
+		return infrastructure.StartupReference{}, lifetime.ProcessRef{}, errors.Join(infrastructure.ErrIdentity, err)
+	}
+	process, err := selected.Process.Reference()
+	if err != nil {
+		return infrastructure.StartupReference{}, lifetime.ProcessRef{}, err
+	}
+	current, err := infrastructure.ProbeOwner(ctx, reader)
+	if err != nil || current != observed {
+		return infrastructure.StartupReference{}, lifetime.ProcessRef{}, errors.Join(infrastructure.ErrIdentity, err)
+	}
+	return observed, process, nil
+}
+
+func (f *runtimeRestartCLINative) verifyOriginalOwner(closed infrastructure.OwnerStopResult) error {
+	process, err := closed.Process.Reference()
+	if err != nil {
+		return err
+	}
+	same, err := lifetime.SameProcess(process, f.originalOwner)
+	if err != nil || !same {
+		return errors.Join(infrastructure.ErrIdentity, err)
 	}
 	return nil
+}
+
+func TestRuntimeRestartCLICleanupBookkeepingSurvivesFailedPreflight(t *testing.T) {
+	fixture := newRemoteResourceBoundary(t)
+	ownRemoteResourceResident(t, fixture)
+	ctx, cancel := context.WithTimeout(t.Context(), 15*time.Second)
+	defer cancel()
+	reader, err := taskdir.OpenReadOnlyStoreContext(ctx, fixture.store.Root, predicate.Default())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if closeErr := reader.Close(); closeErr != nil {
+			t.Error(closeErr)
+		}
+	})
+	expected, err := infrastructure.ProbeOwner(ctx, reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// This existing component host refuses custody preflight. Its canonical
+	// native owner and saved subject remain available for independent cleanup.
+	if _, err = infrastructure.ReadRuntimeRestartPreflight(ctx, reader, infrastructure.StartupReference{}); !errors.Is(err, infrastructure.ErrOwnerRequest) {
+		t.Fatalf("fixture did not refuse preflight: %v", err)
+	}
+	cleanup := &runtimeRestartCLINative{root: fixture.store.Root, rootID: fixture.store.RootID}
+	if err = cleanup.ensureCleanupStartup(ctx, reader); err != nil {
+		t.Fatalf("failed custody preflight prevented canonical cleanup bookkeeping: %v", err)
+	}
+	if !slices.Equal(cleanup.startups, []infrastructure.StartupReference{expected}) {
+		t.Fatal("cleanup did not retain the exact authenticated original owner")
+	}
+	selected, err := infrastructure.ObserveOwnerProcessClosed(ctx, reader, expected)
+	if err != nil || cleanup.verifyOriginalOwner(selected) != nil {
+		t.Fatal("cleanup lost the exact original native owner process")
+	}
+	for _, rootID := range []string{"", "foreign-root"} {
+		unowned := &runtimeRestartCLINative{root: fixture.store.Root, rootID: rootID}
+		if err = unowned.ensureCleanupStartup(ctx, reader); !errors.Is(err, infrastructure.ErrIdentity) || len(unowned.startups) != 0 || unowned.originalOwner != (lifetime.ProcessRef{}) {
+			t.Fatal("cleanup adopted a missing or foreign root identity")
+		}
+	}
+	response := Response{Error: "private diagnostic", SupervisorControl: &SupervisorControlResponse{
+		RuntimeRestart: &SupervisorRuntimeRestartResponse{Custody: infrastructure.RuntimeRestartCustodyUnknown, FromStartup: "private startup token"},
+	}}
+	facts := cleanup.preflightFailureFacts(ctx, response, errors.New("private error /secret/environment"))
+	assertRuntimeRestartCLICleanupFailureFacts(t, facts)
+}
+
+func assertRuntimeRestartCLICleanupFailureFacts(t *testing.T, facts runtimeRestartCLIPreflightFacts) {
+	t.Helper()
+	if facts.PublicCause != "unclassified" || facts.Custody != "unknown" || facts.OwnerProbe != "ok" || !facts.KnownOwnerMatches || facts.Target != "absent" {
+		t.Fatalf("failure facts lost their allowlisted native boundary: %+v", facts)
+	}
+	for _, secret := range []string{"private", "secret"} {
+		if strings.Contains(fmt.Sprint(facts), secret) {
+			t.Fatal("failure facts exposed a raw diagnostic or startup token")
+		}
+	}
+}
+
+func TestRuntimeRestartCLICleanupRefusesUnpublishedOwner(t *testing.T) {
+	fixture := newRemoteResourceBoundary(t)
+	ctx, cancel := context.WithTimeout(t.Context(), 15*time.Second)
+	defer cancel()
+	reader, err := taskdir.OpenReadOnlyStoreContext(ctx, fixture.store.Root, predicate.Default())
+	if err != nil {
+		t.Fatal(err)
+	}
+	cleanup := &runtimeRestartCLINative{root: fixture.store.Root, rootID: fixture.store.RootID}
+	err = cleanup.ensureCleanupStartup(ctx, reader)
+	closeErr := reader.Close()
+	if err == nil || closeErr != nil || len(cleanup.startups) != 0 || cleanup.originalOwner != (lifetime.ProcessRef{}) {
+		t.Fatal("cleanup adopted a root without a canonical native startup")
+	}
 }
 
 func (f *runtimeRestartCLINative) closeObservedDaemon(ctx context.Context) error {
