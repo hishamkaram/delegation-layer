@@ -494,6 +494,81 @@ and `1` reports a control or observation fault. Preserve an uncertain result;
 the command does not resend an uncertain stop request. Human output exposes
 the same separate observations.
 
+## Supervisor runtime restart
+
+An explicit runtime restart replaces a quiescent private daemon and its serving
+resident without changing the root, full supervisor binding, configuration or
+task history. It is separate from installation/configuration migration and
+from `stop-owner`, which leaves the daemon running. Run it only with covering
+authorization from the intended persistent user context outside task-owned
+scope. It does not log in to a provider or establish provider readiness.
+
+First inspect the existing root:
+
+```sh
+delegate supervisor status --runtime-restart --json
+```
+
+Ordinary `supervisor status` is unchanged. The opt-in response places a dated
+`custody` observation (`available`, `unavailable` or `unknown`) and a canonical
+`from_startup` token in `supervisor_control.runtime_restart`. Available custody
+means this resident owns the exact daemon's original native Wait; it is not
+root-wide quiescence, permission to restart, or a provider authentication check.
+Legacy owners without this capability refuse before restart contact.
+Runtime effects also require managed control-command ownership; an embedded
+in-process control owner cannot provide the required crash-surviving lease.
+
+Keep the original token before requesting any effect:
+
+```sh
+delegate supervisor restart --from-startup TOKEN --json
+```
+
+`TOKEN` is the returned canonical value, not a PID or task ID. Preserve the same
+root selection on every command, including its exact explicit `--root` for
+custom/historical work. Neither command initializes a missing root. Restart
+rechecks the full queue and canonical task, inspection and workspace closure
+under the actual bootstrap lock. Active, ambiguous or contended work refuses;
+task publication or a free lock alone does not prove closure.
+
+The retained operation has phases `requested`, `shutdown_pending`,
+`daemon_closed`, `successor_accepted` and `ready`. The original resident must
+actually close before an outside-born successor can start the daemon. Ready
+requires the successor's recorded native birth, original Wait custody and
+readiness; it is a completed handoff fact, not a provider result.
+
+Exit `0` with `state: "restarted"` reports that completed handoff. Exit `3`
+reports blocked/pending work: `retry_later` does not change the selected subject;
+`repeat_same_restart` reconciles only the saved original token. Public errors
+redact private paths. A proven natural shutdown-command rejection or failure
+of the external control owner's actual Start keeps the operation pending. The
+handled diagnostic remains local to the control error; public responses do not
+include it. Missing installations and mixed storage, identity, configuration or
+cleanup faults remain exit `1` with `stop_and_report`.
+
+Each newly acquired bootstrap scope permits one graceful shutdown attempt for
+the exact recorded old process. A fresh scope cannot acquire EX while an older
+managed command still retains its lease. Repeat the original command to
+reconcile a pending shutdown; never clear its fence or select another process.
+A pending shutdown may persist until its underlying command fault is fixed.
+A live but unreachable old daemon remains pending without another shutdown
+attempt; investigate its availability before repeating the request.
+
+After a lost reply, use only that original token. A completed retry returns the
+same retained receipt without another Start. While an accepted successor is
+still pending, reconcile from the same persistent user context used to establish
+it; a different context is an identity conflict, not permission to replace it.
+During a handoff, passive status
+can name the new current resident; `operation_pending`/`repeat_original_restart`
+means retain the original operation token instead of starting another restart.
+Unknown Start/birth or an unretained stale token never permits replay or PID
+adoption. Only the retained operation is observable; there is no unlimited
+restart-history ledger. Preserve such refusals and the existing state.
+
+New runtime records/publications are not supported by older strict readers.
+Use a compatible installation for that state; no downgrade or state-file edit
+repairs it. Existing tasks and accepted results keep their original authority.
+
 ## Scheduler runtime
 
 Check `delegate help` for the installed build's command surface. Use `serve`,

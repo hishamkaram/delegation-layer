@@ -2,6 +2,7 @@ package control
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -25,8 +26,15 @@ func privateBootstrapRecordPath(stateRoot string) string {
 // Delegate-owned startup interrupted before publication from an unrelated
 // pre-existing private config whose owner cannot be proven.
 func PrivateBootstrapPending(stateRoot string) (bool, error) {
-	_, found, err := readPrivateBootstrapRecord(stateRoot)
-	return found, err
+	record, found, err := readPrivateBootstrapRecord(stateRoot)
+	return found && (record.RuntimeRestart == nil || runtimeRestartPending(record)), err
+}
+
+// Initial bootstrap/recovery permissions belong only to the legacy forms.
+// Runtime intent is an admission fence, never configuration repair authority.
+func privateLegacyBootstrapPending(stateRoot string) (bool, error) {
+	record, found, err := readPrivateBootstrapRecord(stateRoot)
+	return found && record.RuntimeRestart == nil, err
 }
 
 func readPrivateBootstrapRecord(stateRoot string) (privateBootstrapRecord, bool, error) {
@@ -48,11 +56,44 @@ func readPrivateBootstrapRecord(stateRoot string) (privateBootstrapRecord, bool,
 		return privateBootstrapRecord{}, false, fmt.Errorf("%w: unsupported private bootstrap journal schema %d", task.ErrUnsupportedSchema, record.SchemaVersion)
 	}
 	if record.Restart != nil {
+		if record.RuntimeRestart != nil {
+			return privateBootstrapRecord{}, false, ErrBinding
+		}
 		if err = validatePrivatePairRestartIntent(stateRoot, *record.Restart); err != nil {
 			return privateBootstrapRecord{}, false, err
 		}
 	}
+	if record.RuntimeRestart != nil {
+		if err = validatePrivateRuntimeRestartRecord(stateRoot, *record.RuntimeRestart); err != nil {
+			return privateBootstrapRecord{}, false, err
+		}
+	}
 	return record, true, nil
+}
+
+// Called only inside an existing generation commit callback. A later genuine
+// bootstrap may supersede a completed receipt, with actual EX retained; an
+// unfinished runtime transition is never replaced by generic bootstrap.
+func markPrivateBootstrapPendingWithinCommit(ctx context.Context, stateRoot string) error {
+	record, _, err := readPrivateBootstrapRecord(stateRoot)
+	if err != nil {
+		return err
+	}
+	if record.RuntimeRestart == nil {
+		return markPrivateBootstrapPending(stateRoot)
+	}
+	if runtimeRestartPending(record) {
+		return ErrPrivateRuntimeRestartPending
+	}
+	if err = requireRuntimeRestartBootstrapEX(ctx, stateRoot); err != nil {
+		return err
+	}
+	data, err := task.MarshalCanonical(privateBootstrapRecord{SchemaVersion: task.SchemaVersion})
+	if err != nil {
+		return err
+	}
+	return replacePrivateRecordAtomic(filepath.Join(stateRoot, privateSupervisorDirectory), privateBootstrapRecordPath(stateRoot),
+		".private-bootstrap-", "private bootstrap journal", data, true)
 }
 
 func markPrivateBootstrapPending(stateRoot string) error {
@@ -65,9 +106,14 @@ func markPrivateBootstrapPending(stateRoot string) error {
 }
 
 func clearPrivateBootstrapPending(stateRoot string) error {
-	pending, err := PrivateBootstrapPending(stateRoot)
-	if err != nil || !pending {
+	record, found, err := readPrivateBootstrapRecord(stateRoot)
+	if err != nil || !found {
 		return err
+	}
+	// Canonical identity publication can neither erase the unfinished runtime
+	// fence nor discard its bounded completion receipt. Its owner settles it.
+	if record.RuntimeRestart != nil {
+		return nil
 	}
 	if err = os.Remove(privateBootstrapRecordPath(stateRoot)); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("%w: remove private bootstrap journal: %w", ErrConfiguration, err)

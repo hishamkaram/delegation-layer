@@ -38,11 +38,14 @@ func PrivatePairRestartPending(root string) (bool, error) {
 }
 
 func refusePendingPrivateRestart(root string) error {
-	pending, err := PrivatePairRestartPending(root)
+	record, _, err := readPrivateBootstrapRecord(root)
 	if err != nil {
 		return privateRecoveryFailure("state_unreadable", err)
 	}
-	if pending {
+	if runtimeRestartPending(record) {
+		return ErrPrivateRuntimeRestartPending
+	}
+	if record.Restart != nil {
 		return privateRecoveryFailure("transition_pending", ErrBinding)
 	}
 	return nil
@@ -52,6 +55,9 @@ func validatePrivateRestartPublication(root string, binding task.SupervisorRef) 
 	record, _, err := readPrivateBootstrapRecord(root)
 	if err != nil {
 		return privateRecoveryFailure("state_unreadable", err)
+	}
+	if runtimeRestartPending(record) {
+		return ErrPrivateRuntimeRestartPending
 	}
 	if record.Restart != nil && record.Restart.Target != binding {
 		return privateRecoveryFailure("identity_conflict", ErrBinding)
@@ -168,6 +174,12 @@ func ReconcilePublishedPrivatePairAttemptWithLock(ctx context.Context, stateRoot
 	}
 	if err := ctx.Err(); err != nil {
 		return 0, err
+	}
+	if pending, err := PrivateRuntimeRestartPending(ctx, stateRoot); err != nil || pending {
+		if err != nil {
+			return 0, err
+		}
+		return 0, ErrPrivateRuntimeRestartPending
 	}
 	if _, err := recoverPrivateIdentityPublication(stateRoot); err != nil {
 		return 0, privateRecoveryFailure("state_unreadable", err)

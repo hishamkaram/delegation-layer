@@ -18,6 +18,9 @@ func authenticateOwnerRequest(ctx context.Context, conn *net.UnixConn, intent St
 	if err := ownerAuthenticationContext(ctx); err != nil {
 		return err
 	}
+	if (request.Action == ownerRuntimeRestart || request.Action == ownerRuntimeRestartPreflight) && publication.RuntimeRestartProtocol != runtimeRestartProtocolVersion {
+		return ErrOwnerIncompatible
+	}
 	digest, err := publication.Digest(intent, assumption)
 	if err != nil {
 		return err
@@ -153,7 +156,7 @@ func validateOwnerReplyBinding(intent StartupIntent, assumption StartupAssumptio
 
 // Compare every echoed selection independently from the observed disposition.
 func (r ownerReply) matchesRequestedSubject(request ownerRequest) bool {
-	return r.RootID == request.RootID && r.OwnerRef == request.Owner && r.PublicationSHA256 == request.PublicationSHA256 && r.Action == request.Action && r.Context == request.Context && r.Source == request.Source && r.Initial == request.Initial && (request.Action == ownerEnsureOther || r.InitialResultFor == request.InitialResultFor)
+	return r.RootID == request.RootID && r.OwnerRef == request.Owner && r.PublicationSHA256 == request.PublicationSHA256 && r.Action == request.Action && r.Context == request.Context && r.Source == request.Source && r.RestartFrom == request.RestartFrom && r.Initial == request.Initial && (request.Action == ownerEnsureOther || r.InitialResultFor == request.InitialResultFor)
 }
 
 type ownerAuthenticationError struct{ cause error }

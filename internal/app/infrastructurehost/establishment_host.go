@@ -31,5 +31,8 @@ func (h infrastructureEstablishmentHost) PrepareOutsideRunner(ctx context.Contex
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
+	if err := validateRuntimeEstablishment(ctx, target, h.initial); err != nil {
+		return "", err
+	}
 	return installation.ResolveRunner("", h.defaultRunner)
 }

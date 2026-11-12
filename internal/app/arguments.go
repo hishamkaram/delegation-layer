@@ -13,75 +13,78 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/config"
 	"github.com/hishamkaram/delegation-layer/internal/resourceadmission"
 	schedulercontract "github.com/hishamkaram/delegation-layer/internal/scheduler/contract"
+	"github.com/hishamkaram/delegation-layer/internal/supervisor/infrastructure"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	teamcontract "github.com/hishamkaram/delegation-layer/internal/teams/contract"
 )
 
 // Arguments contains requested values only. Parsing grants no external authority.
 type Arguments struct {
-	Connector            ConnectorArguments
-	LogStream            string
-	LogCursor            string
-	LogOffset            int64
-	LogLimit             int64
-	LogOffsetSet         bool
-	logOptionsSet        bool
-	RemoteScope          string
-	RemoteApply          bool
-	RemoteDryRun         bool
-	remoteScopeSet       bool
-	ResourceGuards       resourceadmission.GuardPolicy
-	Device               string
-	RemoteRoot           string
-	RemoteCwd            string
-	InputManifest        string
-	OutputManifest       string
-	OutputDirectory      string
-	RemoteExecutable     string
-	SSHConfig            string
-	RemoteAfter          string
-	RemoteAction         string
-	Fingerprint          string
-	Stdio                bool
-	remoteBinding        *task.RemoteBinding
-	remoteCancelID       string
-	MessageID            string
-	RequestID            string
-	Answers              string
-	AnswersBytes         []byte
-	SuccessorTaskID      string
-	HelpPath             []string
-	After                uint64
-	Command              string
-	SupervisorAction     string
-	SchedulerAction      string
-	Root                 string
-	PueueConfig          string
-	Runner               string
-	TaskID               string
-	Auto                 bool
-	Provider             string
-	Brief                string
-	BriefBytes           []byte
-	Cwd                  string
-	Config               task.TaskConfig
-	ReviewTarget         string
-	ResumeTask           string
-	JSON                 bool
-	Watch                time.Duration
-	WaitTaskIDs          []string
-	WaitAll              bool
-	Isolation            string
-	WorkspaceID          string
-	Base                 string
-	WorkspaceBudget      string
-	WorkspaceAction      string
-	WorkspaceOperationID string
-	WorkspaceAfter       string
-	WorkspaceLimit       int
-	Discard              bool
-	ExecArguments        []string
-	workspaceBinding     *task.WorkspaceBinding
+	Connector                ConnectorArguments
+	LogStream                string
+	LogCursor                string
+	LogOffset                int64
+	LogLimit                 int64
+	LogOffsetSet             bool
+	logOptionsSet            bool
+	RemoteScope              string
+	RemoteApply              bool
+	RemoteDryRun             bool
+	remoteScopeSet           bool
+	ResourceGuards           resourceadmission.GuardPolicy
+	Device                   string
+	RemoteRoot               string
+	RemoteCwd                string
+	InputManifest            string
+	OutputManifest           string
+	OutputDirectory          string
+	RemoteExecutable         string
+	SSHConfig                string
+	RemoteAfter              string
+	RemoteAction             string
+	Fingerprint              string
+	Stdio                    bool
+	remoteBinding            *task.RemoteBinding
+	remoteCancelID           string
+	MessageID                string
+	RequestID                string
+	Answers                  string
+	AnswersBytes             []byte
+	SuccessorTaskID          string
+	HelpPath                 []string
+	After                    uint64
+	Command                  string
+	SupervisorAction         string
+	SupervisorFromStartup    string
+	SupervisorRuntimeRestart bool
+	SchedulerAction          string
+	Root                     string
+	PueueConfig              string
+	Runner                   string
+	TaskID                   string
+	Auto                     bool
+	Provider                 string
+	Brief                    string
+	BriefBytes               []byte
+	Cwd                      string
+	Config                   task.TaskConfig
+	ReviewTarget             string
+	ResumeTask               string
+	JSON                     bool
+	Watch                    time.Duration
+	WaitTaskIDs              []string
+	WaitAll                  bool
+	Isolation                string
+	WorkspaceID              string
+	Base                     string
+	WorkspaceBudget          string
+	WorkspaceAction          string
+	WorkspaceOperationID     string
+	WorkspaceAfter           string
+	WorkspaceLimit           int
+	Discard                  bool
+	ExecArguments            []string
+	workspaceBinding         *task.WorkspaceBinding
 
 	// Checkpoint values are requested only; creation targets reuse Cwd and
 	// WorkspaceID, and status reuses Watch.
@@ -173,11 +176,7 @@ func registerCommandFlags(fs *flag.FlagSet, a *Arguments, watch *string) {
 	if registerConnectorCommandFlags(fs, a) {
 		return
 	}
-	if a.Command == "supervisor" || a.Command == "scheduler" {
-		if a.Command == "scheduler" && a.SchedulerAction == "run" {
-			fs.IntVar(&a.schedulerHostReadFD, "scheduler-host-read-fd", 0, "private host channel")
-			fs.IntVar(&a.schedulerHostWriteFD, "scheduler-host-write-fd", 0, "private resident channel")
-		}
+	if registerResidentCommandFlags(fs, a) {
 		return
 	}
 	if a.Command == "collect" || a.Command == "events" {
@@ -207,6 +206,27 @@ func registerCommandFlags(fs *flag.FlagSet, a *Arguments, watch *string) {
 		return
 	}
 	registerAdmissionFlags(fs, a)
+}
+
+func registerResidentCommandFlags(fs *flag.FlagSet, a *Arguments) bool {
+	switch a.Command {
+	case "supervisor":
+		switch a.SupervisorAction {
+		case "restart":
+			fs.StringVar(&a.SupervisorFromStartup, "from-startup", "", "exact original startup token from status --runtime-restart")
+		case "status":
+			fs.BoolVar(&a.SupervisorRuntimeRestart, "runtime-restart", false, "observe dated daemon Wait custody for an explicit restart")
+		}
+		return true
+	case "scheduler":
+		if a.SchedulerAction == "run" {
+			fs.IntVar(&a.schedulerHostReadFD, "scheduler-host-read-fd", 0, "private host channel")
+			fs.IntVar(&a.schedulerHostWriteFD, "scheduler-host-write-fd", 0, "private resident channel")
+		}
+		return true
+	default:
+		return false
+	}
 }
 
 func (a *Arguments) validate(positional []string, watch string) error {
@@ -251,11 +271,16 @@ func (a *Arguments) validateCommand(positional []string, watch string) error {
 }
 
 func (a *Arguments) validateSupervisor(positional []string) error {
-	if a.SupervisorAction != "status" && a.SupervisorAction != "migrate" && a.SupervisorAction != "stop-owner" && a.SupervisorAction != "ensure-owner" {
-		return errors.New("supervisor requires status, migrate or stop-owner")
+	if a.SupervisorAction != "status" && a.SupervisorAction != "migrate" && a.SupervisorAction != "stop-owner" && a.SupervisorAction != "ensure-owner" && a.SupervisorAction != "restart" {
+		return errors.New("supervisor requires status, migrate, restart, ensure-owner or stop-owner")
 	}
 	if a.supervisorPueueConfigSet || a.supervisorRunnerSet {
 		return errors.New("supervisor does not accept --pueue-config or --runner")
+	}
+	if a.SupervisorAction == "restart" {
+		if _, err := infrastructure.ParseRuntimeRestartReference(a.SupervisorFromStartup); err != nil {
+			return errors.New("supervisor restart requires a canonical --from-startup token from status --runtime-restart")
+		}
 	}
 	return validateNoPositional("supervisor", positional)
 }

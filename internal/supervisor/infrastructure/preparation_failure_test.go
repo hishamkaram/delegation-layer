@@ -23,13 +23,16 @@ func preparationCauseFixtures() []PreparationCauses {
 		PreparationCauseUnknown, PreparationCauseInFlight, PreparationCauseStatusOperational,
 		PreparationCauseControlLimit, PreparationCauseLockBusy, PreparationCauseDeadline,
 		PreparationCauseCanceled, PreparationCauseInfrastructureIdentity, PreparationCauseTaskIdentity,
-		PreparationCauseEvidenceFault,
+		PreparationCauseEvidenceFault, PreparationCauseRuntimeRestartPending, PreparationCauseRuntimeQuiescenceBusy,
 	}
 }
 
 func TestPreparationCausesClosedMask(t *testing.T) {
 	var all PreparationCauses
-	for _, cause := range preparationCauseFixtures() {
+	for index, cause := range preparationCauseFixtures() {
+		if cause != 1<<index {
+			t.Fatalf("recorded cause bit changed at index %d: %d", index, cause)
+		}
 		if cause == 0 || cause&(cause-1) != 0 || all&cause != 0 {
 			t.Fatalf("cause is not a unique single bit: %d", cause)
 		}
@@ -43,7 +46,7 @@ func TestPreparationCausesClosedMask(t *testing.T) {
 			t.Fatalf("valid set refused: %v", err)
 		}
 	}
-	for _, causes := range []PreparationCauses{1 << 21, 1 << 31, ^PreparationCauses(0), all | 1<<31} {
+	for _, causes := range []PreparationCauses{1 << 23, 1 << 31, ^PreparationCauses(0), all | 1<<31} {
 		if err := causes.Validate(); !errors.Is(err, ErrIdentity) {
 			t.Fatalf("unknown mask accepted: %d: %v", causes, err)
 		}

@@ -253,6 +253,13 @@ func assertResourceBoundaryAbsent(t *testing.T, fixture *remoteResourceBoundaryF
 // Native birth, lease, publication, authenticated IPC and stop remain real.
 type resourceBoundaryComponentHost struct{}
 
+func (resourceBoundaryComponentHost) ValidateEstablishment(_ context.Context, _ *taskdir.Store, initial infrastructure.InitialOperation) error {
+	if initial.Kind == infrastructure.InitialRuntimeRestart {
+		return errors.New("unexpected runtime restart establishment")
+	}
+	return nil
+}
+
 func (resourceBoundaryComponentHost) ValidateRunner(ctx context.Context, root, runner string, info *debug.BuildInfo) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -277,6 +284,14 @@ func (resourceBoundaryComponentHost) PrepareContinuation(context.Context, infras
 
 func (resourceBoundaryComponentHost) MigrateOwnRoot(context.Context, infrastructure.Operation, infrastructure.LaunchContext, infrastructure.ResidentGuards, infrastructure.DaemonWaitOwner) (infrastructure.Disposition, infrastructure.ManualMigrationReport, error) {
 	return infrastructure.Disposition{}, infrastructure.ManualMigrationReport{}, errors.New("unexpected migration")
+}
+
+func (resourceBoundaryComponentHost) PrepareRuntimeRestart(context.Context, infrastructure.Operation, infrastructure.LaunchContext, infrastructure.StartupReference, infrastructure.ResidentGuards, infrastructure.DaemonWaitOwner) (infrastructure.Disposition, infrastructure.RuntimeRestartReport, error) {
+	return infrastructure.Disposition{}, infrastructure.RuntimeRestartReport{}, errors.New("unexpected runtime restart")
+}
+
+func (resourceBoundaryComponentHost) ObserveRuntimeRestartCustody(context.Context, infrastructure.Operation, infrastructure.LaunchContext, infrastructure.DaemonWaitOwner) (infrastructure.RuntimeRestartCustody, error) {
+	return infrastructure.RuntimeRestartCustodyUnknown, errors.New("unexpected runtime restart preflight")
 }
 
 func (resourceBoundaryComponentHost) ClassifyPreparation(error) infrastructure.PreparationFailure {

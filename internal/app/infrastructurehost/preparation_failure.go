@@ -19,8 +19,8 @@ type infrastructureCauseMapping struct {
 
 // Domain owners retain sentinel identity. This local immutable table owns only
 // the wire projection; neither display reasons nor Is aliases add causes.
-func infrastructurePreparationMappings() [21]infrastructureCauseMapping {
-	return [21]infrastructureCauseMapping{
+func infrastructurePreparationMappings() [23]infrastructureCauseMapping {
+	return [23]infrastructureCauseMapping{
 		{infrastructure.PreparationCausePrivateMigrationRequired, pueue.ErrPrivateSupervisorMigrationRequired},
 		{infrastructure.PreparationCausePrivateMigrationBusy, pueue.ErrPrivateSupervisorMigrationBusy},
 		{infrastructure.PreparationCauseHistoricalTargetUnsupported, pueue.ErrHistoricalTargetUnsupported},
@@ -42,6 +42,8 @@ func infrastructurePreparationMappings() [21]infrastructureCauseMapping {
 		{infrastructure.PreparationCauseInfrastructureIdentity, infrastructure.ErrIdentity},
 		{infrastructure.PreparationCauseTaskIdentity, task.ErrIdentityMismatch},
 		{infrastructure.PreparationCauseEvidenceFault, task.ErrEvidenceFault},
+		{infrastructure.PreparationCauseRuntimeRestartPending, pueue.ErrPrivateRuntimeRestartPending},
+		{infrastructure.PreparationCauseRuntimeQuiescenceBusy, supervisor.ErrRuntimeQuiescenceBusy},
 	}
 }
 

@@ -112,8 +112,9 @@ type privateIdentityPublicationRecord struct {
 }
 
 type privateBootstrapRecord struct {
-	SchemaVersion int                       `json:"schema_version"`
-	Restart       *privatePairRestartIntent `json:"restart,omitempty"`
+	SchemaVersion  int                          `json:"schema_version"`
+	Restart        *privatePairRestartIntent    `json:"restart,omitempty"`
+	RuntimeRestart *privateRuntimeRestartRecord `json:"runtime_restart,omitempty"`
 }
 
 type privateQueueMaintenanceRun struct {

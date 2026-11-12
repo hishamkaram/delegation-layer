@@ -816,6 +816,10 @@ func (e *ConnectorTaskCleanupError) Release() error {
 }
 
 func (td *TaskDir) withConnectorTaskExclusionContext(ctx context.Context, createOwner bool, operation func() error) (resultErr error) {
+	return td.withTaskObservationExclusionContext(ctx, createOwner, false, operation)
+}
+
+func (td *TaskDir) withTaskObservationExclusionContext(ctx context.Context, createOwner, preparationOnly bool, operation func() error) (resultErr error) {
 	cleanup := &ConnectorTaskCleanupError{store: td.store, task: td, ancestors: &connectorAncestors{store: td.store}}
 	defer func() {
 		cleanup.cause = resultErr
@@ -843,6 +847,9 @@ func (td *TaskDir) withConnectorTaskExclusionContext(ctx context.Context, create
 	cleanup.admissionHeld = true
 	var err error
 	cleanup.owner, err = td.tryAcquireLifetimeOwner(ctx, createOwner)
+	if preparationOnly && task.RecordAbsent(err) {
+		err = nil
+	}
 	if err != nil {
 		if !createOwner {
 			return connectorClosureObservationError(err, ConnectorClosureMissingOwner)
@@ -1958,6 +1965,65 @@ func (r *ReadOnlyStore) ReadConnectorExecutionClosureContext(ctx context.Context
 		proof, readErr = store.readConnectorExecutionClosureContext(ctx, id)
 		return readErr
 	})
+	return executionClosureObservation(proof, err)
+}
+
+// ReadTaskExecutionClosureContext observes canonical task closure with the
+// same existing-inode exclusions as the read-only connector projection. It
+// does not require a connector origin and never creates files or task state.
+// A cleanup error retains this exact Store until its cleanup owner releases it.
+func (s *Store) ReadTaskExecutionClosureContext(ctx context.Context, id string) (ConnectorExecutionClosureObservation, error) {
+	if err := task.ValidateTaskID(id); err != nil {
+		return ConnectorExecutionClosureObservation{}, err
+	}
+	proof, err := s.readConnectorExecutionClosureContext(ctx, id)
+	return executionClosureObservation(proof, err)
+}
+
+// ReadTaskPreparationOnlyContext classifies exact preparation fragments while
+// holding existing task admission/run and any existing lifetime-owner inode.
+// It creates no permanent refusal or closure evidence. The caller must already
+// hold the runtime admission fence before treating this as transition-quiescent.
+func (s *Store) ReadTaskPreparationOnlyContext(ctx context.Context, id string) (preparationOnly bool, resultErr error) {
+	defer func() {
+		if resultErr != nil {
+			preparationOnly = false
+		}
+	}()
+	if err := task.ValidateTaskID(id); err != nil {
+		return false, err
+	}
+	if err := s.maintLock.LockSHNonblockingContext(ctx); err != nil {
+		return false, err
+	}
+	defer s.finishConnectorMaintenance(&resultErr)
+	td, err := s.newTaskHandle(id, false)
+	if err != nil {
+		return false, err
+	}
+	defer func() { resultErr = errors.Join(resultErr, td.Close()) }()
+	resultErr = td.withTaskObservationExclusionContext(ctx, false, true, func() error {
+		evidence, readErr := LoadLifetimeEvidenceContext(ctx, td)
+		if readErr != nil {
+			return readErr
+		}
+		if evidence.Intent != nil || evidence.Registration != nil || evidence.Worker != nil || evidence.WorkerWait != nil || evidence.Termination != nil || len(evidence.Launches) != 0 {
+			return nil
+		}
+		identity, readErr := td.recordedTaskIdentityContext(ctx)
+		if readErr != nil && !task.RecordAbsent(readErr) {
+			return readErr
+		}
+		if readErr = td.provePreparationOnlyContext(ctx, identity); readErr != nil {
+			return readErr
+		}
+		preparationOnly = true
+		return nil
+	})
+	return preparationOnly, resultErr
+}
+
+func executionClosureObservation(proof *ConnectorExecutionClosure, err error) (ConnectorExecutionClosureObservation, error) {
 	if CleanupFault(err) {
 		return ConnectorExecutionClosureObservation{}, err
 	}

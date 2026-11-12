@@ -39,7 +39,7 @@ input. Invalid requests keep exit `2` with scoped usage on the error stream.
 | `schedule health`, `schedule policy` | [Schedule reliability and quota policy](../skills/agent-integration/references/command-reference.md#schedule-reliability) |
 | `scheduler serve/status/stop/migrate`, `scheduler run` | [User-started host and compatibility runtime](../skills/agent-integration/references/command-reference.md#scheduler-runtime) |
 | `context`, `resolve`, `result read`, `origin` | [Guarded local connector contract](connector-contract.md) |
-| `supervisor status`, `supervisor migrate` | [Operator recovery](#supervisor-recovery) |
+| `supervisor status`, `supervisor migrate`, `supervisor restart` | [Operator recovery](#supervisor-recovery) |
 
 Remote handles use the supported controls in the [remote workflow](remote-delegation.md#observe-reconnect-and-collect).
 A local command in this index does not imply support for `remote:ID`.
@@ -298,6 +298,13 @@ task responses can include [persisted Team context](../skills/agent-integration/
 See [required options](../skills/agent-integration/references/command-reference.md#providers-and-capabilities).
 
 ## Supervisor recovery
+
+For an authorized change of a quiescent daemon's execution context, use
+[runtime restart](../skills/agent-integration/references/command-reference.md#supervisor-runtime-restart):
+inspect `supervisor status --runtime-restart`, retain its original startup token,
+then explicitly request `supervisor restart --from-startup TOKEN`. This does not
+perform provider login. `stop-owner` releases serving only; a new caller does
+not relocate a daemon that is still running.
 
 The default supervisor is private to the state root. Normal dispatch adopts a
 reachable compatible generation and recovers the saved generation when its

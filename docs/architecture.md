@@ -331,6 +331,39 @@ quoted layouts are required. They execute other selected installations in place;
 see [fixture installations](contributing.md#fixture-installations). Fixture tests
 and source builds alone do not establish supported-host lifecycle acceptance.
 
+An explicit same-binding runtime restart uses the existing private bootstrap
+journal. Control owns its durable daemon phases; infrastructure owns resident
+election, outside provenance, native Start/Wait custody and exact original-owner
+closure. The application supplies root-wide canonical quiescence using its
+already-owned Store. The CLI owns only correlation and public projection; no
+task engine or task-outcome store is added.
+
+The existing one-shot control owner supplies shutdown settlement evidence.
+Only an actual external-owner Start failure, or a started control command's
+natural nonzero exit with validated completion and successful owner Wait, can
+turn an ordinary operational failure into pending. Its handled diagnostic stays
+local to that control error, separate from the semantic error graph; it is not
+included in the public response. Validation and prerequisite failures,
+identity, configuration, capture, protocol and retained-cleanup faults remain
+hard failures. Each acquired
+bootstrap scope admits one runtime shutdown attempt. A new scope opens its own
+descriptor and cannot acquire EX before prior managed command leases drain;
+reconciliation still verifies the exact old native identity before retrying.
+
+The caller-known original startup token precedes effects. Every transition
+requires the current native generation grant and actual bootstrap EX. Only a
+matching pending journal permits preparation-only records in the quiescence
+scan; it never turns preparation into admission or closure. The lock is released
+before stopping/waiting for the original resident. A successor must consume its
+accepted outside context, preserve the full binding and register its own exact
+native birth/Wait before readiness. Observation expiry retains same-owner
+reconciliation; independent identity/storage/cleanup faults fail closed. Known
+unstarted rollback and exact birth settlement may finish under the still-live
+grant after observation cancellation, without launching work or exporting that
+capability. Missing birth never authorizes another Start. The
+[operator contract](../skills/agent-integration/references/command-reference.md#supervisor-runtime-restart)
+defines the bounded retained receipt and compatibility limits.
+
 One completed-generation record owns the active private supervisor. Startup and
 migration take its exclusive lock; ordinary controls hold a shared generation
 lease until their in-flight commands settle. A healthy endpoint can be reused

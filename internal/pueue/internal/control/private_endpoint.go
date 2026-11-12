@@ -23,29 +23,46 @@ func (c *Client) Shutdown(ctx context.Context) error {
 // started frame is lost. Callers must retain the error/command ownership and
 // must not infer permission to retry from this boolean alone.
 func (c *Client) ShutdownDispatched(ctx context.Context) (dispatched bool, resultErr error) {
+	command, err := c.shutdownCommand(ctx, nil)
+	if err != nil {
+		if command.invoked {
+			err = errors.Join(ErrBinding, err)
+		}
+		return command.dispatched, err
+	}
+	if command.result.ExitCode != 0 {
+		return command.dispatched, fmt.Errorf("%w: supervisor shutdown was rejected", ErrBinding)
+	}
+	return command.dispatched, nil
+}
+
+type privateShutdownCommand struct {
+	result     CommandResult
+	dispatched bool
+	invoked    bool
+}
+
+// Both ordinary and runtime shutdown use this exact qualified command owner.
+// The caller owns projection; this boundary preserves raw completion evidence.
+func (c *Client) shutdownCommand(ctx context.Context, settlement *controlCommandSettlement) (privateShutdownCommand, error) {
 	if c == nil {
-		return false, ErrConfiguration
+		return privateShutdownCommand{}, ErrConfiguration
 	}
 	if err := c.verify(ctx); err != nil {
-		return false, err
+		return privateShutdownCommand{}, err
 	}
 	shutdownContext, scopeErr := c.privateShutdownContext(ctx)
 	if scopeErr != nil {
-		return false, scopeErr
+		return privateShutdownCommand{}, scopeErr
 	}
-	result, err := c.command(shutdownContext, privateShutdownConsume(shutdownContext, nil), "shutdown")
+	command := privateShutdownCommand{invoked: true}
+	result, err := c.commandWithSettlement(shutdownContext, privateShutdownConsume(shutdownContext, nil), settlement, "shutdown")
 	if pending := pendingFrom(err); pending != nil {
-		dispatched = true
+		command.dispatched = true
 		result, err = awaitPending(ctx, pending)
 	}
-	dispatched = dispatched || result.Started
-	if err != nil {
-		return dispatched, errors.Join(ErrBinding, err)
-	}
-	if result.ExitCode != 0 {
-		return dispatched, fmt.Errorf("%w: supervisor shutdown was rejected", ErrBinding)
-	}
-	return dispatched, nil
+	command.result, command.dispatched = result, command.dispatched || result.Started
+	return command, err
 }
 
 // ObservePrivateEndpoint observes the exact private endpoint without cleanup,
@@ -107,7 +124,7 @@ func (c *Client) VerifyPrivateMigrationEndpoint(ctx context.Context, stateRoot s
 		}
 		return errors.Join(fmt.Errorf("%w: private supervisor endpoint is unreachable and its logical predecessor binding is unavailable", ErrPrivateSupervisorMigrationRequired), refusal)
 	}
-	bootstrapPending, bootstrapErr := PrivateBootstrapPending(stateRoot)
+	bootstrapPending, bootstrapErr := privateLegacyBootstrapPending(stateRoot)
 	if bootstrapErr != nil {
 		return errors.Join(bootstrapErr, refusal)
 	}

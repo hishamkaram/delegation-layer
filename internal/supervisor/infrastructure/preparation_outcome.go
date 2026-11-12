@@ -1,5 +1,7 @@
 package infrastructure
 
+import "errors"
+
 type PreparationCondition string
 
 const (
@@ -26,11 +28,12 @@ func (c PreparationCondition) Validate() error {
 // transport and Close errors returned by its consumer. Zero means no verified
 // reply. References and observations do not certify live readiness.
 type PreparationOutcome struct {
-	Condition   PreparationCondition  `json:"condition,omitempty"`
-	Startup     StartupReference      `json:"startup,omitzero"`
-	Disposition Disposition           `json:"disposition,omitzero"`
-	Report      ManualMigrationReport `json:"report,omitzero"`
-	Failure     PreparationFailure    `json:"failure,omitzero"`
+	Condition      PreparationCondition  `json:"condition,omitempty"`
+	Startup        StartupReference      `json:"startup,omitzero"`
+	Disposition    Disposition           `json:"disposition,omitzero"`
+	Report         ManualMigrationReport `json:"report,omitzero"`
+	RuntimeRestart RuntimeRestartReport  `json:"runtime_restart,omitzero"`
+	Failure        PreparationFailure    `json:"failure,omitzero"`
 }
 
 // Validate checks data shape and the shared report table, not action-specific
@@ -55,7 +58,12 @@ func (o PreparationOutcome) Validate() error {
 	if err := o.Failure.Validate(); err != nil {
 		return err
 	}
-	return o.Report.ValidateCondition(o.Condition)
+	if o.RuntimeRestart != (RuntimeRestartReport{}) {
+		if err := o.RuntimeRestart.ValidateDisposition(o.Disposition); err != nil {
+			return err
+		}
+	}
+	return errors.Join(o.Report.ValidateCondition(o.Condition), o.RuntimeRestart.ValidateCondition(o.Condition))
 }
 
 // PreparationRequest carries one purpose, its context selection and an optional

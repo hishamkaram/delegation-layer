@@ -29,11 +29,12 @@ func (nativeInfrastructureStores) RetainsStore(cause error, store *taskdir.Store
 
 func nativeInfrastructureCallbacks() infrastructurehost.Callbacks {
 	return infrastructurehost.Callbacks{
-		MaintenanceLaunch:      supervisor.LaunchQueueMaintenanceOwnerWithEnvironment,
-		SuccessfulCleanup:      authorizePrivateSuccessfulCleanup,
-		TerminalEvidence:       preparePrivateTerminalEvidence,
-		TerminalCustody:        releasePrivateTerminalCustody,
-		MigrationAuthorization: authorizePrivateMigrationQueue,
+		MaintenanceLaunch:           supervisor.LaunchQueueMaintenanceOwnerWithEnvironment,
+		SuccessfulCleanup:           authorizePrivateSuccessfulCleanup,
+		TerminalEvidence:            preparePrivateTerminalEvidence,
+		TerminalCustody:             releasePrivateTerminalCustody,
+		MigrationAuthorization:      authorizePrivateMigrationQueue,
+		RuntimeRestartAuthorization: authorizePrivateRuntimeRestart,
 	}
 }
 

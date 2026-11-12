@@ -43,18 +43,26 @@ func (a Artifacts) validate() error {
 // by matching the launch context and initial operation, not this entire digest.
 // The intent owns the observation deadline and artifact and context selection.
 type StartupInputs struct {
-	Kind       StartupKind            `json:"kind"`
-	Initial    InitialOperation       `json:"initial_operation,omitzero"`
-	Root       string                 `json:"root"`
-	RootID     string                 `json:"root_id"`
-	BootID     string                 `json:"boot_id"`
-	RootDevice uint64                 `json:"root_device"`
-	RootInode  uint64                 `json:"root_inode"`
-	Artifacts  Artifacts              `json:"artifacts"`
-	Context    LaunchContextReference `json:"launch_context"`
+	Kind            StartupKind            `json:"kind"`
+	Initial         InitialOperation       `json:"initial_operation,omitzero"`
+	RuntimeProducer producerKind           `json:"runtime_producer,omitzero"`
+	Root            string                 `json:"root"`
+	RootID          string                 `json:"root_id"`
+	BootID          string                 `json:"boot_id"`
+	RootDevice      uint64                 `json:"root_device"`
+	RootInode       uint64                 `json:"root_inode"`
+	Artifacts       Artifacts              `json:"artifacts"`
+	Context         LaunchContextReference `json:"launch_context"`
 }
 
 func (i StartupInputs) Validate() error {
+	if i.Initial.Kind == InitialRuntimeRestart {
+		if i.RuntimeProducer != producerOutside {
+			return ErrIdentity
+		}
+	} else if i.RuntimeProducer != "" {
+		return ErrIdentity
+	}
 	if _, err := NewOrigin(i.Root, i.RootID); err != nil {
 		return err
 	}

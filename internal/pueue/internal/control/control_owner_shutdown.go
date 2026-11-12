@@ -16,11 +16,12 @@ import (
 // Only withPrivateLockContext constructs this borrowed native capability after
 // acquiring the actual root bootstrap EX. The context is not a persisted grant.
 type privateBootstrapEX struct {
-	admission sync.Mutex
-	active    bool
-	root      string
-	lock      *bootstrapLock
-	identity  controlLeaseIdentity
+	admission                sync.Mutex
+	active                   bool
+	root                     string
+	lock                     *bootstrapLock
+	identity                 controlLeaseIdentity
+	runtimeShutdownAttempted bool // One runtime shutdown attempt per acquired EX.
 }
 
 type (

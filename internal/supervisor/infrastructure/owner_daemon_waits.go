@@ -2,9 +2,24 @@ package infrastructure
 
 import (
 	"context"
+	"errors"
 	"os"
 	"sync"
+
+	"github.com/hishamkaram/delegation-layer/internal/lifetime"
 )
+
+var ErrDaemonWaitCustody = errors.New("resident does not own the selected daemon wait")
+
+type daemonWaitBirth struct {
+	pid   int
+	birth func() (lifetime.ProcessRef, bool, error)
+}
+
+type daemonWaitCandidate struct {
+	done         <-chan struct{}
+	registration daemonWaitBirth
+}
 
 // daemonWaitOwner belongs to one resident's serving lifetime. Channel identity
 // owns completion; PID is diagnostic and never process or shutdown authority.
@@ -12,18 +27,33 @@ import (
 type daemonWaitOwner struct {
 	mu                 sync.Mutex
 	origin             Origin
+	resident           *ownedResidentEntry
 	registrationClosed bool
-	active             map[<-chan struct{}]int
+	active             map[<-chan struct{}]daemonWaitBirth
 }
 
 func newDaemonWaitOwner(origin Origin) (*daemonWaitOwner, error) {
 	if _, err := NewOrigin(origin.Root(), origin.RootID()); err != nil {
 		return nil, err
 	}
-	return &daemonWaitOwner{origin: origin, active: make(map[<-chan struct{}]int)}, nil
+	return &daemonWaitOwner{origin: origin, active: make(map[<-chan struct{}]daemonWaitBirth)}, nil
 }
 
 func (w *daemonWaitOwner) RegisterDaemonWait(root string, pid int, done <-chan struct{}) error {
+	return w.registerDaemonWait(root, pid, done, nil)
+}
+
+// RegisterDaemonWaitBirth receives the canonical starter's immutable birth
+// result. The getter is nonblocking and never observes a PID after its Wait.
+// It is retained with the same actual completion handle, not a second owner.
+func (w *daemonWaitOwner) RegisterDaemonWaitBirth(root string, pid int, done <-chan struct{}, birth func() (lifetime.ProcessRef, bool, error)) error {
+	if birth == nil {
+		return os.ErrInvalid
+	}
+	return w.registerDaemonWait(root, pid, done, birth)
+}
+
+func (w *daemonWaitOwner) registerDaemonWait(root string, pid int, done <-chan struct{}, birth func() (lifetime.ProcessRef, bool, error)) error {
 	if w == nil || pid <= 0 || done == nil {
 		return os.ErrInvalid
 	}
@@ -36,16 +66,140 @@ func (w *daemonWaitOwner) RegisterDaemonWait(root string, pid int, done <-chan s
 		return os.ErrClosed
 	}
 	w.pruneCompleted()
-	if existing, found := w.active[done]; found && existing != pid {
-		return ErrIdentity
+	existing, found := w.active[done]
+	if found {
+		if existing.pid != pid || existing.birth != nil && birth != nil {
+			return ErrIdentity
+		}
+		if existing.birth != nil {
+			birth = existing.birth // Legacy duplicate registration cannot erase proof.
+		}
 	}
 	select {
 	case <-done:
 		return nil
 	default:
-		w.active[done] = pid
+		w.active[done] = daemonWaitBirth{pid: pid, birth: birth}
 		return nil
 	}
+}
+
+// RequireDaemonWaitCustody observes only this currently serving resident's
+// registered exact birth. It grants no mutation; the generation guard must
+// independently revalidate authority at the actual restart commit.
+func (w *daemonWaitOwner) RequireDaemonWaitCustody(ctx context.Context, root string, expected lifetime.ProcessRef) error {
+	if w == nil || ctx == nil {
+		return os.ErrInvalid
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if root != w.origin.Root() {
+		return ErrIdentity
+	}
+	if _, err := lifetime.NewProcessRef(expected.PID(), expected.StartToken()); err != nil {
+		return err
+	}
+	if err := w.requireServing(ctx); err != nil {
+		return err
+	}
+	candidates, err := w.birthCandidates(expected.PID())
+	if err != nil {
+		return err
+	}
+	if err = matchDaemonWaitBirth(expected, candidates); err != nil {
+		return err
+	}
+	if err = w.requireRegistrationOpen(); err != nil {
+		return err
+	}
+	return w.requireServing(ctx)
+}
+
+func (w *daemonWaitOwner) requireRegistrationOpen() error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.registrationClosed {
+		return os.ErrClosed
+	}
+	return nil
+}
+
+func (w *daemonWaitOwner) hasActiveWait() bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.pruneCompleted()
+	return len(w.active) != 0
+}
+
+func (w *daemonWaitOwner) requireServing(ctx context.Context) error {
+	entry := w.resident
+	if entry == nil {
+		return ErrDaemonWaitCustody
+	}
+	entry.mu.Lock()
+	defer entry.mu.Unlock()
+	if entry.closed || entry.grant == nil || entry.grant.entry != entry || entry.endpoint == nil || entry.journal == nil || entry.lease == nil {
+		return os.ErrClosed
+	}
+	inputs := entry.operation.Intent().Inputs
+	if inputs.Root != w.origin.Root() || inputs.RootID != w.origin.RootID() {
+		return ErrIdentity
+	}
+	return entry.validateResident(ctx)
+}
+
+func (w *daemonWaitOwner) birthCandidates(pid int) ([]daemonWaitCandidate, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.registrationClosed {
+		return nil, os.ErrClosed
+	}
+	w.pruneCompleted()
+	var candidates []daemonWaitCandidate
+	for done, registration := range w.active {
+		if registration.pid == pid && registration.birth != nil {
+			candidates = append(candidates, daemonWaitCandidate{done: done, registration: registration})
+		}
+	}
+	return candidates, nil
+}
+
+// The immutable getter runs outside the registry and entry mutexes. Only a
+// matching exact birth with its actual Wait still open can satisfy this read.
+func matchDaemonWaitBirth(expected lifetime.ProcessRef, candidates []daemonWaitCandidate) error {
+	var failure error
+	pending := false
+	for _, candidate := range candidates {
+		observed, ready, err := candidate.registration.birth()
+		if err != nil {
+			failure = errors.Join(failure, err)
+			continue
+		}
+		if !ready {
+			pending = true
+			continue
+		}
+		same, compareErr := lifetime.SameProcess(observed, expected)
+		if compareErr != nil {
+			failure = errors.Join(failure, compareErr)
+			continue
+		}
+		if same {
+			select {
+			case <-candidate.done:
+			default:
+				return nil
+			}
+		}
+	}
+	if failure != nil {
+		return errors.Join(ErrDaemonWaitCustody, failure)
+	}
+	if pending {
+		return ErrOwnerBusy
+	}
+	return ErrDaemonWaitCustody
 }
 
 // The runtime must drain callbacks and join retained preparation workers first.

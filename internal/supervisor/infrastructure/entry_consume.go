@@ -105,6 +105,9 @@ func (e *ownedResidentEntry) prepareRoot(ctx context.Context, invocation ownerIn
 		return err
 	}
 	e.operation = operation
+	if err = validateRuntimeRestartBirth(operation.Intent(), environment); err != nil {
+		return err
+	}
 	if err = validateExecutingArtifacts(ctx, operation, host); err != nil {
 		return err
 	}
@@ -242,7 +245,7 @@ func (e *ownedResidentEntry) assumeAndPublish(ctx context.Context, reference Sta
 	if err != nil {
 		return err
 	}
-	publication := OwnerPublication{Protocol: RecordProtocolVersion, Startup: reference, AssumptionSHA256: digest, Endpoint: e.endpoint.Identity()}
+	publication := OwnerPublication{Protocol: RecordProtocolVersion, Startup: reference, AssumptionSHA256: digest, Endpoint: e.endpoint.Identity(), RuntimeRestartProtocol: runtimeRestartProtocolVersion}
 	created, err := e.journal.putPublication(ctx, e.lease, publication)
 	if err != nil {
 		return err

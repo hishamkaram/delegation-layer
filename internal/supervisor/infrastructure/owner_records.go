@@ -121,13 +121,17 @@ func (e EndpointIdentity) validate(intent StartupIntent) error {
 // assumption. Its process/UID are derived from that verified immutable record;
 // no second copy can drift. Publication is not private-supervisor readiness.
 type OwnerPublication struct {
-	Protocol         int              `json:"protocol"`
-	Startup          StartupReference `json:"startup"`
-	AssumptionSHA256 string           `json:"assumption_sha256"`
-	Endpoint         EndpointIdentity `json:"endpoint"`
+	Protocol               int              `json:"protocol"`
+	Startup                StartupReference `json:"startup"`
+	AssumptionSHA256       string           `json:"assumption_sha256"`
+	Endpoint               EndpointIdentity `json:"endpoint"`
+	RuntimeRestartProtocol int              `json:"runtime_restart_protocol,omitempty"`
 }
 
 func (p OwnerPublication) Validate(intent StartupIntent, assumption StartupAssumption) error {
+	if p.RuntimeRestartProtocol != 0 && p.RuntimeRestartProtocol != runtimeRestartProtocolVersion {
+		return ErrIdentity
+	}
 	if p.Protocol != RecordProtocolVersion {
 		return ErrIdentity
 	}

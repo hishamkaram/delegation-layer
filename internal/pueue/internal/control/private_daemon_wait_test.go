@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -27,6 +28,216 @@ type daemonWaitOwnerFunc func(string, int, <-chan struct{}) error
 
 func (f daemonWaitOwnerFunc) RegisterDaemonWait(root string, pid int, done <-chan struct{}) error {
 	return f(root, pid, done)
+}
+
+type daemonBirthWaitOwnerForTest struct {
+	legacy          DaemonWaitOwner
+	birth           func() (lifetime.ProcessRef, bool, error)
+	birthCalls      int
+	legacyCalls     int
+	registrationErr error
+}
+
+func (owner *daemonBirthWaitOwnerForTest) RegisterDaemonWait(root string, pid int, done <-chan struct{}) error {
+	owner.legacyCalls++
+	return owner.legacy.RegisterDaemonWait(root, pid, done)
+}
+
+func (owner *daemonBirthWaitOwnerForTest) RegisterDaemonWaitBirth(root string, pid int, done <-chan struct{}, birth func() (lifetime.ProcessRef, bool, error)) error {
+	owner.birthCalls++
+	owner.birth = birth
+	return errors.Join(owner.legacy.RegisterDaemonWait(root, pid, done), owner.registrationErr)
+}
+
+func TestDaemonBirthRegistrationRetainsWaitAfterGuardFault(t *testing.T) {
+	for _, fail := range []bool{false, true} {
+		t.Run(fmt.Sprintf("post_start_fault_%t", fail), func(t *testing.T) {
+			fixture := newDaemonWaitFixture(t)
+			options := fixture.options(nil)
+			owner := &daemonBirthWaitOwnerForTest{legacy: options.DaemonWaitOwner}
+			options.DaemonWaitOwner = owner
+			var guardErr error
+			if fail {
+				guardErr = errors.New("post-Start guard fault")
+				owner.registrationErr = errors.New("birth registration fault")
+				options.DaemonStartGuard = daemonStartGuardFunc(func(_ context.Context, _ string, start func() error) error {
+					return errors.Join(start(), guardErr)
+				})
+			}
+			startErr := fixture.start(t.Context(), options)
+			requireDaemonWaitLaunchErrors(t, startErr, guardErr, owner.registrationErr)
+			fixture.ready(t)
+			if owner.birthCalls != 1 || owner.legacyCalls != 0 || fixture.registrations() != 1 {
+				t.Fatalf("optional registration duplicated/lost ownership: birth=%d legacy=%d actual=%d", owner.birthCalls, owner.legacyCalls, fixture.registrations())
+			}
+			before, birthErr := awaitDaemonBirth(t, owner.birth)
+			if birthErr != nil || before.PID() != fixture.pid() {
+				t.Fatalf("registered birth differs: pid=%d err=%v", before.PID(), birthErr)
+			}
+			fixture.release(t)
+			if !joinDaemonWait(t, fixture.done()) {
+				return
+			}
+			after, ready, afterErr := owner.birth()
+			same, identityErr := lifetime.SameProcess(before, after)
+			if !ready || afterErr != nil || identityErr != nil || !same {
+				t.Fatalf("reaped birth was reread/changed: ready=%t err=%v identity=%v", ready, afterErr, identityErr)
+			}
+		})
+	}
+}
+
+func awaitDaemonBirth(t *testing.T, birth func() (lifetime.ProcessRef, bool, error)) (lifetime.ProcessRef, error) {
+	t.Helper()
+	if birth == nil {
+		t.Fatal("started child has no birth future")
+	}
+	deadline := time.NewTimer(5 * time.Second)
+	defer deadline.Stop()
+	ticker := time.NewTicker(time.Millisecond)
+	defer ticker.Stop()
+	for {
+		if reference, ready, err := birth(); ready {
+			return reference, err
+		}
+		select {
+		case <-deadline.C:
+			t.Fatal("owned child birth observation did not finish")
+		case <-ticker.C:
+		}
+	}
+}
+
+func startDaemonBirthTestChild(t *testing.T, fixture *daemonWaitFixture, observe func(int) (lifetime.ProcessRef, error)) (*exec.Cmd, privateDaemonStart) {
+	t.Helper()
+	binary, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	command := exec.Command(binary, "-test.run=^TestDaemonWaitHelper$", "-test.timeout=10s")
+	options := fixture.options(nil)
+	command.Env, command.Dir = options.Environment, fixture.root
+	command.Stdout, command.Stderr = io.Discard, io.Discard
+	if err = command.Start(); err != nil {
+		t.Fatal(err)
+	}
+	// Establish the sole reaper before any fallible test bookkeeping.
+	started := startDaemonWait(command, nil, observe)
+	fixture.mu.Lock()
+	fixture.nativeStarted = true
+	fixture.mu.Unlock()
+	if err = options.DaemonWaitOwner.RegisterDaemonWait(fixture.root, command.Process.Pid, started.done); err != nil {
+		t.Fatal(err)
+	}
+	return command, started
+}
+
+func TestDaemonBirthCaptureBeforeReapingExitedChild(t *testing.T) {
+	fixture := newDaemonWaitFixture(t)
+	releaseCapture := make(chan struct{})
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(releaseCapture) }) }
+	t.Cleanup(release)
+	command, started := startDaemonBirthTestChild(t, fixture, func(pid int) (lifetime.ProcessRef, error) {
+		<-releaseCapture
+		return lifetime.ObserveStartedProcess(pid)
+	})
+	fixture.ready(t)
+	before, err := lifetime.ObserveStartedProcess(command.Process.Pid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertDaemonBirthGetterUnready(t, started.birth, release)
+	fixture.release(t)
+	awaitDaemonBirthChildExit(t, before)
+	select {
+	case <-started.done:
+		t.Fatal("child was reaped before its birth observation")
+	default:
+	}
+	release()
+	got, birthErr := awaitDaemonBirth(t, started.birth)
+	same, identityErr := lifetime.SameProcess(before, got)
+	if birthErr != nil || identityErr != nil || !same {
+		t.Fatalf("unreaped exit lost its birth: err=%v identity=%v same=%t", birthErr, identityErr, same)
+	}
+	if !joinDaemonWait(t, started.done) {
+		return
+	}
+	if command.ProcessState == nil || !command.ProcessState.Exited() {
+		t.Fatal("natural Cmd.Wait completion was not retained")
+	}
+}
+
+func assertDaemonBirthGetterUnready(t *testing.T, birth func() (lifetime.ProcessRef, bool, error), release func()) {
+	t.Helper()
+	type result struct {
+		reference lifetime.ProcessRef
+		ready     bool
+		err       error
+	}
+	returned, joined := make(chan result, 1), make(chan struct{})
+	go func() {
+		reference, ready, err := birth()
+		returned <- result{reference: reference, ready: ready, err: err}
+		close(joined)
+	}()
+	t.Cleanup(func() {
+		release()
+		select {
+		case <-joined:
+		case <-time.After(5 * time.Second):
+			t.Error("birth getter caller did not join")
+		}
+	})
+	select {
+	case got := <-returned:
+		if got.ready || got.err != nil || got.reference.PID() != 0 {
+			t.Fatalf("unobserved birth supplied evidence: ready=%t err=%v", got.ready, got.err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("birth getter waited for its producer")
+	}
+}
+
+func awaitDaemonBirthChildExit(t *testing.T, reference lifetime.ProcessRef) {
+	t.Helper()
+	deadline := time.NewTimer(5 * time.Second)
+	defer deadline.Stop()
+	ticker := time.NewTicker(time.Millisecond)
+	defer ticker.Stop()
+	for {
+		present, err := lifetime.ProcessPresent(reference)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !present {
+			return
+		}
+		select {
+		case <-deadline.C:
+			t.Fatal("released child did not exit before its deferred reap")
+		case <-ticker.C:
+		}
+	}
+}
+
+func TestDaemonBirthCaptureFailureCannotWithholdWait(t *testing.T) {
+	fixture := newDaemonWaitFixture(t)
+	failure := errors.New("birth unavailable")
+	command, started := startDaemonBirthTestChild(t, fixture, func(int) (lifetime.ProcessRef, error) {
+		return lifetime.ProcessRef{}, failure
+	})
+	fixture.ready(t)
+	fixture.release(t)
+	// No consumer reads the future until after the real child has been reaped.
+	if !joinDaemonWait(t, started.done) {
+		return
+	}
+	_, ready, err := started.birth()
+	if !ready || !errors.Is(err, failure) || command.ProcessState == nil || !command.ProcessState.Exited() {
+		t.Fatalf("capture failure replaced/blocked Wait: ready=%t err=%v", ready, err)
+	}
 }
 
 // This is a finite owned child, not a native resident/placement authority proof.

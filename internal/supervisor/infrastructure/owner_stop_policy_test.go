@@ -80,10 +80,10 @@ func TestOwnerStopRetainsStartToWaitRegistrationSlot(t *testing.T) {
 func assertOwnerStopRetainsDaemonWait(t *testing.T, server *ownerServer, done <-chan struct{}) {
 	t.Helper()
 	server.waits.mu.Lock()
-	pid, retained := server.waits.active[done]
+	registration, retained := server.waits.active[done]
 	server.waits.mu.Unlock()
-	if !retained || pid != os.Getpid() {
-		t.Fatalf("stop lost the original daemon completion: retained=%t pid=%d", retained, pid)
+	if !retained || registration.pid != os.Getpid() {
+		t.Fatalf("stop lost the original daemon completion: retained=%t pid=%d", retained, registration.pid)
 	}
 }
 

@@ -10,6 +10,7 @@ import (
 
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
 	"github.com/hishamkaram/delegation-layer/internal/supervisor/infrastructure"
+	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 )
 
@@ -58,7 +59,20 @@ func (h Host) openPreparation(ctx context.Context, operation infrastructure.Oper
 	if pin.Root() != intent.Inputs.Root || pin.RootID() != intent.Inputs.RootID || pin.Device() != intent.Inputs.RootDevice || pin.Inode() != intent.Inputs.RootInode {
 		return owner, infrastructure.ErrIdentity
 	}
+	owner.options.PrivateRuntimeRestartAuthorizer = h.callbacks.runtimeRestartAuthorizer(owner.store)
 	return owner, nil
+}
+
+func (c Callbacks) runtimeRestartAuthorizer(store *taskdir.Store) func(context.Context, string, pueue.RuntimeRestartReference, task.SupervisorRef, []pueue.Job) error {
+	if c.RuntimeRestartAuthorization == nil {
+		return nil
+	}
+	return func(ctx context.Context, root string, from pueue.RuntimeRestartReference, binding task.SupervisorRef, jobs []pueue.Job) error {
+		if store == nil || root != store.Root {
+			return infrastructure.ErrIdentity
+		}
+		return c.RuntimeRestartAuthorization(ctx, store, from, binding, jobs)
+	}
 }
 
 func (o *infrastructurePreparationOwner) disposition() infrastructure.Disposition {

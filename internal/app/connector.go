@@ -12,6 +12,7 @@ import (
 
 	"golang.org/x/sys/unix"
 
+	"github.com/hishamkaram/delegation-layer/internal/pueue"
 	"github.com/hishamkaram/delegation-layer/internal/resultread"
 	supervisorcore "github.com/hishamkaram/delegation-layer/internal/supervisor"
 	"github.com/hishamkaram/delegation-layer/internal/task"
@@ -174,7 +175,7 @@ func loadConnectorOrigin(ctx context.Context, a *Arguments, deps Dependencies) e
 func connectorFailure(response Response, err error) commandResult {
 	code := 1
 	if !taskdir.CleanupFault(err) && task.AllErrorCauses(err, func(cause error) bool {
-		return errors.Is(cause, task.ErrLockBusy) || errors.Is(cause, context.DeadlineExceeded)
+		return errors.Is(cause, task.ErrLockBusy) || errors.Is(cause, context.DeadlineExceeded) || errors.Is(cause, pueue.ErrPrivateRuntimeRestartPending)
 	}) {
 		code = 3
 	}
@@ -237,6 +238,11 @@ func connectorContextInspection(ctx context.Context, a Arguments, reader *taskdi
 	response.Connector = &ConnectorResponse{ConnectorContextObservation: observation}
 	if err != nil {
 		return connectorFailure(response, err)
+	}
+	if pending, readErr := pueue.PrivateRuntimeRestartPending(ctx, reader.Root()); readErr != nil {
+		return connectorFailure(response, publicSupervisorError("private runtime readiness is unavailable", readErr))
+	} else if pending {
+		return connectorFailure(response, pueue.ErrPrivateRuntimeRestartPending)
 	}
 	if a.Connector.GatewayID != "" {
 		registered := false

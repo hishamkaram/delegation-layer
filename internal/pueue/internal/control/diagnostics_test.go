@@ -227,7 +227,8 @@ func TestDaemonWaitCompletesBeforeBlockedInvocationReporter(t *testing.T) {
 		}
 		<-releaseCallback
 	}
-	done, err := guardedDaemonStart(t.Context(), root, filepath.Join(root, "config"), command, allowDaemonStartForTest{}, report)
+	started, err := guardedDaemonStart(t.Context(), root, filepath.Join(root, "config"), command, allowDaemonStartForTest{}, report)
+	done := started.done
 	if err != nil || done == nil {
 		// No command owns a callback on a failed Start.
 		close(callbackDone)

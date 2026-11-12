@@ -32,6 +32,10 @@ func LoadOperationContext(ctx context.Context, store *taskdir.Store, taskID stri
 	return inspectionjournal.LoadOperationContext(ctx, store, taskID)
 }
 
+func ObserveLifetimeContext(ctx context.Context, store *taskdir.Store, id string, observe func(taskdir.ControlLifetimeObservation) error) error {
+	return inspectionjournal.ObserveLifetimeContext(ctx, store, id, observe)
+}
+
 func OpenOperation(store *taskdir.Store, request task.TaskRecord, binding contract.Binding, now time.Time) (*Operation, error) {
 	return inspectionjournal.OpenOperation(store, request, binding, now)
 }

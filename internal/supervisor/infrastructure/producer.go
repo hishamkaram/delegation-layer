@@ -50,6 +50,9 @@ func establishCaptured(ctx context.Context, target *taskdir.Store, request Estab
 	if err := request.Initial.Validate(request.Context.RootID); err != nil {
 		return nil, err
 	}
+	if err := validateRuntimeRestartProducer(request.Initial, source.starter.kind); err != nil {
+		return nil, err
+	}
 	request.Initial = request.Initial.normalized()
 	attempt := &StartupAttempt{target: target}
 	if err := attempt.open(ctx, request); err != nil {

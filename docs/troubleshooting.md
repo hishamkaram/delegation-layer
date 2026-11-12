@@ -48,6 +48,15 @@ without exposing credentials or inherited environments. A later command does
 not relocate the running supervisor; changing its context needs covering
 authorization.
 
+When changing a quiescent daemon's execution context is authorized, use the
+[explicit runtime-restart contract](../skills/agent-integration/references/command-reference.md#supervisor-runtime-restart)
+from that intended context. Keep the original startup token across retries.
+Passive custody and completed restart observations do not prove provider login;
+preserve rejected tasks and verify any separately authorized new task normally.
+If the old daemon is alive but unreachable, repeating restart cannot progress;
+investigate that daemon's availability without clearing the saved fence. A
+pending shutdown may persist until its underlying command fault is fixed.
+
 ## Provider starts but the result is rejected
 
 `provider_startup_failed` means a process exited with a positive status

@@ -1,6 +1,11 @@
 package app
 
-import "github.com/hishamkaram/delegation-layer/internal/supervisor"
+import (
+	"errors"
+
+	"github.com/hishamkaram/delegation-layer/internal/pueue"
+	"github.com/hishamkaram/delegation-layer/internal/supervisor"
+)
 
 type supervisorPublicError struct {
 	message string
@@ -31,6 +36,10 @@ func commandPresentationError(command string, result commandResult) error {
 // has a typed detail, or nil when the command error is presented unchanged.
 func dispatchPublicError(failure DispatchFailureResponse, err error) error {
 	switch {
+	// Mixed causes remain operational faults, but their private supervisor
+	// diagnostics require the same public presentation as a pure pending refusal.
+	case errors.Is(err, pueue.ErrPrivateRuntimeRestartPending):
+		return publicSupervisorError(dispatchFailureMessage(failure.Code), err)
 	case failure.Code == "resource_pressure":
 		return publicResourceError(dispatchFailureMessage(failure.Code), err)
 	case supervisorFailureCode(failure.Code) && failure.ReasonCode != "":

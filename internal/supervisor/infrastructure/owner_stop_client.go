@@ -86,24 +86,44 @@ func StopOwnerServingAt(ctx context.Context, reader *taskdir.ReadOnlyStore, expe
 // a successor is elected. It never sends another stop or substitutes that successor.
 func WaitOwnerProcessClosed(ctx context.Context, reader *taskdir.ReadOnlyStore, expected StartupReference) (OwnerStopResult, error) {
 	result := OwnerStopResult{State: OwnerStopUnknown, ProcessClosure: OwnerProcessUnknown, Startup: expected}
-	if err := expected.Validate(); err != nil {
+	selected, err := readOwnerClosureSelection(ctx, reader, expected)
+	if err != nil {
 		return result, err
 	}
-	if err := validateOwnerStopContext(ctx, reader); err != nil {
+	return awaitOwnerClosure(ctx, reader, selected, result, true)
+}
+
+// ObserveOwnerProcessClosed reads the exact original incarnation once, even
+// after a successor was accepted. Pending/unknown does not grant Start; callers
+// which need to wait do so outside their bootstrap EX through the waiting API.
+func ObserveOwnerProcessClosed(ctx context.Context, reader *taskdir.ReadOnlyStore, expected StartupReference) (OwnerStopResult, error) {
+	result := OwnerStopResult{State: OwnerStopUnknown, ProcessClosure: OwnerProcessUnknown, Startup: expected}
+	selected, err := readOwnerClosureSelection(ctx, reader, expected)
+	if err != nil {
 		return result, err
+	}
+	return observeOwnerStopClosure(ctx, reader, selected)
+}
+
+func readOwnerClosureSelection(ctx context.Context, reader *taskdir.ReadOnlyStore, expected StartupReference) (ownerStopLocator, error) {
+	if err := expected.Validate(); err != nil {
+		return ownerStopLocator{}, err
+	}
+	if err := validateOwnerStopContext(ctx, reader); err != nil {
+		return ownerStopLocator{}, err
 	}
 	pin, err := reader.PinRootContext(ctx)
 	if err != nil {
-		return result, err
+		return ownerStopLocator{}, err
 	}
 	selected, err := readOwnerStopSequence(ctx, reader, pin, expected.Sequence)
 	if err != nil {
-		return result, err
+		return ownerStopLocator{}, err
 	}
 	if selected.reference != expected {
-		return result, ErrIdentity
+		return ownerStopLocator{}, ErrIdentity
 	}
-	return awaitOwnerClosure(ctx, reader, selected, result, true)
+	return selected, nil
 }
 
 // StopOwnerServing contacts one existing selected owner at most once. It never

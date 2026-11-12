@@ -142,13 +142,14 @@ type SupervisorResponse = tasklifecycle.SupervisorObservation
 // SupervisorControlResponse describes Delegate-owned supervisor recovery
 // without exposing executable paths, socket paths, or process diagnostics.
 type SupervisorControlResponse struct {
-	Action             string `json:"action"`
-	State              string `json:"state"`
-	LegacyReachability string `json:"legacy_reachability"`
-	ActiveWork         string `json:"active_work"`
-	MigrationPhase     string `json:"migration_phase,omitempty"`
-	NextAction         string `json:"next_action"`
-	ReasonCode         string `json:"reason_code,omitempty"`
+	Action             string                            `json:"action"`
+	State              string                            `json:"state"`
+	LegacyReachability string                            `json:"legacy_reachability"`
+	ActiveWork         string                            `json:"active_work"`
+	MigrationPhase     string                            `json:"migration_phase,omitempty"`
+	NextAction         string                            `json:"next_action"`
+	ReasonCode         string                            `json:"reason_code,omitempty"`
+	RuntimeRestart     *SupervisorRuntimeRestartResponse `json:"runtime_restart,omitempty"`
 }
 
 type StopResponse struct {

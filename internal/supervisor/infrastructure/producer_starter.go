@@ -13,7 +13,15 @@ import (
 // A nonnil environment distinguishes successful capture, including empty input.
 type capturedProducerStarter struct {
 	environment []string
+	kind        producerKind
 }
+
+type producerKind string
+
+const (
+	producerOutside  producerKind = "outside"
+	producerResident producerKind = "resident"
+)
 
 type capturedEstablishment struct {
 	starter capturedProducerStarter
@@ -26,6 +34,7 @@ func captureOutsideProducer(ctx context.Context, environment []string) (captured
 	}
 	return capturedProducerStarter{
 		environment: append([]string{}, environment...),
+		kind:        producerOutside,
 	}, nil
 }
 
@@ -50,5 +59,6 @@ func (e *ownedResidentEntry) captureOwnerProducer(ctx context.Context) (captured
 	}
 	return capturedProducerStarter{
 		environment: append([]string{}, environment...),
+		kind:        producerResident,
 	}, nil
 }

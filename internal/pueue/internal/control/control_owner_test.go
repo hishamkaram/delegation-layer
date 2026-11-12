@@ -152,11 +152,17 @@ func TestControlOwnerPreservesCompletedRefusal(t *testing.T) {
 	executable := finiteExecutable(t, "exit 7")
 	command := exec.Command(executable)
 	command.Dir = filepath.Dir(executable)
-	pending := startControlOwnerTest(t, command, "dddddddddddddddddddddddddddddddd", "")
+	proof := &controlCommandSettlement{}
+	pending := startControlOwnerTestWithSettlement(t, command, "dddddddddddddddddddddddddddddddd", "", proof)
 	awaitControlOwnerTest(t, pending)
 	result, err := observeCommand(t.Context(), pending, 2*time.Second)
 	if err == nil || !completedExit(err) || result.ExitCode != 7 {
 		t.Fatalf("completed refusal = %+v, %v", result, err)
+	}
+	projected := runtimeRestartShutdownFailure(err, proof)
+	var diagnostic *PrivateRuntimeRestartError
+	if !errors.Is(projected, ErrPrivateRuntimeRestartPending) || !errors.As(projected, &diagnostic) || !errors.Is(diagnostic.DiagnosticCause(), err) {
+		t.Fatalf("natural command Wait failed to publish runtime settlement proof: %v", projected)
 	}
 	acknowledged := commandAcknowledgment(result, err)
 	if acknowledged == nil || *acknowledged {
@@ -263,12 +269,17 @@ func TestControlOwnerTestHelperJoinsOwnerBeforeEarlierCleanup(t *testing.T) {
 
 func startControlOwnerTest(t *testing.T, command *exec.Cmd, commandID, statusVersion string) *Pending {
 	t.Helper()
+	return startControlOwnerTestWithSettlement(t, command, commandID, statusVersion, nil)
+}
+
+func startControlOwnerTestWithSettlement(t *testing.T, command *exec.Cmd, commandID, statusVersion string, proof *controlCommandSettlement) *Pending {
+	t.Helper()
 	started := make(chan struct{}, 1)
-	pending := startControlOwnedCapturedWithConsume(t.Context(), os.Args[0], command, commandID, func(event CommandEvent) {
+	pending := startControlOwnedCapturedWithSettlement(t.Context(), os.Args[0], command, commandID, func(event CommandEvent) {
 		if event.Stage == "started" {
 			started <- struct{}{}
 		}
-	}, statusVersion, nil, nil)
+	}, statusVersion, nil, nil, proof)
 	// The owner child is finite, so join its sole completion before earlier
 	// cleanups such as the fixture's TempDir run. The join cannot use t.Context,
 	// which is canceled before cleanups; the bounded wait only reports a stuck

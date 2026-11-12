@@ -15,7 +15,9 @@ func ownerPreparationSubjectFixture(action ownerAction) ownerRequest {
 	switch action {
 	case ownerRecoverSaved, ownerPrepareContinuation:
 		r.Source = SavedBindingSource{RootID: r.RootID, Kind: SavedBindingTaskMetadata, OwnerID: strings.Repeat("b", 32), BindingSHA256: strings.Repeat("c", 64)}
-	case ownerEnsureOwn, ownerMigrateOwn:
+	case ownerEnsureOwn, ownerMigrateOwn, ownerRuntimeRestartPreflight:
+	case ownerRuntimeRestart:
+		r.RestartFrom = r.Owner
 	case ownerEnsureOther:
 		r.Target = originRecord{Root: "/other", RootID: strings.Repeat("b", 32)}
 
@@ -26,7 +28,7 @@ func ownerPreparationSubjectFixture(action ownerAction) ownerRequest {
 }
 
 func TestOwnerPreparationSubjectsRoundTripAndRefuseMixedAuthority(t *testing.T) {
-	for _, action := range []ownerAction{ownerEnsureOwn, ownerEnsureOther, ownerRecoverSaved, ownerPrepareContinuation} {
+	for _, action := range []ownerAction{ownerEnsureOwn, ownerEnsureOther, ownerRecoverSaved, ownerPrepareContinuation, ownerRuntimeRestart} {
 		t.Run(string(action), func(t *testing.T) {
 			request := ownerPreparationSubjectFixture(action)
 			var wire bytes.Buffer

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"time"
 
+	"github.com/hishamkaram/delegation-layer/internal/lifetime"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 )
 
@@ -37,10 +38,13 @@ type DaemonStartGuard interface {
 	GuardDaemonStart(ctx context.Context, operationRoot string, start func() error) error
 }
 
-// PrivateGenerationGuard owns current resident authority for one publication.
+// PrivateGenerationGuard owns current resident authority for canonical
+// publication and the runtime's pure shutdown-admission claim.
 // Implementations invoke commit synchronously, at most once, and return its
-// error. The callback contains only canonical publication writes, never daemon
-// start, orchestration, or another generation guard.
+// error. The callback contains only those writes or that claim, never native
+// Start, orchestration, or another generation guard. An admitted exact shutdown
+// still consumes the live bootstrap scope at owner.Start; its journal writes
+// recheck this grant. Infrastructure retains the grant through callback drain.
 type PrivateGenerationGuard interface {
 	GuardPrivateGenerationCommit(ctx context.Context, operationRoot string, commit func() error) error
 }
@@ -50,6 +54,21 @@ type PrivateGenerationGuard interface {
 // Registering a handle never transfers Wait ownership or joins Client.Close.
 type DaemonWaitOwner interface {
 	RegisterDaemonWait(root string, pid int, done <-chan struct{}) error
+}
+
+// DaemonWaitBirthOwner optionally records the canonical starter's immutable
+// before-reap identity future alongside its actual Wait completion. The getter
+// never waits, rereads a PID, or transfers ownership of the child.
+type DaemonWaitBirthOwner interface {
+	DaemonWaitOwner
+	RegisterDaemonWaitBirth(root string, pid int, done <-chan struct{}, birth func() (lifetime.ProcessRef, bool, error)) error
+}
+
+// DaemonWaitCustodyOwner checks the same live resident's exact registered
+// subject. Missing/unfinished birth evidence grants no initial restart custody.
+type DaemonWaitCustodyOwner interface {
+	DaemonWaitOwner
+	RequireDaemonWaitCustody(ctx context.Context, root string, expected lifetime.ProcessRef) error
 }
 
 // Options controls caller observation and an optional explicit process context.
@@ -119,6 +138,15 @@ type Options struct {
 	// stopping a private supervisor. Pueue supplies an immutable queue snapshot;
 	// it does not inspect Delegate task or inspection schemas.
 	PrivateMigrationAuthorizer func(context.Context, string, task.SupervisorRef, []Job) error
+	// PrivateRuntimeRestartAuthorizer validates the operation's original/current
+	// startup authority and root-wide task/auxiliary quiescence. It is mandatory
+	// for runtime restart; the row-based migration policy is not a fallback.
+	PrivateRuntimeRestartAuthorizer func(context.Context, string, RuntimeRestartReference, task.SupervisorRef, []Job) error
+	// PrivateRuntimeRestartSuccessorAuthorizer is infrastructure's mandatory
+	// read-only proof of the exact selected successor, outside provenance and
+	// original owner closure. It runs before successor acceptance, separately
+	// from the real observed Start guard, which repeats those checks at Start.
+	PrivateRuntimeRestartSuccessorAuthorizer func(context.Context, string, RuntimeRestartReference, RuntimeRestartReference, task.SupervisorRef) error
 	// Observer is an optional finite, concurrency-safe acceptance recorder.
 	// It receives copied values and must not block process ownership.
 	Observer func(CommandEvent)

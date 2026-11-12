@@ -65,6 +65,22 @@ func writeHumanSupervisor(output *strings.Builder, control *SupervisorControlRes
 		fmt.Fprintf(output, " migration_phase=%s", control.MigrationPhase)
 	}
 	output.WriteByte('\n')
+	if restart := control.RuntimeRestart; restart != nil {
+		fmt.Fprintf(output, "runtime_restart from_startup=%s", restart.FromStartup)
+		if restart.Phase != "" {
+			fmt.Fprintf(output, " phase=%s", restart.Phase)
+		}
+		if restart.SuccessorStartup != "" {
+			fmt.Fprintf(output, " successor_startup=%s", restart.SuccessorStartup)
+		}
+		if restart.Custody != "" {
+			fmt.Fprintf(output, " custody=%s observed_at=%s", restart.Custody, restart.ObservedAt)
+		}
+		if restart.OperationPending {
+			output.WriteString(" operation_pending=true")
+		}
+		output.WriteByte('\n')
+	}
 }
 
 func writeHumanContinuation(output *strings.Builder, continuation *ContinuationResponse) {

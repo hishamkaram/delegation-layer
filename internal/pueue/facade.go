@@ -33,6 +33,43 @@ func CheckPrivateAdmissionRuntime(ctx context.Context, root string, runtime task
 }
 
 type (
+	RuntimeRestartReference          = control.RuntimeRestartReference
+	RuntimeRestartPhase              = control.RuntimeRestartPhase
+	PrivateRuntimeRestartObservation = control.PrivateRuntimeRestartObservation
+	PrivateRuntimeRestartError       = control.PrivateRuntimeRestartError
+)
+
+const (
+	RuntimeRestartRequested         = control.RuntimeRestartRequested
+	RuntimeRestartShutdownPending   = control.RuntimeRestartShutdownPending
+	RuntimeRestartDaemonClosed      = control.RuntimeRestartDaemonClosed
+	RuntimeRestartSuccessorAccepted = control.RuntimeRestartSuccessorAccepted
+	RuntimeRestartReady             = control.RuntimeRestartReady
+)
+
+var (
+	ErrPrivateRuntimeRestartPending              = control.ErrPrivateRuntimeRestartPending
+	ErrPrivateRuntimeRestartAuthorization        = control.ErrPrivateRuntimeRestartAuthorization
+	ErrPrivateRuntimeRestartReferenceNotRetained = control.ErrPrivateRuntimeRestartReferenceNotRetained
+)
+
+func ObservePrivateRuntimeRestart(ctx context.Context, root string, from RuntimeRestartReference) (PrivateRuntimeRestartObservation, error) {
+	return control.ObservePrivateRuntimeRestart(ctx, root, from)
+}
+
+func PrivateRuntimeRestartPending(ctx context.Context, root string) (bool, error) {
+	return control.PrivateRuntimeRestartPending(ctx, root)
+}
+
+func RequireRuntimeRestartBootstrap(ctx context.Context, root string) error {
+	return control.RequireRuntimeRestartBootstrap(ctx, root)
+}
+
+func PrepareRuntimeRestartWithLock(ctx context.Context, root string, from RuntimeRestartReference, options Options) (*Client, error) {
+	return control.PrepareRuntimeRestartWithLock(ctx, root, from, options)
+}
+
+type (
 	PrivateRestorePresence    = control.PrivateRestorePresence
 	PrivateRestoreSource      = control.PrivateRestoreSource
 	PrivateRestoreObservation = control.PrivateRestoreObservation
@@ -475,6 +512,8 @@ type (
 	PrivateGenerationGuard      = control.PrivateGenerationGuard
 	DaemonStartGuard            = control.DaemonStartGuard
 	DaemonWaitOwner             = control.DaemonWaitOwner
+	DaemonWaitBirthOwner        = control.DaemonWaitBirthOwner
+	DaemonWaitCustodyOwner      = control.DaemonWaitCustodyOwner
 	Options                     = control.Options
 	PrivateQueueCleanupPlan     = control.PrivateQueueCleanupPlan
 	PrivateTerminalCustodyScope = control.PrivateTerminalCustodyScope

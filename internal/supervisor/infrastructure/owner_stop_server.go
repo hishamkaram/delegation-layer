@@ -63,6 +63,9 @@ func (s *ownerServer) commitOwnerStop() ownerStopCode {
 	if s.closing || !s.initialCompleted || s.connectionCount(ownerConnectionOperation) != 0 {
 		return ownerStopBusy
 	}
+	if s.runtimeFrom != (StartupReference{}) && s.waits.hasActiveWait() {
+		return ownerStopBusy
+	}
 	if s.terminalHandoff && !s.deliveryCompleted {
 		deadline, err := canonicalStartupTime(s.entry.operation.Intent().Deadline)
 		if err != nil {

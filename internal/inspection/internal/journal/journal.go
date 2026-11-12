@@ -57,30 +57,35 @@ func LoadOperationContext(ctx context.Context, store *taskdir.Store, taskID stri
 	var digest string
 	var deadline time.Time
 	err = withControlTransactionContext(ctx, control, func(tx *taskdir.ControlTransaction) error {
-		if readErr := tx.Read(requestRecordName, &request); readErr != nil {
-			return readErr
-		}
-		if ctxErr := ctx.Err(); ctxErr != nil {
-			return ctxErr
-		}
-		validatedDeadline, validationErr := contract.RequestDeadline(request, store.RootID)
-		if validationErr != nil || request.IdentityID() != taskID {
-			return task.ErrEvidenceFault
-		}
-		if groupErr := validateOperationGroup(store, request); groupErr != nil {
-			return groupErr
-		}
-		if canonicalErr := verifyCanonicalRequest(tx, request); canonicalErr != nil {
-			return canonicalErr
-		}
-		digest = contract.RequestDigest(request)
-		deadline = validatedDeadline
-		return nil
+		var readErr error
+		request, digest, deadline, readErr = readOperationRequestTx(ctx, tx, store, taskID)
+		return readErr
 	})
 	if err != nil {
 		return nil, err
 	}
 	return &Operation{control: control, request: contract.CloneRequestRecord(request), digest: digest, deadline: deadline}, nil
+}
+
+func readOperationRequestTx(ctx context.Context, tx *taskdir.ControlTransaction, store *taskdir.Store, taskID string) (contract.RequestRecord, string, time.Time, error) {
+	var request contract.RequestRecord
+	if err := tx.Read(requestRecordName, &request); err != nil {
+		return request, "", time.Time{}, err
+	}
+	if err := ctx.Err(); err != nil {
+		return request, "", time.Time{}, err
+	}
+	deadline, err := contract.RequestDeadline(request, store.RootID)
+	if err != nil || request.IdentityID() != taskID {
+		return request, "", time.Time{}, task.ErrEvidenceFault
+	}
+	if err = validateOperationGroup(store, request); err != nil {
+		return request, "", time.Time{}, err
+	}
+	if err = verifyCanonicalRequest(tx, request); err != nil {
+		return request, "", time.Time{}, err
+	}
+	return request, contract.RequestDigest(request), deadline, nil
 }
 
 // OpenOperation opens or creates the inspection journal for request. Static

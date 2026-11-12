@@ -88,6 +88,11 @@ func (s *Store) finishConnectorAncestors(resultErr *error, ancestors *connectorA
 			namespace.ancestors = ancestors
 			return
 		}
+		var control *ControlObservationCleanupError
+		if errors.As(*resultErr, &control) && control.RetainedStore() == s {
+			control.retainAncestor(ancestors)
+			return
+		}
 		return
 	}
 	if err := ancestors.release(); err != nil {
