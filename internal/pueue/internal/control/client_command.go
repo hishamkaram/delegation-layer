@@ -10,6 +10,10 @@ import (
 )
 
 func (c *Client) command(ctx context.Context, consume func() error, args ...string) (CommandResult, error) {
+	return c.commandWithSettlement(ctx, consume, nil, args...)
+}
+
+func (c *Client) commandWithSettlement(ctx context.Context, consume func() error, settlement *controlCommandSettlement, args ...string) (CommandResult, error) {
 	if err := ctx.Err(); err != nil {
 		return CommandResult{}, err
 	}
@@ -46,7 +50,7 @@ func (c *Client) command(ctx context.Context, consume func() error, args ...stri
 		}
 		pending = startOwnedCaptured(cmd, commandID, c.options.Observer, statusVersion, c.options.ReportDiagnostic)
 	} else {
-		pending = startControlOwnedCapturedWithConsume(ctx, c.options.ControlOwnerExecutable, cmd, commandID, c.options.Observer, statusVersion, consume, c.options.ReportDiagnostic)
+		pending = startControlOwnedCapturedWithSettlement(ctx, c.options.ControlOwnerExecutable, cmd, commandID, c.options.Observer, statusVersion, consume, c.options.ReportDiagnostic, settlement)
 	}
 	finishPending := finishWork
 	finishWork = nil

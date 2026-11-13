@@ -38,6 +38,9 @@ func (facts privateGenerationFacts) runtimeRefused(runtime task.SupervisorRef) (
 	if err := errors.Join(facts.publishedErr, facts.identityErr, facts.transitionErr, facts.identityPublicationReadErr); err != nil {
 		return false, err
 	}
+	if facts.runtimeRestartPending {
+		return false, ErrPrivateRuntimeRestartPending
+	}
 	ready, err := facts.publishedReady(facts.published)
 	if err != nil {
 		return false, err
@@ -49,6 +52,10 @@ func (facts privateGenerationFacts) runtimeRefused(runtime task.SupervisorRef) (
 }
 
 func (facts privateGenerationFacts) complete(binding task.SupervisorRef, allowRecoveryAlias bool) (bool, error) {
+	if facts.runtimeRestartPending {
+		return false, errors.Join(ErrPrivateRuntimeRestartPending, facts.migrationErr, facts.aliasErr,
+			facts.publishedErr, facts.identityErr, facts.transitionErr, facts.identityPublicationReadErr)
+	}
 	if facts.migrationErr != nil || facts.migrationPresent {
 		return false, facts.migrationErr
 	}

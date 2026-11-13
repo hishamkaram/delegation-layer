@@ -30,6 +30,20 @@ func CleanupRetainsStore(cause error, store *Store) bool {
 func CleanupHasRetainedStore(cause error) bool {
 	return task.AnyErrorNode(cause, func(node error) bool {
 		var retained interface{ RetainedStore() *Store }
-		return errors.As(node, &retained) && retained != nil && retained.RetainedStore() != nil
+		if errors.As(node, &retained) && retained != nil && retained.RetainedStore() != nil {
+			return true
+		}
+		var lifetime *LifetimeOwnerCleanupError
+		return errors.As(node, &lifetime) && lifetime != nil && lifetime.Lease().CleanupPending()
+	})
+}
+
+// CleanupFault reports a typed storage cleanup failure, including historical
+// errors whose resource owner has since settled. It grants no custody or retry.
+func CleanupFault(cause error) bool {
+	return task.AnyErrorNode(cause, func(node error) bool {
+		var retained interface{ RetainedStore() *Store }
+		var lifetime *LifetimeOwnerCleanupError
+		return errors.As(node, &retained) || errors.As(node, &lifetime)
 	})
 }

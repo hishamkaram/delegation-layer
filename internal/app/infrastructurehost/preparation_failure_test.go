@@ -40,6 +40,8 @@ func TestInfrastructurePreparationFailurePreservesExactDomainLeaves(t *testing.T
 		{infrastructure.ErrIdentity, infrastructure.PreparationCauseInfrastructureIdentity},
 		{task.ErrIdentityMismatch, infrastructure.PreparationCauseTaskIdentity},
 		{task.ErrEvidenceFault, infrastructure.PreparationCauseEvidenceFault},
+		{pueue.ErrPrivateRuntimeRestartPending, infrastructure.PreparationCauseRuntimeRestartPending},
+		{supervisor.ErrRuntimeQuiescenceBusy, infrastructure.PreparationCauseRuntimeQuiescenceBusy},
 	} {
 		t.Run(fixture.err.Error(), func(t *testing.T) {
 			failure := (Host{}).ClassifyPreparation(fixture.err)
@@ -52,6 +54,110 @@ func TestInfrastructurePreparationFailurePreservesExactDomainLeaves(t *testing.T
 			}
 		})
 	}
+}
+
+func TestRuntimeRestartPendingPreparationKeepsExactCauseAcrossWire(t *testing.T) {
+	assertRuntimeRestartMarkerWire(t)
+	for _, fixture := range []struct {
+		name  string
+		cause error
+		bits  infrastructure.PreparationCauses
+	}{
+		{"deadline", context.DeadlineExceeded, infrastructure.PreparationCauseDeadline},
+		{"canceled", context.Canceled, infrastructure.PreparationCauseCanceled},
+		{"inflight", pueue.ErrInFlight, infrastructure.PreparationCauseInFlight},
+	} {
+		t.Run(fixture.name, func(t *testing.T) {
+			original := &pueue.PrivateRuntimeRestartError{ReasonCode: "successor_not_ready", Err: errors.Join(pueue.ErrPrivateRuntimeRestartPending, fixture.cause)}
+			assertRuntimeRestartObservationWire(t, original, fixture.bits)
+		})
+	}
+	assertRuntimeRestartObservationFaults(t)
+}
+
+func assertRuntimeRestartMarkerWire(t *testing.T) {
+	t.Helper()
+	failure := (Host{}).ClassifyPreparation(pueue.ErrPrivateRuntimeRestartPending)
+	if failure.Causes == 0 || failure.IndependentFault {
+		t.Fatalf("runtime restart fence became an opaque setup fault: %+v", failure)
+	}
+	data, err := task.MarshalCanonical(failure)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded infrastructure.PreparationFailure
+	if err = task.DecodeStrict(data, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	projected := infrastructurePreparationOutcomeError(infrastructure.PreparationOutcome{Condition: infrastructure.PreparationPending, Failure: decoded})
+	if !errors.Is(projected, pueue.ErrPrivateRuntimeRestartPending) || !errors.Is(projected, infrastructure.ErrOwnerPending) || errors.Is(projected, infrastructure.ErrOwnerRequest) {
+		t.Fatalf("runtime restart pending lost exact retry identity: %v", projected)
+	}
+	for _, cause := range []error{os.ErrPermission, &retainedPreparationFixtureError{pueue.ErrPrivateRuntimeRestartPending}} {
+		mixed := (Host{}).ClassifyPreparation(errors.Join(pueue.ErrPrivateRuntimeRestartPending, cause))
+		if mixed.Causes != failure.Causes || !mixed.IndependentFault {
+			t.Fatalf("joined storage or cleanup failure became pure pending: %+v", mixed)
+		}
+		projected = infrastructurePreparationOutcomeError(infrastructure.PreparationOutcome{Condition: infrastructure.PreparationFault, Failure: mixed})
+		if !errors.Is(projected, pueue.ErrPrivateRuntimeRestartPending) || !errors.Is(projected, infrastructure.ErrOwnerRequest) {
+			t.Fatalf("mixed pending lost its independent fault: %v", projected)
+		}
+	}
+}
+
+func assertRuntimeRestartObservationWire(t *testing.T, original error, observation infrastructure.PreparationCauses) {
+	t.Helper()
+	failure := (Host{}).ClassifyPreparation(original)
+	want := infrastructure.PreparationFailure{Causes: infrastructure.PreparationCauseRuntimeRestartPending | observation, Reason: infrastructure.PreparationReasonObservationFailed}
+	if failure != want {
+		t.Fatalf("typed known-born observation lost exact causes/reason or gained Binding/fault: got=%+v want=%+v", failure, want)
+	}
+	decoded := roundTripRuntimeRestartFailure(t, failure)
+	// This isolates the app's classification/reconstruction bridge. The
+	// server's actual timeout selection has its own component/native coverage.
+	projected := infrastructurePreparationOutcomeError(infrastructure.PreparationOutcome{Condition: infrastructure.PreparationPending, Failure: decoded})
+	if !errors.Is(projected, infrastructure.ErrOwnerPending) || !errors.Is(projected, pueue.ErrPrivateRuntimeRestartPending) || errors.Is(projected, pueue.ErrBinding) || errors.Is(projected, infrastructure.ErrOwnerRequest) || supervisor.FailureReason(projected) != "observation_failed" {
+		t.Fatalf("typed known-born observation became an independent setup fault: %v", projected)
+	}
+}
+
+func assertRuntimeRestartObservationFaults(t *testing.T) {
+	t.Helper()
+	for _, fixture := range []struct {
+		name        string
+		extra       error
+		bits        infrastructure.PreparationCauses
+		independent bool
+	}{
+		{"binding", pueue.ErrBinding, infrastructure.PreparationCauseBinding, false},
+		{"retained cleanup", &retainedPreparationFixtureError{cause: pueue.ErrPrivateRuntimeRestartPending}, 0, true},
+	} {
+		t.Run(fixture.name, func(t *testing.T) {
+			original := &pueue.PrivateRuntimeRestartError{ReasonCode: "successor_not_ready", Err: errors.Join(pueue.ErrPrivateRuntimeRestartPending, context.DeadlineExceeded, fixture.extra)}
+			failure := (Host{}).ClassifyPreparation(original)
+			want := infrastructure.PreparationFailure{Causes: infrastructure.PreparationCauseRuntimeRestartPending | infrastructure.PreparationCauseDeadline | fixture.bits, Reason: infrastructure.PreparationReasonObservationFailed, IndependentFault: fixture.independent}
+			if failure != want {
+				t.Fatalf("typed observation concealed a binding/cleanup fault: got=%+v want=%+v", failure, want)
+			}
+			projected := infrastructurePreparationOutcomeError(infrastructure.PreparationOutcome{Condition: infrastructure.PreparationFault, Failure: roundTripRuntimeRestartFailure(t, failure)})
+			if errors.Is(projected, infrastructure.ErrOwnerPending) || !errors.Is(projected, pueue.ErrPrivateRuntimeRestartPending) || errors.Is(projected, infrastructure.ErrOwnerRequest) != fixture.independent || errors.Is(projected, pueue.ErrBinding) != (fixture.bits != 0) {
+				t.Fatalf("mixed typed failure lost its fault identity: %v", projected)
+			}
+		})
+	}
+}
+
+func roundTripRuntimeRestartFailure(t *testing.T, failure infrastructure.PreparationFailure) infrastructure.PreparationFailure {
+	t.Helper()
+	data, err := task.MarshalCanonical(failure)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded infrastructure.PreparationFailure
+	if err = task.DecodeStrict(data, &decoded); err != nil || decoded != failure {
+		t.Fatalf("typed runtime failure changed across strict wire: got=%+v want=%+v err=%v", decoded, failure, err)
+	}
+	return decoded
 }
 
 func TestInfrastructurePreparationFailurePreservesJoinedPolicies(t *testing.T) {

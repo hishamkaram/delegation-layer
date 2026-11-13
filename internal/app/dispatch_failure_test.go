@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -44,6 +45,59 @@ func TestDispatchFailureResponseHidesSupervisorDetails(t *testing.T) {
 		decoded.Failure.Stage != "start-supervisor" ||
 		decoded.Failure.NextAction != "stop_and_report" {
 		t.Fatalf("dispatch failure recovery contract changed: %+v", decoded)
+	}
+}
+
+func TestDispatchRuntimeRestartUsesPendingRecovery(t *testing.T) {
+	for _, record := range []string{"not_created", "created", "unknown"} {
+		t.Run(record, func(t *testing.T) {
+			cause := admission.WithStage("start-supervisor", pueue.ErrPrivateRuntimeRestartPending)
+			failure := dispatchFailure(cause, record)
+			wantAction := "stop_and_report"
+			switch record {
+			case "not_created":
+				wantAction = "retry_later"
+			case "created":
+				wantAction = "check_status"
+			}
+			if failure.Code != "retry_later" || failure.ReasonCode != "runtime_restart_pending" || failure.NextAction != wantAction || failure.RecoveryCommand != "" {
+				t.Fatalf("runtime restart lost bounded recovery: %+v", failure)
+			}
+			if failure.Stage != "start-supervisor" {
+				t.Fatalf("runtime restart lost its stage: %+v", failure)
+			}
+		})
+	}
+}
+
+func TestDispatchRuntimeRestartDoesNotHideIndependentFault(t *testing.T) {
+	cause := admission.WithStage("start-supervisor", errors.Join(pueue.ErrPrivateRuntimeRestartPending, errors.New("independent store failure")))
+	failure := dispatchFailure(cause, "not_created")
+	if failure.Code != "supervisor_setup_failed" || failure.NextAction != "stop_and_report" || failure.RecoveryCommand != "" {
+		t.Fatalf("mixed runtime fault became an automatic retry or migration: %+v", failure)
+	}
+}
+
+func TestDispatchRuntimeRestartRedactsWrappedPrivateDetails(t *testing.T) {
+	private := "/private/test-state/private-supervisor"
+	cause := admission.WithStage("start-supervisor", fmt.Errorf("%s: %w", private, pueue.ErrPrivateRuntimeRestartPending))
+	failure := dispatchFailure(cause, "not_created")
+	public := dispatchPublicError(failure, cause)
+	if public == nil || !errors.Is(public, pueue.ErrPrivateRuntimeRestartPending) || strings.Contains(public.Error(), private) {
+		t.Fatalf("pending restart exposed private details or lost its cause: %v", public)
+	}
+}
+
+func TestDispatchMixedRuntimeRestartRedactsHumanError(t *testing.T) {
+	const private = "/private/test-state/failed-record.json"
+	cause := admission.WithStage("start-supervisor", errors.Join(pueue.ErrPrivateRuntimeRestartPending, fmt.Errorf("store read: %s", private)))
+	response := newResponse("dispatch")
+	response.TaskRecord = "not_created"
+	for _, command := range []string{"dispatch", "continue"} {
+		public := commandPresentationError(command, commandResult{response: response, err: cause, code: 1})
+		if public == nil || !errors.Is(public, pueue.ErrPrivateRuntimeRestartPending) || strings.Contains(public.Error(), private) {
+			t.Errorf("%s exposed mixed restart diagnostics or lost its cause: %v", command, public)
+		}
 	}
 }
 

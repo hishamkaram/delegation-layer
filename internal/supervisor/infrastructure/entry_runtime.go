@@ -49,7 +49,7 @@ func runResidentServer(ctx context.Context, server *ownerServer) error {
 	var serveErr, prepareErr error
 	select {
 	case prepareErr = <-prepared:
-		if prepareErr != nil {
+		if prepareErr != nil && !server.keepsRuntimeReconciliation() {
 			server.awaitInitialHandoff(serving)
 			cancelServing()
 		}

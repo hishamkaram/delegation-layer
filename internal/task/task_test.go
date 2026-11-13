@@ -348,6 +348,17 @@ func testRootRecordValidator(t *testing.T, validHex32 string) {
 	}
 }
 
+func TestRootNamespaceMutationRequiredFeature(t *testing.T) {
+	root := RootRecord{SchemaVersion: SchemaVersion, RootID: strings.Repeat("a", 32), CreatedAt: "2026-09-13T00:00:00Z", RequiredFeatures: []string{NamespaceAdmissionFeature, NamespaceMutationFeature}}
+	if err := ValidateRootRecord(&root); err != nil {
+		t.Fatal("current writer rejected mutation feature:", err)
+	}
+	root.RequiredFeatures = append(root.RequiredFeatures, "unknown-future-required-feature")
+	if err := ValidateRootRecord(&root); !errors.Is(err, ErrUnsupportedSchema) {
+		t.Fatalf("writer ignored unknown required feature: %v", err)
+	}
+}
+
 func testTaskRecordValidator(t *testing.T, validHex32, validHex64 string) {
 	t.Helper()
 	taskRec := &TaskRecord{

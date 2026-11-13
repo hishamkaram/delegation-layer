@@ -188,6 +188,12 @@ func authorizePrivateRecoveryAliasRetirement(ctx context.Context, stateRoot stri
 	if err != nil {
 		return err
 	}
+	return authorizeObservedPrivateRecoveryAliasRetirement(ctx, stateRoot, successor, record, authorizeQuiescent, facts)
+}
+
+// The alias owner keeps one retirement policy. A purpose-specific caller may
+// supply only its validated observation; ordinary retirement loads facts above.
+func authorizeObservedPrivateRecoveryAliasRetirement(ctx context.Context, stateRoot string, successor task.SupervisorRef, record *privateRecoveryBindingRecord, authorizeQuiescent func(context.Context) error, facts privateGenerationFacts) error {
 	if facts.publishedErr != nil {
 		return facts.publishedErr
 	}

@@ -66,9 +66,9 @@ func TestDaemonStartGuardCarriesContextRootAndExpires(t *testing.T) {
 		return refusal
 	})
 	cmd := exec.Command(filepath.Join(root, "missing"))
-	done, err := guardedDaemonStart(ctx, root, filepath.Join(root, "external.yml"), cmd, guard, nil)
-	if done != nil || !errors.Is(err, refusal) {
-		t.Fatalf("refusal: started=%t err=%v", done != nil, err)
+	started, err := guardedDaemonStart(ctx, root, filepath.Join(root, "external.yml"), cmd, guard, nil)
+	if started.done != nil || started.birth != nil || !errors.Is(err, refusal) {
+		t.Fatalf("refusal: started=%t err=%v", started.done != nil, err)
 	}
 	if err := retained(); !errors.Is(err, ErrInfrastructureOwnerRequired) {
 		t.Fatalf("retained callback = %v", err)
@@ -86,9 +86,9 @@ func TestDaemonStartPreservesIgnoredStartFailure(t *testing.T) {
 		}
 		return nil
 	})
-	done, err := guardedDaemonStart(t.Context(), root, filepath.Join(root, "config"), exec.Command(filepath.Join(root, "missing")), guard, nil)
-	if done != nil || !errors.Is(err, os.ErrNotExist) || !errors.Is(err, ErrBinding) {
-		t.Fatalf("start failure: started=%t err=%v", done != nil, err)
+	started, err := guardedDaemonStart(t.Context(), root, filepath.Join(root, "config"), exec.Command(filepath.Join(root, "missing")), guard, nil)
+	if started.done != nil || started.birth != nil || !errors.Is(err, os.ErrNotExist) || !errors.Is(err, ErrBinding) {
+		t.Fatalf("start failure: started=%t err=%v", started.done != nil, err)
 	}
 }
 
@@ -100,9 +100,9 @@ func TestDaemonStartRejectsDifferentPrivateRoot(t *testing.T) {
 			t.Fatal("mismatched config reached guard")
 			return nil
 		})
-		done, err := guardedDaemonStart(t.Context(), other, config, exec.Command("missing"), guard, nil)
-		if done != nil || !errors.Is(err, ErrConfiguration) {
-			t.Fatalf("mismatched config: started=%t err=%v", done != nil, err)
+		started, err := guardedDaemonStart(t.Context(), other, config, exec.Command("missing"), guard, nil)
+		if started.done != nil || started.birth != nil || !errors.Is(err, ErrConfiguration) {
+			t.Fatalf("mismatched config: started=%t err=%v", started.done != nil, err)
 		}
 	}
 }

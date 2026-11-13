@@ -1,6 +1,7 @@
 """Tests for the pure development-candidate build rules."""
 
 from pathlib import Path
+import json
 import sys
 import unittest
 
@@ -103,6 +104,35 @@ class PackageTests(unittest.TestCase):
                        b'[{"filename": "delegation-layer-0.1.37.tgz"}, {"filename": "x.tgz"}]', b"npm notice"):
             with self.subTest(report=report):
                 refused(self, "npm_pack_output_invalid", plan.packed_filename, report, "0.1.37")
+
+    def test_npm12_pack_report_keeps_exact_package_identity(self):
+        # Captured npm 12.2.2 --json shape; omit unrelated tarball/file metadata.
+        report = {"delegation-layer": {
+            "id": "delegation-layer@0.5.1", "name": "delegation-layer", "version": "0.5.1",
+            "filename": "delegation-layer-0.5.1.tgz",
+        }}
+        self.assertEqual(plan.packed_filename(json.dumps(report).encode(), "0.5.1"),
+                         "delegation-layer-0.5.1.tgz")
+
+    def test_npm_pack_report_refuses_ambiguous_or_conflicting_identity(self):
+        entry = {"name": "delegation-layer", "version": "0.5.1", "filename": "delegation-layer-0.5.1.tgz"}
+        for report in (
+            {"other": entry}, {"delegation-layer": entry, "other": entry},
+            {"delegation-layer": entry, "error": {}}, {"delegation-layer": [entry]},
+            {"delegation-layer": {**entry, "name": "other"}},
+            {"delegation-layer": {**entry, "version": "0.5.2"}},
+            {"delegation-layer": {**entry, "id": "other@0.5.1"}},
+            {"delegation-layer": {**entry, "filename": "delegation-layer-0.5.2.tgz"}},
+            {"delegation-layer": {"version": "0.5.1", "filename": entry["filename"]}},
+            {"delegation-layer": {"name": "delegation-layer", "filename": entry["filename"]}},
+            [{**entry, "name": "other"}], [{**entry, "version": "0.5.2"}],
+        ):
+            with self.subTest(report=report):
+                refused(self, "npm_pack_output_invalid", plan.packed_filename,
+                        json.dumps(report).encode(), "0.5.1")
+        # The established legacy fixture may report only the exact filename.
+        self.assertEqual(plan.packed_filename(b'[{"filename":"delegation-layer-0.5.1.tgz"}]', "0.5.1"),
+                         "delegation-layer-0.5.1.tgz")
 
 
 class VcsStampTests(unittest.TestCase):

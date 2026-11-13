@@ -17,6 +17,8 @@ const (
 )
 
 type ExistingTaskOptions struct {
+	// ExistingOnly forbids fresh preparation when canonical prepared records are unavailable.
+	ExistingOnly    bool
 	Creation        CreationOptions
 	Selection       supervisorcore.AdmissionSelection
 	RequestedBudget string

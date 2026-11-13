@@ -83,7 +83,7 @@ func (f *worktreeGateTestLifetime) StartCommand(command *exec.Cmd, start func() 
 		return err
 	}
 	f.native = native
-	gate, err := guardian.NewLaunchGateFactory(f.configuration.runner)(command)
+	gate, err := guardian.NewLaunchGateFactory(f.configuration.runner)(command, nil)
 	if err != nil {
 		return err
 	}

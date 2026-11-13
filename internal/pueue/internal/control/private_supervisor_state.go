@@ -100,6 +100,7 @@ type privateGenerationFacts struct {
 	transitionErr       error
 	// Raw read owner; transitionErr retains its existing derived priority.
 	identityPublicationReadErr error
+	runtimeRestartPending      bool
 }
 
 func loadPrivateGenerationFacts(stateRoot string) (privateGenerationFacts, error) {
@@ -112,7 +113,9 @@ func loadPrivateGenerationFacts(stateRoot string) (privateGenerationFacts, error
 	facts.migration, facts.migrationPresent, facts.migrationErr = loadPrivateMigrationRecord(base)
 	facts.alias, facts.aliasPresent, facts.aliasErr = readValidatedPrivateRecoveryAlias(stateRoot)
 	facts.aliasPublishing, facts.aliasPublicationErr = privateRecoveryObservationConflict(stateRoot, facts.aliasPresent)
-	bootstrapPending, bootstrapErr := PrivateBootstrapPending(stateRoot)
+	bootstrap, bootstrapFound, bootstrapErr := readPrivateBootstrapRecord(stateRoot)
+	facts.runtimeRestartPending = runtimeRestartPending(bootstrap)
+	bootstrapPending := bootstrapFound && (bootstrap.RuntimeRestart == nil || facts.runtimeRestartPending)
 	_, publishing, publicationErr := readPrivateIdentityPublication(stateRoot)
 	facts.identityPublicationReadErr = publicationErr
 	facts.settled = !bootstrapPending && !publishing
@@ -547,6 +550,57 @@ func (c *Client) validatePrivateGenerationLaunch(stateRoot string) error {
 }
 
 func (c *Client) startPrivate(ctx context.Context, stateRoot string) error {
+	return c.startPrivateForRuntime(ctx, stateRoot, nil)
+}
+
+func (c *Client) startPrivateForRuntime(ctx context.Context, stateRoot string, restart *privateRuntimeRestartStart) (resultErr error) {
+	attempted := false
+	defer func() {
+		if restart == nil {
+			return
+		}
+		if resultErr != nil && !attempted {
+			// Only this live caller can prove the canonical Start callback was
+			// never entered. Crash/reply ambiguity has no such rollback right.
+			resultErr = errors.Join(resultErr, restart.releaseUnstarted(context.WithoutCancel(ctx), c))
+		}
+		resultErr = errors.Join(resultErr, ctx.Err())
+	}()
+	if err := c.preparePrivateDaemonStart(ctx, stateRoot); err != nil {
+		return err
+	}
+	base := filepath.Dir(c.binding.ConfigPath)
+	started, startErr := startDaemonForRuntime(ctx, stateRoot, c.runtimeBinding.DaemonExecutable, c.binding.ConfigPath, base, c.options, restart)
+	attempted = started.attempted
+	if restart != nil && started.done != nil {
+		// A post-Start guard/registration fault cannot hide a launched child.
+		// Record its immutable before-reap birth even when Start reports a fault.
+		// Settlement borrows the still-live actual EX and current generation
+		// guard, not the canceled observation deadline. It consumes only this
+		// Start's immutable future; it cannot launch or escape this callback.
+		startErr = errors.Join(startErr, restart.recordBirth(context.WithoutCancel(ctx), c, started))
+	}
+	if startErr != nil {
+		return startErr
+	}
+	if restart != nil {
+		if err := restart.waitReady(ctx, c); err != nil {
+			return err
+		}
+		return c.completeRuntimeRestartReady(ctx, stateRoot, restart)
+	}
+	if err := waitReady(ctx, c, c.options.ObservationTimeout); err != nil {
+		return fmt.Errorf("%w: private pueued did not become ready after migration: %w", ErrBinding, err)
+	}
+	if err := publishPrivateDaemonIdentityContext(ctx, base, c.Binding(), c.options.PrivateGenerationGuard); err != nil {
+		return err
+	}
+	return nil
+}
+
+// Shared canonical validation and absence boundary for ordinary and runtime
+// startup. It does not launch, repair scheduling, or manufacture a resume scope.
+func (c *Client) preparePrivateDaemonStart(ctx context.Context, stateRoot string) error {
 	if err := c.validatePrivateGenerationLaunch(stateRoot); err != nil {
 		return err
 	}
@@ -573,25 +627,13 @@ func (c *Client) startPrivate(ctx context.Context, stateRoot string) error {
 		}
 		if !identityFound {
 			if err := guardPrivateGeneration(ctx, stateRoot, c.options.PrivateGenerationGuard, func() error {
-				return markPrivateBootstrapPending(stateRoot)
+				return markPrivateBootstrapPendingWithinCommit(ctx, stateRoot)
 			}); err != nil {
 				return err
 			}
 		}
 	}
-	if err := c.WaitUnavailable(ctx); err != nil {
-		return err
-	}
-	if err := startDaemon(ctx, stateRoot, c.runtimeBinding.DaemonExecutable, c.binding.ConfigPath, base, c.options); err != nil {
-		return err
-	}
-	if err := waitReady(ctx, c, c.options.ObservationTimeout); err != nil {
-		return fmt.Errorf("%w: private pueued did not become ready after migration: %w", ErrBinding, err)
-	}
-	if err := publishPrivateDaemonIdentityContext(ctx, base, c.Binding(), c.options.PrivateGenerationGuard); err != nil {
-		return err
-	}
-	return nil
+	return c.WaitUnavailable(ctx)
 }
 
 func optionsForSavedBinding(saved task.SupervisorRef, options Options) (Options, error) {

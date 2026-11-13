@@ -103,11 +103,17 @@ func (s *ownerServer) acceptWork(ctx context.Context, connection *net.UnixConn, 
 	if err = authenticateOwnerRequest(ctx, connection, intent, assumption, publication, request); err != nil {
 		return acceptedOwnerWork{}, err
 	}
+	if err = validateRuntimeRestartRequest(operation, request); err != nil {
+		return acceptedOwnerWork{}, err
+	}
 	work := acceptedOwnerWork{request: request, operation: operation}
-	if ownPreparationAction(request.Action) {
+	if ownPreparationAction(request.Action) || request.Action == ownerRuntimeRestartPreflight {
 		work.selected, work.selectedReference, err = resolveSelectedContext(ctx, s.journal, operation.defaultContextReference(), request.Context)
 		if err != nil {
 			return acceptedOwnerWork{}, err
+		}
+		if request.Action == ownerRuntimeRestartPreflight && work.selectedReference != operation.defaultContextReference() {
+			return acceptedOwnerWork{}, ErrIdentity
 		}
 	}
 	// Native/record authentication and context reads precede the atomic closing
@@ -153,7 +159,7 @@ func (s *ownerServer) readResident(ctx context.Context) (StartupIntent, StartupA
 }
 
 func ownerServerReply(request ownerRequest, code ownerReplyCode) ownerReply {
-	return ownerReply{Protocol: request.Protocol, RootID: request.RootID, OwnerRef: request.Owner, PublicationSHA256: request.PublicationSHA256, Action: request.Action, Target: request.Target, Context: request.Context, Source: request.Source, Initial: request.Initial, InitialResultFor: request.InitialResultFor, Code: code}
+	return ownerReply{Protocol: request.Protocol, RootID: request.RootID, OwnerRef: request.Owner, PublicationSHA256: request.PublicationSHA256, Action: request.Action, Target: request.Target, Context: request.Context, Source: request.Source, RestartFrom: request.RestartFrom, Initial: request.Initial, InitialResultFor: request.InitialResultFor, Code: code}
 }
 
 func (s *ownerServer) executeWork(ctx context.Context, work acceptedOwnerWork) (ownerReply, bool) {
@@ -161,7 +167,9 @@ func (s *ownerServer) executeWork(ctx context.Context, work acceptedOwnerWork) (
 	switch work.request.Action {
 	case ownerStatus:
 		// Status confirms authenticated resident contact, never daemon readiness.
-	case ownerEnsureOwn, ownerRecoverSaved, ownerPrepareContinuation, ownerMigrateOwn:
+	case ownerRuntimeRestartPreflight:
+		return s.executeRuntimeRestartPreflight(ctx, work, reply), false
+	case ownerEnsureOwn, ownerRecoverSaved, ownerPrepareContinuation, ownerMigrateOwn, ownerRuntimeRestart:
 		return s.executeOwnPreparation(ctx, work, reply)
 	case ownerEnsureOther:
 		return s.executeOtherPreparation(ctx, work, reply), false
@@ -179,6 +187,7 @@ func (s *ownerServer) executeOwnPreparation(ctx context.Context, work acceptedOw
 	}
 	reply.Code, reply.Disposition = ownerReplyCode(outcome.Condition), outcome.Disposition
 	reply.Report, reply.Failure = outcome.Report, outcome.Failure
+	reply.RuntimeRestart = outcome.RuntimeRestart
 	reply.Target = originRecord{Root: work.operation.Intent().Inputs.Root, RootID: work.operation.Intent().Inputs.RootID}
 	reply.Startup = work.request.Owner
 	return reply, replayed
@@ -190,15 +199,32 @@ func (s *ownerServer) failReply(reply *ownerReply, err error) {
 		s.connectionFault(err)
 		return
 	}
+	if reply.Report == (ManualMigrationReport{}) && s.host.ClassifyPreparation(err).runtimeRestartPending() {
+		reply.Code = ownerBusy
+		if reply.Startup != (StartupReference{}) {
+			reply.Code = ownerPending
+		}
+		return
+	}
+	if s.host.ClassifyPreparation(err).runtimeQuiescenceBusy() {
+		reply.Code = ownerBusy
+		if reply.RuntimeRestart != (RuntimeRestartReport{}) {
+			reply.Code = ownerPending
+		}
+		return
+	}
 	if reply.Report == (ManualMigrationReport{}) && task.AllErrorCauses(err, func(cause error) bool {
 		return errors.Is(cause, task.ErrLockBusy) || errors.Is(cause, ErrOwnerBusy)
 	}) {
 		reply.Code = ownerBusy
+		if reply.RuntimeRestart != (RuntimeRestartReport{}) {
+			reply.Code = ownerPending
+		}
 		return
 	}
 	s.connectionFault(err)
 	switch {
-	case reply.Report == (ManualMigrationReport{}) && task.AllErrorCauses(err, func(cause error) bool {
+	case reply.Report == (ManualMigrationReport{}) && reply.RuntimeRestart == (RuntimeRestartReport{}) && task.AllErrorCauses(err, func(cause error) bool {
 		return errors.Is(cause, ErrOwnerIncompatible)
 	}):
 		reply.Code = ownerIncompatible

@@ -52,7 +52,7 @@ func ensurePrivateConfigContext(ctx context.Context, stateRoot string, resolutio
 		if !absent {
 			return privateRecoveryFailure("state_unreadable", ErrBinding)
 		}
-		if err := markPrivateBootstrapPending(stateRoot); err != nil {
+		if err := markPrivateBootstrapPendingWithinCommit(ctx, stateRoot); err != nil {
 			return err
 		}
 		return createPrivateConfig(configPath, base, configSource)
@@ -78,7 +78,7 @@ func validateExistingPrivateConfig(ctx context.Context, stateRoot, configPath, b
 			return validateErr
 		}
 	}
-	pending, err := PrivateBootstrapPending(stateRoot)
+	pending, err := privateLegacyBootstrapPending(stateRoot)
 	if err != nil || !pending {
 		return err
 	}
@@ -91,7 +91,7 @@ func repairIncompletePrivateConfig(ctx context.Context, stateRoot, configPath, b
 	if !errors.Is(validationErr, errUnixSocketPathTooLong) {
 		return false, nil
 	}
-	pending, err := PrivateBootstrapPending(stateRoot)
+	pending, err := privateLegacyBootstrapPending(stateRoot)
 	if err != nil || !pending {
 		return false, err
 	}

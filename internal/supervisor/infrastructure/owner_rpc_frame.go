@@ -15,12 +15,14 @@ const ownerProtocolVersion = 4
 type ownerAction string
 
 const (
-	ownerStatus              ownerAction = "status"
-	ownerEnsureOwn           ownerAction = "ensure-own"
-	ownerEnsureOther         ownerAction = "ensure-other"
-	ownerRecoverSaved        ownerAction = "recover-saved"
-	ownerPrepareContinuation ownerAction = "prepare-continuation"
-	ownerMigrateOwn          ownerAction = "migrate-own"
+	ownerStatus                  ownerAction = "status"
+	ownerEnsureOwn               ownerAction = "ensure-own"
+	ownerEnsureOther             ownerAction = "ensure-other"
+	ownerRecoverSaved            ownerAction = "recover-saved"
+	ownerPrepareContinuation     ownerAction = "prepare-continuation"
+	ownerMigrateOwn              ownerAction = "migrate-own"
+	ownerRuntimeRestart          ownerAction = "runtime-restart"
+	ownerRuntimeRestartPreflight ownerAction = "runtime-restart-preflight"
 )
 
 type ownerReplyCode string
@@ -49,6 +51,7 @@ type ownerRequest struct {
 	Context           LaunchContextReference `json:"context"`
 	Deadline          string                 `json:"deadline"`
 	Source            SavedBindingSource     `json:"source"`
+	RestartFrom       StartupReference       `json:"restart_from,omitzero"`
 	Initial           InitialOperation       `json:"initial_operation,omitzero"`
 	InitialResultFor  StartupReference       `json:"initial_result_for,omitzero"`
 }
@@ -97,7 +100,11 @@ func (r ownerRequest) validateOperationSubject() error {
 		if r.Context != (LaunchContextReference{}) {
 			return ErrIdentity
 		}
+	case ownerRuntimeRestartPreflight:
+		return r.Context.Validate()
 	case ownerEnsureOwn, ownerMigrateOwn:
+	case ownerRuntimeRestart:
+		return r.RestartFrom.Validate()
 	case ownerEnsureOther:
 		return errors.Join(validateOwnerTarget(r.Target, r.RootID), r.Context.Validate(), r.Initial.Validate(r.Target.RootID))
 	case ownerPrepareContinuation:
@@ -121,6 +128,7 @@ func (r ownerRequest) rejectForeignSubjects() error {
 		{r.Source != (SavedBindingSource{}) && r.Action != ownerPrepareContinuation, ownerRecoverSaved},
 		{r.Target != (originRecord{}), ownerEnsureOther},
 		{r.Initial != (InitialOperation{}), ownerEnsureOther},
+		{r.RestartFrom != (StartupReference{}), ownerRuntimeRestart},
 	} {
 		if subject.present && r.Action != subject.action {
 			return ErrIdentity
@@ -131,9 +139,9 @@ func (r ownerRequest) rejectForeignSubjects() error {
 
 func ownPreparationAction(action ownerAction) bool {
 	switch action {
-	case ownerEnsureOwn, ownerRecoverSaved, ownerPrepareContinuation, ownerMigrateOwn:
+	case ownerEnsureOwn, ownerRecoverSaved, ownerPrepareContinuation, ownerMigrateOwn, ownerRuntimeRestart:
 		return true
-	case ownerStatus, ownerEnsureOther:
+	case ownerStatus, ownerEnsureOther, ownerRuntimeRestartPreflight:
 		return false
 	}
 	return false
@@ -143,21 +151,24 @@ func ownPreparationAction(action ownerAction) bool {
 // of live readiness: callers must compare the requested subject and consult the
 // actual publication/startup owner before treating an outcome as operational.
 type ownerReply struct {
-	Protocol          int                    `json:"protocol"`
-	RootID            string                 `json:"root_id"`
-	OwnerRef          StartupReference       `json:"owner_ref"`
-	PublicationSHA256 string                 `json:"publication_sha256"`
-	Action            ownerAction            `json:"action"`
-	Target            originRecord           `json:"target"`
-	Startup           StartupReference       `json:"startup"`
-	Code              ownerReplyCode         `json:"code"`
-	Context           LaunchContextReference `json:"context"`
-	Source            SavedBindingSource     `json:"source"`
-	Initial           InitialOperation       `json:"initial_operation,omitzero"`
-	InitialResultFor  StartupReference       `json:"initial_result_for,omitzero"`
-	Disposition       Disposition            `json:"disposition"`
-	Report            ManualMigrationReport  `json:"report,omitzero"`
-	Failure           PreparationFailure     `json:"failure,omitzero"`
+	Protocol          int                     `json:"protocol"`
+	RootID            string                  `json:"root_id"`
+	OwnerRef          StartupReference        `json:"owner_ref"`
+	PublicationSHA256 string                  `json:"publication_sha256"`
+	Action            ownerAction             `json:"action"`
+	Target            originRecord            `json:"target"`
+	Startup           StartupReference        `json:"startup"`
+	Code              ownerReplyCode          `json:"code"`
+	Context           LaunchContextReference  `json:"context"`
+	Source            SavedBindingSource      `json:"source"`
+	RestartFrom       StartupReference        `json:"restart_from,omitzero"`
+	Initial           InitialOperation        `json:"initial_operation,omitzero"`
+	InitialResultFor  StartupReference        `json:"initial_result_for,omitzero"`
+	Disposition       Disposition             `json:"disposition"`
+	Report            ManualMigrationReport   `json:"report,omitzero"`
+	RuntimeRestart    RuntimeRestartReport    `json:"runtime_restart,omitzero"`
+	Failure           PreparationFailure      `json:"failure,omitzero"`
+	RestartPreflight  RuntimeRestartPreflight `json:"runtime_restart_preflight,omitzero"`
 }
 
 func (r ownerReply) validate() error {
@@ -196,6 +207,12 @@ func (r ownerReply) validatePreparationResult() error {
 	if r.Action != ownerMigrateOwn && r.Report != (ManualMigrationReport{}) {
 		return ErrIdentity
 	}
+	if err := r.validateRuntimeRestartResult(); err != nil {
+		return err
+	}
+	if err := r.validateRuntimeRestartPreflight(); err != nil {
+		return err
+	}
 	if (!ownPreparationAction(r.Action) || r.Code == ownerOK) && r.Failure != (PreparationFailure{}) {
 		return ErrIdentity
 	}
@@ -208,7 +225,7 @@ func (r ownerReply) validatePreparationSubject() error {
 	if ownPreparationAction(r.Action) {
 		subjectTarget = originRecord{}
 	}
-	subject := ownerRequest{Owner: r.OwnerRef, Action: r.Action, RootID: r.RootID, Target: subjectTarget, Context: r.Context, Source: r.Source, Initial: r.Initial}
+	subject := ownerRequest{Owner: r.OwnerRef, Action: r.Action, RootID: r.RootID, Target: subjectTarget, Context: r.Context, Source: r.Source, RestartFrom: r.RestartFrom, Initial: r.Initial}
 	if ownPreparationAction(r.Action) {
 		subject.InitialResultFor = r.InitialResultFor
 	}
@@ -216,12 +233,12 @@ func (r ownerReply) validatePreparationSubject() error {
 		return err
 	}
 	if r.Disposition != (Disposition{}) {
-		if r.Action == ownerStatus || r.Action == ownerEnsureOther {
+		if r.Action == ownerStatus || r.Action == ownerEnsureOther || r.Action == ownerRuntimeRestartPreflight {
 			return ErrIdentity
 		}
 		return r.Disposition.Validate()
 	}
-	if r.Code == ownerOK && ownPreparationAction(r.Action) && (r.Action != ownerMigrateOwn || r.Report == (ManualMigrationReport{})) {
+	if r.Code == ownerOK && ownPreparationAction(r.Action) && r.RuntimeRestart == (RuntimeRestartReport{}) && (r.Action != ownerMigrateOwn || r.Report == (ManualMigrationReport{})) {
 		return ErrIdentity
 	}
 	return nil
@@ -230,11 +247,11 @@ func (r ownerReply) validatePreparationSubject() error {
 func (r ownerReply) validateActionSubject() error {
 	accepted := r.Code == ownerOK || r.Code == ownerPending
 	switch r.Action {
-	case ownerStatus:
+	case ownerStatus, ownerRuntimeRestartPreflight:
 		if r.Target != (originRecord{}) || r.Startup != (StartupReference{}) || r.InitialResultFor != (StartupReference{}) {
 			return ErrIdentity
 		}
-	case ownerEnsureOwn, ownerRecoverSaved, ownerPrepareContinuation, ownerMigrateOwn:
+	case ownerEnsureOwn, ownerRecoverSaved, ownerPrepareContinuation, ownerMigrateOwn, ownerRuntimeRestart:
 		return r.validateOwnSubject(accepted)
 	case ownerEnsureOther:
 		if r.InitialResultFor != (StartupReference{}) && r.InitialResultFor != r.Startup {

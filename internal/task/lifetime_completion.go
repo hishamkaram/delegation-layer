@@ -43,8 +43,17 @@ const (
 )
 
 // LifetimeClosure is the pure result of resolving typed lifetime evidence.
+type LifetimeClosureReference string
+
+const (
+	LifetimeClosureReferenceNone        LifetimeClosureReference = ""
+	LifetimeClosureReferenceWorkerWait  LifetimeClosureReference = "worker-wait"
+	LifetimeClosureReferenceTermination LifetimeClosureReference = "termination"
+)
+
 type LifetimeClosure struct {
-	Kind LifetimeClosureKind
+	Kind      LifetimeClosureKind
+	Reference LifetimeClosureReference
 }
 
 // Closed reports whether the closure classification is terminal.
@@ -142,20 +151,20 @@ func ResolveLifetimeClosure(evidence LifetimeEvidence) (LifetimeClosure, error) 
 		}
 		if evidence.WorkerWait.Result == LifetimeWorkerWaitAbsent {
 			if evidence.Registration != nil {
-				return LifetimeClosure{Kind: LifetimeClosureRegisteredRecovered}, nil
+				return LifetimeClosure{Kind: LifetimeClosureRegisteredRecovered, Reference: LifetimeClosureReferenceWorkerWait}, nil
 			}
-			return LifetimeClosure{Kind: LifetimeClosureUnregisteredRecovered}, nil
+			return LifetimeClosure{Kind: LifetimeClosureUnregisteredRecovered, Reference: LifetimeClosureReferenceWorkerWait}, nil
 		}
 		if evidence.Termination == nil {
 			return LifetimeClosure{Kind: LifetimeClosureOpen}, nil
 		}
-		return LifetimeClosure{Kind: LifetimeClosureRegisteredNative}, nil
+		return LifetimeClosure{Kind: LifetimeClosureRegisteredNative, Reference: LifetimeClosureReferenceWorkerWait}, nil
 	}
 	if evidence.Termination != nil && evidence.Termination.Cause == LifetimeTerminationPreviousBoot {
 		if evidence.Registration == nil {
 			return LifetimeClosure{}, lifetimeEvidenceFault(ErrIdentityMismatch)
 		}
-		return LifetimeClosure{Kind: LifetimeClosureLegacyPreviousBoot}, nil
+		return LifetimeClosure{Kind: LifetimeClosureLegacyPreviousBoot, Reference: LifetimeClosureReferenceTermination}, nil
 	}
 	return LifetimeClosure{Kind: LifetimeClosureOpen}, nil
 }

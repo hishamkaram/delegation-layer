@@ -11,11 +11,14 @@ import (
 	"strconv"
 
 	"github.com/hishamkaram/delegation-layer/internal/task"
+	"golang.org/x/sys/unix"
 )
 
 const (
 	LaunchGateMode       = "--lifetime-launch-gate"
 	lifetimeLaunchGateFD = "--gate-fd"
+	lifetimeProjectFD    = "--project-fd"
+	lifetimeProjectID    = "--project-identity"
 	lifetimeLaunchToken  = byte(1)
 )
 
@@ -25,7 +28,14 @@ type LaunchGate interface {
 	Abort() error
 }
 
-type LaunchGateFactory func(*exec.Cmd) (LaunchGate, error)
+// ProjectDirectory borrows runner-owned custody only for a native Start. The
+// factory never closes File; the child owns its inherited descriptor.
+type ProjectDirectory struct {
+	File     *os.File
+	Identity task.DirectoryIdentity
+}
+
+type LaunchGateFactory func(*exec.Cmd, *ProjectDirectory) (LaunchGate, error)
 
 type runnerLifetimeLaunchGate struct {
 	reader *os.File
@@ -37,7 +47,7 @@ type runnerLifetimeLaunchGate struct {
 // guardian has durably recorded that exact PID, then execs the provider in the
 // same process. Execution remains the sole owner of cmd.Wait.
 func NewLaunchGateFactory(runner string) LaunchGateFactory {
-	return func(cmd *exec.Cmd) (LaunchGate, error) {
+	return func(cmd *exec.Cmd, project *ProjectDirectory) (LaunchGate, error) {
 		if cmd == nil || cmd.Process != nil || cmd.ProcessState != nil {
 			return nil, task.ErrEvidenceFault
 		}
@@ -55,12 +65,19 @@ func NewLaunchGateFactory(runner string) LaunchGateFactory {
 		if providerArgs[0] == "" {
 			return nil, task.ErrEvidenceFault
 		}
+		projectArgs, err := project.arguments(3 + len(cmd.ExtraFiles))
+		if err != nil {
+			return nil, err
+		}
 
 		reader, writer, err := os.Pipe()
 		if err != nil {
 			return nil, fmt.Errorf("create lifetime launch gate: %w", err)
 		}
 		gate := &runnerLifetimeLaunchGate{reader: reader, writer: writer}
+		if project != nil {
+			cmd.ExtraFiles = append(cmd.ExtraFiles, project.File)
+		}
 		gateFD := 3 + len(cmd.ExtraFiles)
 		cmd.ExtraFiles = append(cmd.ExtraFiles, reader)
 		cmd.Path = runner
@@ -69,12 +86,44 @@ func NewLaunchGateFactory(runner string) LaunchGateFactory {
 			LaunchGateMode,
 			lifetimeLaunchGateFD,
 			strconv.Itoa(gateFD),
-			"--",
-			providerPath,
 		}
+		cmd.Args = append(cmd.Args, projectArgs...)
+		cmd.Args = append(cmd.Args, "--", providerPath)
 		cmd.Args = append(cmd.Args, providerArgs...)
 		return gate, nil
 	}
+}
+
+func (p *ProjectDirectory) arguments(fd int) ([]string, error) {
+	if p == nil {
+		return nil, nil
+	}
+	if p.File == nil || !validProjectIdentity(p.Identity) {
+		return nil, task.ErrIdentityMismatch
+	}
+	if err := validateProjectFile(p.File, p.Identity); err != nil {
+		return nil, err
+	}
+	identity, err := task.MarshalCanonical(p.Identity)
+	if err != nil {
+		return nil, err
+	}
+	return []string{lifetimeProjectFD, strconv.Itoa(fd), lifetimeProjectID, string(identity)}, nil
+}
+
+func validProjectIdentity(identity task.DirectoryIdentity) bool {
+	return task.IsCanonicalCwd(identity.Path) && identity.Inode != 0
+}
+
+func validateProjectFile(file *os.File, identity task.DirectoryIdentity) error {
+	var held unix.Stat_t
+	if err := unix.Fstat(int(file.Fd()), &held); err != nil {
+		return errors.Join(task.ErrIdentityMismatch, err)
+	}
+	if held.Mode&unix.S_IFMT != unix.S_IFDIR || uint64(held.Dev) != identity.Device || uint64(held.Ino) != identity.Inode {
+		return task.ErrIdentityMismatch
+	}
+	return nil
 }
 
 func (g *runnerLifetimeLaunchGate) Started(startErr error) error {
@@ -114,11 +163,11 @@ func closeLifetimeLaunchGateFile(file **os.File) error {
 }
 
 func RunLaunchGate(args []string, execProcess func(string, []string, []string) error) error {
-	gateFD, providerPath, providerArgs, err := parseLifetimeLaunchGateArguments(args)
+	parsed, err := parseLifetimeLaunchGateArguments(args)
 	if err != nil || execProcess == nil {
 		return errors.Join(task.ErrEvidenceFault, err)
 	}
-	gate := os.NewFile(uintptr(gateFD), "delegate-provider-launch-gate")
+	gate := os.NewFile(uintptr(parsed.gateFD), "delegate-provider-launch-gate")
 	if gate == nil {
 		return task.ErrEvidenceFault
 	}
@@ -128,21 +177,88 @@ func RunLaunchGate(args []string, execProcess func(string, []string, []string) e
 	if readErr != nil || closeErr != nil || token[0] != lifetimeLaunchToken {
 		return errors.Join(task.ErrEvidenceFault, readErr, closeErr)
 	}
-	return execProcess(providerPath, providerArgs, os.Environ())
+	if parsed.projectFD != 0 {
+		if err = enterLaunchProject(parsed.projectFD, parsed.project); err != nil {
+			return err
+		}
+	}
+	return execProcess(parsed.providerPath, parsed.providerArgs, os.Environ())
 }
 
-func parseLifetimeLaunchGateArguments(args []string) (int, string, []string, error) {
-	if len(args) < 5 || args[0] != lifetimeLaunchGateFD || args[2] != "--" {
-		return 0, "", nil, task.ErrEvidenceFault
+type lifetimeLaunchArguments struct {
+	gateFD       int
+	projectFD    int
+	project      task.DirectoryIdentity
+	providerPath string
+	providerArgs []string
+}
+
+func parseLifetimeLaunchGateArguments(args []string) (parsed lifetimeLaunchArguments, err error) {
+	if len(args) < 5 || args[0] != lifetimeLaunchGateFD {
+		return parsed, task.ErrEvidenceFault
 	}
-	gateFD, err := strconv.Atoi(args[1])
-	if err != nil || gateFD < 3 {
-		return 0, "", nil, task.ErrEvidenceFault
+	parsed.gateFD, err = strconv.Atoi(args[1])
+	if err != nil || parsed.gateFD < 3 {
+		return parsed, task.ErrEvidenceFault
 	}
-	providerPath := args[3]
-	providerArgs := slices.Clone(args[4:])
-	if !filepath.IsAbs(providerPath) || filepath.Clean(providerPath) != providerPath || len(providerArgs) == 0 || providerArgs[0] == "" {
-		return 0, "", nil, task.ErrEvidenceFault
+	remaining := args[2:]
+	if remaining[0] == lifetimeProjectFD {
+		remaining, err = parsed.readProjectArguments(remaining)
+		if err != nil {
+			return parsed, err
+		}
 	}
-	return gateFD, providerPath, providerArgs, nil
+	if remaining[0] != "--" {
+		return parsed, task.ErrEvidenceFault
+	}
+	parsed.providerPath, parsed.providerArgs = remaining[1], slices.Clone(remaining[2:])
+	if !filepath.IsAbs(parsed.providerPath) || filepath.Clean(parsed.providerPath) != parsed.providerPath || len(parsed.providerArgs) == 0 || parsed.providerArgs[0] == "" {
+		return parsed, task.ErrEvidenceFault
+	}
+	return parsed, nil
+}
+
+func (p *lifetimeLaunchArguments) readProjectArguments(args []string) ([]string, error) {
+	if len(args) < 7 || args[2] != lifetimeProjectID || len(args[3]) > task.MaxControlRecordSize {
+		return nil, task.ErrEvidenceFault
+	}
+	var err error
+	p.projectFD, err = strconv.Atoi(args[1])
+	if err != nil || p.projectFD < 3 || p.projectFD == p.gateFD {
+		return nil, task.ErrEvidenceFault
+	}
+	if err = task.DecodeStrict([]byte(args[3]), &p.project); err != nil || !validProjectIdentity(p.project) {
+		return nil, errors.Join(task.ErrIdentityMismatch, err)
+	}
+	return args[4:], nil
+}
+
+// Only the single child bootstrap calls this process-wide chdir operation.
+// Parent runners retain their own cwd and their original custody descriptor.
+func enterLaunchProject(fd int, identity task.DirectoryIdentity) (resultErr error) {
+	file := os.NewFile(uintptr(fd), "delegate-provider-project")
+	if file == nil {
+		return task.ErrIdentityMismatch
+	}
+	defer func() { resultErr = errors.Join(resultErr, file.Close()) }()
+	if err := validateProjectFile(file, identity); err != nil {
+		return err
+	}
+	var visible unix.Stat_t
+	if err := unix.Stat(identity.Path, &visible); err != nil {
+		return errors.Join(task.ErrIdentityMismatch, err)
+	}
+	if visible.Mode&unix.S_IFMT != unix.S_IFDIR || uint64(visible.Dev) != identity.Device || uint64(visible.Ino) != identity.Inode {
+		return task.ErrIdentityMismatch
+	}
+	if err := file.Chdir(); err != nil {
+		return errors.Join(task.ErrIdentityMismatch, err)
+	}
+	if err := unix.Stat(".", &visible); err != nil {
+		return errors.Join(task.ErrIdentityMismatch, err)
+	}
+	if uint64(visible.Dev) != identity.Device || uint64(visible.Ino) != identity.Inode {
+		return task.ErrIdentityMismatch
+	}
+	return nil
 }

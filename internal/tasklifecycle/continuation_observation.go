@@ -171,7 +171,7 @@ func observeSilenceContinuation(ctx context.Context, root string, td *taskdir.Ta
 		return nil, err
 	}
 	offer := continuationOffer(req, catalog, continuationOfferFacts{cause: ContinuationIdleTimedOut, source: source, launch: launch, runnerReleased: runnerReleased})
-	inspection, err := td.Inspect()
+	inspection, err := td.InspectContext(ctx)
 	if err != nil {
 		return nil, err
 	}

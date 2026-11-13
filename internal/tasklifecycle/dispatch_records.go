@@ -12,6 +12,8 @@ import (
 // DispatchRequest contains requested values and the recorded continuation binding.
 // Only journal operations grant authority; these values confer none.
 type DispatchRequest struct {
+	Origin                                        *task.GatewayOrigin
+	ConnectorContext                              *task.ConnectorContext
 	ExpectedTeamSelection                         *teamcontract.Selection
 	Root, TaskID, GeneratedTaskID, ResumeTask     string
 	Provider                                      string

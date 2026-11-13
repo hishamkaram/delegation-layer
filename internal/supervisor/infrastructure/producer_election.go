@@ -63,6 +63,9 @@ func (a *StartupAttempt) matchPendingRootOwner(ctx context.Context, request Esta
 }
 
 func (a *StartupAttempt) elect(ctx context.Context, request EstablishmentRequest, source capturedEstablishment, native producerNative) error {
+	if err := validateRuntimeRestartProducer(request.Initial, source.starter.kind); err != nil {
+		return err
+	}
 	var err error
 	a.journal, err = openIntentJournal(ctx, a.target, true)
 	if err != nil {
@@ -100,11 +103,18 @@ func (a *StartupAttempt) elect(ctx context.Context, request EstablishmentRequest
 	if err != nil {
 		return err
 	}
-	intent, err := a.newIntent(artifacts, reference, request, latest.Sequence)
+	intent, err := a.newIntent(artifacts, reference, request, latest.Sequence, source.starter.kind)
 	if err != nil {
 		return err
 	}
 	return a.acceptAndStart(ctx, intent, source.starter.environment, native)
+}
+
+func validateRuntimeRestartProducer(initial InitialOperation, kind producerKind) error {
+	if initial.Kind == InitialRuntimeRestart && kind != producerOutside {
+		return ErrOwnerRequest
+	}
+	return nil
 }
 
 // A future-deadline unassumed attempt is joined, even with a free lease. An
@@ -198,7 +208,10 @@ func (a *StartupAttempt) checkPriorSettlement(ctx context.Context, sequence uint
 	return a.journal.reobserveSettlement(ctx, reference, boot)
 }
 
-func (a *StartupAttempt) newIntent(artifacts Artifacts, launch LaunchContextReference, request EstablishmentRequest, last uint64) (StartupIntent, error) {
+func (a *StartupAttempt) newIntent(artifacts Artifacts, launch LaunchContextReference, request EstablishmentRequest, last uint64, producer producerKind) (StartupIntent, error) {
+	if err := validateRuntimeRestartProducer(request.Initial, producer); err != nil {
+		return StartupIntent{}, err
+	}
 	if last == ^uint64(0) {
 		return StartupIntent{}, ErrIdentity
 	}
@@ -211,6 +224,9 @@ func (a *StartupAttempt) newIntent(artifacts Artifacts, launch LaunchContextRefe
 		return StartupIntent{}, err
 	}
 	inputs := StartupInputs{Kind: StartupRootOwner, Initial: request.Initial, Root: a.pin.Root(), RootID: a.pin.RootID(), RootDevice: a.pin.Device(), RootInode: a.pin.Inode(), BootID: boot, Artifacts: artifacts, Context: launch}
+	if request.Initial.Kind == InitialRuntimeRestart {
+		inputs.RuntimeProducer = producer
+	}
 	digest, err := inputs.Digest()
 	if err != nil {
 		return StartupIntent{}, err

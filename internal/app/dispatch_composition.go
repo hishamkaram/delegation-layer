@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 
 	admissioncore "github.com/hishamkaram/delegation-layer/internal/admission"
 	"github.com/hishamkaram/delegation-layer/internal/task"
@@ -13,7 +14,8 @@ import (
 func dispatchRequest(a Arguments, deps Dependencies) tasklifecycle.DispatchRequest {
 	return tasklifecycle.DispatchRequest{
 		ExpectedTeamSelection: a.ExpectedTeamSelection,
-		Remote:                a.remoteBinding, Root: a.Root, TaskID: a.TaskID, GeneratedTaskID: a.generatedTaskID, ResumeTask: a.ResumeTask,
+		Origin:                a.Connector.origin, ConnectorContext: a.Connector.binding,
+		Remote: a.remoteBinding, Root: a.Root, TaskID: a.TaskID, GeneratedTaskID: a.generatedTaskID, ResumeTask: a.ResumeTask,
 		Provider: a.Provider, Auto: a.Auto, Config: a.Config, Cwd: a.Cwd, BriefPath: a.Brief, BriefBytes: a.BriefBytes,
 		Isolation: a.Isolation, WorkspaceID: a.WorkspaceID, Base: a.Base, WorkspaceBudget: a.WorkspaceBudget,
 		WorkspaceBinding: a.workspaceBinding, Selection: supervisorAdmissionSelection(a, deps),
@@ -54,10 +56,26 @@ func dispatch(a Arguments, deps Dependencies) commandResult {
 }
 
 func dispatchContext(ctx context.Context, a Arguments, deps Dependencies) commandResult {
+	if err := prepareGuardedDispatchContext(ctx, &a, deps); err != nil {
+		return connectorFailure(newResponse("dispatch"), err)
+	}
 	deps = deps.withCapturedEnvironmentContext(ctx)
 	options := dispatchOptionsContext(ctx, deps, a.ResumeTask != "")
 	options.ResourceGuards = a.ResourceGuards
-	return dispatchCommandResult(tasklifecycle.DispatchContext(ctx, dispatchRequest(a, deps), options))
+	if a.Connector.ExpectedRoot != "" {
+		options.OpenStore = func(root string, _ bool) (*taskdir.Store, error) {
+			store, err := openStoreContext(ctx, root, deps.storeDependencies(), false)
+			if err != nil {
+				return nil, err
+			}
+			if _, err = store.RequireConnectorContext(ctx, a.Connector.ExpectedRoot, a.Connector.ExpectedProject, a.Cwd); err != nil {
+				return nil, errors.Join(err, store.Close())
+			}
+			return store, nil
+		}
+	}
+	result := dispatchCommandResult(tasklifecycle.DispatchContext(ctx, dispatchRequest(a, deps), options))
+	return attachConnectorDispatchReceipt(ctx, a, deps, result)
 }
 
 func continueTask(a Arguments, deps Dependencies) commandResult {

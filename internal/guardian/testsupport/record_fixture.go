@@ -26,7 +26,9 @@ func (f *RecordFixture) CloseTask(t *testing.T) {
 func (f *RecordFixture) Hello(t *testing.T) {
 	t.Helper()
 	client, err := guardian.NewWorkerClient(f.connection, productionRecordGuardianScope{}, f.taskID, f.deadline,
-		func(*exec.Cmd) (guardian.LaunchGate, error) { return productionRecordGuardianGate{}, nil })
+		func(*exec.Cmd, *guardian.ProjectDirectory) (guardian.LaunchGate, error) {
+			return productionRecordGuardianGate{}, nil
+		})
 	if err != nil {
 		t.Fatalf("hello: %v", err)
 	}

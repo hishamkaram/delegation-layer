@@ -3,6 +3,8 @@ package control
 import (
 	"errors"
 	"fmt"
+
+	"github.com/hishamkaram/delegation-layer/internal/lifetime"
 )
 
 type privateProcessIdentity struct {
@@ -69,9 +71,22 @@ func (c *Client) privateProcessUnavailable(identity privateProcessIdentity) (boo
 	if identity.StartToken == "" {
 		return true, nil
 	}
-	observation, err := c.observePrivateProcess(identity.PID)
+	persisted, err := lifetime.NewProcessRef(identity.PID, identity.StartToken)
 	if err != nil {
-		return false, err
+		return false, errors.Join(ErrBinding, err)
 	}
-	return !observation.Present || observation.StartToken != identity.StartToken, nil
+	if c == nil || c.options.processObserver == nil {
+		present, observeErr := lifetime.ProcessPresent(persisted)
+		return !present, observeErr
+	}
+	observation, err := c.observePrivateProcess(identity.PID)
+	if err != nil || !observation.Present {
+		return !observation.Present, err
+	}
+	observed, err := lifetime.NewProcessRef(identity.PID, observation.StartToken)
+	if err != nil {
+		return false, errors.Join(ErrBinding, err)
+	}
+	same, err := lifetime.SameProcess(observed, persisted)
+	return !same, err
 }

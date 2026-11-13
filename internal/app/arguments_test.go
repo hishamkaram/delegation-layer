@@ -194,6 +194,29 @@ func TestSupervisorArguments(t *testing.T) {
 	}
 }
 
+func TestSupervisorRuntimeRestartArguments(t *testing.T) {
+	token := "v1:" + strings.Repeat("a", 32) + ":1:" + strings.Repeat("b", 32) + ":" + strings.Repeat("c", 64)
+	a, err := ParseArguments([]string{"supervisor", "restart", "--from-startup", token, "--json"})
+	if err != nil || a.SupervisorAction != "restart" || a.SupervisorFromStartup != token || !a.JSON {
+		t.Fatalf("exact restart request was changed: %+v %v", a, err)
+	}
+	a, err = ParseArguments([]string{"supervisor", "status", "--runtime-restart", "--json"})
+	if err != nil || !a.SupervisorRuntimeRestart || a.SupervisorAction != "status" {
+		t.Fatalf("passive custody selection was changed: %+v %v", a, err)
+	}
+	for _, argv := range [][]string{
+		{"supervisor", "restart"},
+		{"supervisor", "restart", "--from-startup", ""},
+		{"supervisor", "restart", "--from-startup", strings.Replace(token, ":1:", ":01:", 1)},
+		{"supervisor", "status", "--from-startup", token},
+		{"supervisor", "migrate", "--runtime-restart"},
+	} {
+		if _, err := ParseArguments(argv); err == nil {
+			t.Errorf("invalid restart selection accepted: %v", argv)
+		}
+	}
+}
+
 func TestRecheckArgumentsRequireOneTaskIDAndAllowJSONPlacement(t *testing.T) {
 	id := strings.Repeat("d", 32)
 	for _, argv := range [][]string{

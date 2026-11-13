@@ -62,6 +62,15 @@ func (s *Store) OpenWorkspaceOperation(ctx context.Context, id string, create bo
 	return s.openControlDirContext(ctx, filepath.Join(s.Root, workspaceOperationsDirectory, id), create)
 }
 
+// TryOpenWorkspaceOperation opens an existing operation without creating its
+// directory or locks and without waiting for a maintenance owner.
+func (s *Store) TryOpenWorkspaceOperation(ctx context.Context, id string) (*ControlDir, error) {
+	if err := task.ValidateTaskID(id); err != nil {
+		return nil, err
+	}
+	return s.tryOpenControlDirContext(ctx, filepath.Join(s.Root, workspaceOperationsDirectory, id))
+}
+
 // WorkspaceArtifactDirectory is the one layout owner for optional workspace
 // bytes. Callers validate operation identities before constructing locations.
 func WorkspaceArtifactDirectory(root, operationID string) string {

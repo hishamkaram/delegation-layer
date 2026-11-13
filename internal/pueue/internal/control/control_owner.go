@@ -222,11 +222,63 @@ func writeControlOwnerCompletion(connection net.Conn, result CommandResult) erro
 // The caller owns the permit policy. This boundary prepares actual inherited
 // resources before consuming it, then attempts the external owner's Start once.
 func startControlOwnedCapturedWithConsume(ctx context.Context, ownerExecutable string, cmd *exec.Cmd, commandID string, observer func(CommandEvent), statusVersion string, consume func() error, report func(error)) *Pending {
+	return startControlOwnedCapturedWithSettlement(ctx, ownerExecutable, cmd, commandID, observer, statusVersion, consume, report, nil)
+}
+
+// Written only by this command's canonical Start/Wait owner and read only
+// after Pending.Done. No observed PID/Started bit grants settlement proof.
+type controlCommandSettlement struct {
+	pending          *Pending
+	ownerStartFailed bool
+	ownerStarted     bool
+	commandSettled   bool
+}
+
+func (proof *controlCommandSettlement) bind(pending *Pending) {
+	if proof != nil {
+		proof.pending = pending
+	}
+}
+
+func (proof *controlCommandSettlement) failedOwnerStart() {
+	if proof != nil {
+		proof.ownerStartFailed = true
+	}
+}
+
+func (proof *controlCommandSettlement) startedOwner() {
+	if proof != nil {
+		proof.ownerStarted = true
+	}
+}
+
+// permitsOrdinaryFailure distinguishes command provenance from mere owner
+// settlement. A completed Started=false/errno report may be a prerequisite
+// failure; it never grants ordinary-command retry permission.
+func (proof *controlCommandSettlement) permitsOrdinaryFailure(err error) bool {
+	if proof == nil || proof.pending == nil {
+		return false
+	}
+	select {
+	case <-proof.pending.Done():
+		completion := classifyCommandCompletion(err)
+		if proof.ownerStartFailed && !proof.ownerStarted {
+			return completion.kind == commandCompletionErrno
+		}
+		result, complete := proof.pending.Result()
+		return complete && proof.ownerStarted && proof.commandSettled && result.Started && result.ExitCode > 0 && completion.kind == commandCompletionExit
+	default:
+		return false
+	}
+}
+
+func startControlOwnedCapturedWithSettlement(ctx context.Context, ownerExecutable string, cmd *exec.Cmd, commandID string, observer func(CommandEvent), statusVersion string, consume func() error, report func(error), settlement *controlCommandSettlement) *Pending {
 	var commandArgs []string
 	if cmd != nil {
 		commandArgs = append([]string(nil), cmd.Args...)
 	}
 	pending := transport.NewPending(commandArgs, report)
+	settlement.bind(pending)
 	fail := func(err error) *Pending {
 		result := CommandResult{ExitCode: -1, Err: err}
 		if cmd != nil {
@@ -272,23 +324,25 @@ func startControlOwnedCapturedWithConsume(ctx context.Context, ownerExecutable s
 		return fail(errors.Join(err, parent.Close(), child.Close(), closeControlLeaseFiles(leases)))
 	}
 	if err = owner.Start(); err != nil {
+		settlement.failedOwnerStart()
 		return fail(errors.Join(err, parent.Close(), child.Close(), closeControlLeaseFiles(leases)))
 	}
+	settlement.startedOwner()
 	closeErr := errors.Join(child.Close(), closeControlLeaseFiles(leases))
 	if err = parent.SetWriteDeadline(time.Now().Add(controlOwnerWriteTimeout)); err == nil {
 		err = writeControlFrame(parent, request, maxControlOwnerRequestBytes)
 	}
 	if err != nil || closeErr != nil {
 		parentCloseErr := parent.Close()
-		go completeControlOwnerPending(owner, nil, pending, cmd, commandID, observer, errors.Join(err, closeErr, parentCloseErr))
+		go completeControlOwnerPending(owner, nil, pending, cmd, commandID, observer, errors.Join(err, closeErr, parentCloseErr), settlement)
 		return pending
 	}
 	if err = parent.SetWriteDeadline(time.Time{}); err != nil {
 		parentCloseErr := parent.Close()
-		go completeControlOwnerPending(owner, nil, pending, cmd, commandID, observer, errors.Join(err, parentCloseErr))
+		go completeControlOwnerPending(owner, nil, pending, cmd, commandID, observer, errors.Join(err, parentCloseErr), settlement)
 		return pending
 	}
-	go observeControlOwner(parent, owner, pending, cmd, commandID, observer)
+	go observeControlOwner(parent, owner, pending, cmd, commandID, observer, settlement)
 	return pending
 }
 
@@ -371,7 +425,7 @@ func newControlOwnerSocketPair() (net.Conn, *os.File, error) {
 	return connection, childFile, nil
 }
 
-func observeControlOwner(connection net.Conn, owner *exec.Cmd, pending *Pending, command *exec.Cmd, commandID string, observer func(CommandEvent)) {
+func observeControlOwner(connection net.Conn, owner *exec.Cmd, pending *Pending, command *exec.Cmd, commandID string, observer func(CommandEvent), settlement *controlCommandSettlement) {
 	result := CommandResult{ExitCode: -1}
 	var protocolErr error
 	completed := false
@@ -415,15 +469,20 @@ func observeControlOwner(connection net.Conn, owner *exec.Cmd, pending *Pending,
 		}
 	}
 	closeErr := connection.Close()
-	completeControlOwnerPending(owner, &result, pending, command, commandID, observer, errors.Join(protocolErr, closeErr))
+	completeControlOwnerPending(owner, &result, pending, command, commandID, observer, errors.Join(protocolErr, closeErr), settlement)
 }
 
-func completeControlOwnerPending(owner *exec.Cmd, observed *CommandResult, pending *Pending, command *exec.Cmd, commandID string, observer func(CommandEvent), protocolErr error) {
+func completeControlOwnerPending(owner *exec.Cmd, observed *CommandResult, pending *Pending, command *exec.Cmd, commandID string, observer func(CommandEvent), protocolErr error, settlement *controlCommandSettlement) {
 	result := CommandResult{ExitCode: -1}
 	if observed != nil {
 		result = *observed
 	}
 	waitErr := owner.Wait()
+	if settlement != nil {
+		// A lost frame or failed owner Wait is never a completed-command proof,
+		// even when Started is false and the remaining cause is a pure errno.
+		settlement.commandSettled = observed != nil && protocolErr == nil && waitErr == nil
+	}
 	if protocolErr != nil || observed == nil {
 		result.Err = errors.Join(result.Err, protocolErr, waitErr)
 	} else if waitErr != nil {

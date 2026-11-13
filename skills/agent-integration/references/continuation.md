@@ -34,8 +34,18 @@ A timed-out turn can have `publication: "unknown"` and no `outcome` while
 indefinitely for a publication that the interrupted turn cannot complete.
 
 The follow-up brief is optional. If it is omitted, Delegation Layer reuses the
-validated predecessor brief. A successful continuation returns a new task ID
-and links it to the predecessor. Observe and collect the new ID separately.
+validated predecessor brief. After predecessor validation and cleanup succeed,
+a missing, oversized or otherwise invalid caller-supplied brief returns
+`task_record: "not_created"`, `failure.code: "invalid_request"`,
+`failure.stage: "validate-request"` and `failure.next_action: "correct_request"`
+with exit `2`. Correct that input before retrying the same continuation.
+As with dispatch, caller brief-read failures, including host file-I/O failures,
+use this validation classification. Restore the input's availability before
+retrying; the classification does not prove its contents were malformed.
+Predecessor, inherited-brief, ownership and cleanup failures retain
+`load-predecessor` and `stop_and_report`; an invalid override does not hide them.
+A successful continuation returns a new task ID and links it to the predecessor.
+Observe and collect the new ID separately.
 Follow the main skill's [root rule](../SKILL.md#3-prepare-separate-paths-and-a-finite-brief):
 ordinary continuation omits `--root` in the same user/configuration context;
 an explicit custom or recorded historical root must be retained exactly, even

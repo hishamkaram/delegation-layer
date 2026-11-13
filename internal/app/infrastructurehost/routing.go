@@ -112,6 +112,9 @@ func (r Routing) selectPreparation(ctx context.Context, pin taskdir.RootPin, sel
 	if err := initial.Validate(pin.RootID()); err != nil {
 		return infrastructureRoutingSelection{}, infrastructureEstablishmentHost{}, err
 	}
+	if err := validateOwnerEndpointPath(pin.Root()); err != nil {
+		return infrastructureRoutingSelection{}, infrastructureEstablishmentHost{}, err
+	}
 	digest, err := selected.Digest()
 	if err != nil {
 		return infrastructureRoutingSelection{}, infrastructureEstablishmentHost{}, err

@@ -22,7 +22,7 @@ func (s *ownerServer) completeInitial(outcome PreparationOutcome, err error) {
 	}
 	s.initialOutcome, s.initialError = outcome, err
 	s.initialCompleted = true
-	s.terminalHandoff = err != nil && !retainsResidentCleanup(err) && !s.closing && outcome != (PreparationOutcome{})
+	s.terminalHandoff = err != nil && !retainsResidentCleanup(err) && !s.closing && outcome != (PreparationOutcome{}) && s.runtimeFrom == (StartupReference{})
 	close(s.initialDone)
 }
 
@@ -37,6 +37,9 @@ func (s *ownerServer) checkInitialRequest(work acceptedOwnerWork) error {
 	defer s.mu.Unlock()
 	if work.request.InitialResultFor != (StartupReference{}) && !s.matchesInitial(work) {
 		return ErrIdentity
+	}
+	if s.runtimeFrom != (StartupReference{}) && work.request.Action != ownerStatus && work.request.Action != ownerRuntimeRestartPreflight && (work.request.Action != ownerRuntimeRestart || work.request.RestartFrom != s.runtimeFrom) {
+		return errOwnerWorkBusy
 	}
 	if s.terminalHandoff && !s.matchesInitial(work) {
 		return errOwnerWorkBusy

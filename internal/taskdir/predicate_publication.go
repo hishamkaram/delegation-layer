@@ -183,7 +183,7 @@ func (td *TaskDir) evaluateAndPublishContext(ctx context.Context, interpreter pr
 	if err != nil {
 		return nil, stage.discard(), err
 	}
-	cleanup, err := td.commitPayloadStage(stage)
+	cleanup, err := td.commitPayloadStageContext(ctx, stage)
 	if err != nil || cleanup != nil {
 		return nil, cleanup, err
 	}
@@ -192,6 +192,10 @@ func (td *TaskDir) evaluateAndPublishContext(ctx context.Context, interpreter pr
 }
 
 func (td *TaskDir) commitPayloadStage(stage *payloadStage) (error, error) {
+	return td.commitPayloadStageContext(context.Background(), stage)
+}
+
+func (td *TaskDir) commitPayloadStageContext(ctx context.Context, stage *payloadStage) (error, error) {
 	_, cleanup, err := td.store.commitStage(stage.stage, stage.dest, td.store.faultInjector)
 	if errors.Is(err, os.ErrExist) {
 		cleanup = errors.Join(cleanup, stage.discard())
@@ -200,7 +204,7 @@ func (td *TaskDir) commitPayloadStage(stage *payloadStage) (error, error) {
 	if err != nil {
 		return cleanup, err
 	}
-	digest, size, err := td.store.fileDigest(stage.dest)
+	digest, size, err := td.store.fileDigestContext(ctx, stage.dest)
 	if err != nil {
 		return cleanup, errors.Join(task.ErrInvariantFault, err)
 	}

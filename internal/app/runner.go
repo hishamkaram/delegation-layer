@@ -395,8 +395,8 @@ func runPreparedRunner(response Response, parsed runnerArguments, deps Dependenc
 	if inspection.StartExists {
 		return failed(response, task.ErrAlreadyStarted, 1)
 	}
-	if req.Workspace != nil && lifetimeChild == nil {
-		return failed(response, fmt.Errorf("%w: a managed workspace requires an authenticated lifetime child", task.ErrInvalidPermit), 1)
+	if err = requireRunnerLifetime(req, lifetimeChild != nil); err != nil {
+		return failed(response, err, 1)
 	}
 	_, err = prepareMatchedProfile(deps, root, *req, *meta)
 	if err != nil {
@@ -418,6 +418,19 @@ func runPreparedRunner(response Response, parsed runnerArguments, deps Dependenc
 		return failed(response, err, classifyCode(err, 1))
 	}
 	return runProvider(response, store, td, req, profile, client, lifetimeChild, deps)
+}
+
+func requireRunnerLifetime(req *task.TaskRecord, authenticated bool) error {
+	if authenticated {
+		return nil
+	}
+	if req.Workspace != nil {
+		return fmt.Errorf("%w: a managed workspace requires an authenticated lifetime child", task.ErrInvalidPermit)
+	}
+	if req.ConnectorContext != nil {
+		return fmt.Errorf("%w: a connector project requires an authenticated lifetime child", task.ErrInvalidPermit)
+	}
+	return nil
 }
 
 func reconcileRunnerMode(ctx context.Context, parsed runnerArguments, root string, response *Response, td *taskdir.TaskDir, req *task.TaskRecord, meta *task.MetaRecord, options tasklifecycle.SupervisorOptions) (*pueue.Client, pueue.Observation, error) {

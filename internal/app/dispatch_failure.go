@@ -36,6 +36,12 @@ func dispatchFailure(err error, taskRecord string) DispatchFailureResponse {
 		NextAction:      dispatchFailureNextAction(code, taskRecord),
 		RecoveryCommand: dispatchFailureRecoveryCommand(code, taskRecord),
 	}
+	if code == "retry_later" {
+		failure.ReasonCode = runtimeRestartPendingReason
+	}
+	if code == "continuation_unavailable" {
+		failure.ReasonCode = continuationFailureReason(err)
+	}
 	if supervisorFailureCode(code) {
 		failure.ReasonCode = supervisorcore.FailureReason(err)
 		if taskRecord == "not_created" && failure.ReasonCode == "historical_target_not_ready" {
@@ -61,10 +67,33 @@ func dispatchFailure(err error, taskRecord string) DispatchFailureResponse {
 	return failure
 }
 
+func continuationFailureReason(err error) string {
+	reason := tasklifecycle.ContinuationReason(err)
+	switch reason {
+	case tasklifecycle.ContinuationPredecessorRecordsUnavailable,
+		tasklifecycle.ContinuationPredecessorEnvironmentUnrecorded,
+		tasklifecycle.ContinuationProfilesUnavailable,
+		tasklifecycle.ContinuationPredecessorSessionUnavailable,
+		tasklifecycle.ContinuationValidationFailed,
+		tasklifecycle.ContinuationPredecessorObservationFailed,
+		tasklifecycle.ContinuationPredecessorReconciliationFailed,
+		tasklifecycle.ContinuationPredecessorSubmissionUnavailable,
+		tasklifecycle.ContinuationPredecessorRunnerLeaseObservationFailed,
+		tasklifecycle.ContinuationPredecessorRunnerLeaseBusy,
+		tasklifecycle.ContinuationPredecessorOutcomeUnavailable,
+		tasklifecycle.ContinuationPredecessorSessionHandoffFailed:
+		return string(reason)
+	default:
+		return ""
+	}
+}
+
 // providerCapabilityChangedReason marks an unavailable provider whose whole
 // refusal is a capability the recorded launch requires and the installed CLI
 // no longer offers. Its public detail is fixed and names no provider value.
 const providerCapabilityChangedReason = "provider_capability_changed"
+
+const runtimeRestartPendingReason = "runtime_restart_pending"
 
 const providerCapabilityChangedDetail = "The installed provider CLI no longer offers a capability that this task's recorded launch requires."
 
@@ -189,6 +218,14 @@ func dispatchSubmissionFailureCode(err error, stage, taskRecord string) string {
 }
 
 func dispatchCauseFailureCode(err error) string {
+	if errors.Is(err, pueue.ErrPrivateRuntimeRestartPending) {
+		if task.AllErrorCauses(err, func(cause error) bool {
+			return errors.Is(cause, pueue.ErrPrivateRuntimeRestartPending)
+		}) {
+			return "retry_later"
+		}
+		return "supervisor_setup_failed"
+	}
 	if runnerRequestReason(err) != "" {
 		return "invalid_request"
 	}
@@ -267,7 +304,7 @@ func dispatchFailureNextAction(code, taskRecord string) string {
 	if code == "supervisor_owner_incompatible" {
 		return "stop_and_report"
 	}
-	if taskRecord == "not_created" && code == "resource_pressure" {
+	if taskRecord == "not_created" && (code == "resource_pressure" || code == "retry_later") {
 		return "retry_later"
 	}
 	if taskRecord == "not_created" && code == "supervisor_upgrade_required" {
@@ -293,6 +330,7 @@ func dispatchFailureRecoveryCommand(code, taskRecord string) string {
 }
 
 var dispatchFailureMessages = map[string]string{
+	"retry_later":                        "Delegate's private supervisor has a pending restart. Observe its status before retrying the same admission.",
 	"team_selection_invalid":             "The requested Team or Member cannot be selected. Inspect its scope, project and current definition; correct the request before trying again.",
 	"team_catalog_unavailable":           "Delegate could not read the Team catalog or verify its project context. Inspect the catalog and project before retrying; no replacement Member was selected.",
 	"invalid_request":                    "Delegate could not accept the dispatch request.",

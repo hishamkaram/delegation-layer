@@ -24,6 +24,10 @@ func LoadOperation(ctx context.Context, store *taskdir.Store, id string) (*Opera
 	return journal.LoadOperation(ctx, store, id)
 }
 
+func ObserveLifetimeContext(ctx context.Context, store *taskdir.Store, id string, observe func(taskdir.ControlLifetimeObservation) error) error {
+	return journal.ObserveLifetimeContext(ctx, store, id, observe)
+}
+
 // OperationRequestPresent probes one existing operation directory for its
 // request record without locking, creating or decoding it.
 func OperationRequestPresent(ctx context.Context, store *taskdir.Store, id string) (bool, error) {

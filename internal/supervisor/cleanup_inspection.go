@@ -68,7 +68,7 @@ func inspectLegacyEndedTask(ctx context.Context, store *taskdir.Store, legacy in
 	if receipt.NumericTaskID != job.ID || receipt.RootID != store.RootID || generationErr != nil || !belongsToGeneration {
 		return fmt.Errorf("%w: ended Delegate task %s supervisor receipt does not match the legacy job", inspection.ErrGroupMigrationRequired, taskID)
 	}
-	result, err := td.Inspect()
+	result, err := td.InspectContext(ctx)
 	if err != nil {
 		return fmt.Errorf("%w: ended Delegate task %s could not be inspected: %w", inspection.ErrGroupMigrationRequired, taskID, err)
 	}

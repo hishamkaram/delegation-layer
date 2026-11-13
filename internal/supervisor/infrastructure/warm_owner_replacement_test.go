@@ -52,7 +52,11 @@ func TestWarmOwnerJoinedPostObservationRefusesReplacedStartup(t *testing.T) {
 			t.Error(closeErr)
 		}
 	})
-	outcome, err := RequestBoundPreparation(ctx, joined.reader, expected, PreparationRequest{Context: current.Inputs.Context})
+	// This is a fresh caller after native closure and successor setup. Keep its
+	// contact budget independent of the earlier passive observation's deadline.
+	contact, cancelContact := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancelContact()
+	outcome, err := RequestBoundPreparation(contact, joined.reader, expected, PreparationRequest{Context: current.Inputs.Context})
 	if !errors.Is(err, task.ErrLockBusy) || task.RecordAbsent(err) || outcome != (PreparationOutcome{}) {
 		t.Fatalf("post-observation contact selected S2: outcome=%v err=%v", outcome, err)
 	}

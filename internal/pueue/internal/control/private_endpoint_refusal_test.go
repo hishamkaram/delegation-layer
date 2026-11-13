@@ -32,7 +32,23 @@ type refusedPrivateEndpointFixture struct {
 func newRefusedPrivateEndpointFixture(t *testing.T) refusedPrivateEndpointFixture {
 	t.Helper()
 	fixture := newPrivateSupervisorTestFixture(t)
-	client := bindPrivateForTest(t, fixture.stateRoot, fixture.clientPath, fixture.daemonPath)
+	cleanupOwner := privateFixtureDaemonWaitOwner(t)
+	var daemonDone <-chan struct{}
+	waitOwner := daemonWaitOwnerFunc(func(root string, pid int, done <-chan struct{}) error {
+		daemonDone = done
+		return cleanupOwner.RegisterDaemonWait(root, pid, done)
+	})
+	client := bindPrivateWithDaemonWaitOwnerForTest(t, fixture.stateRoot, fixture.clientPath, fixture.daemonPath, waitOwner)
+	if daemonDone == nil {
+		t.Fatal("refused endpoint fixture did not retain its daemon Wait")
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), DefaultObservationTimeout)
+	defer cancel()
+	select {
+	case <-daemonDone:
+	case <-ctx.Done():
+		t.Fatal("refused endpoint fixture daemon Wait did not finish:", ctx.Err())
+	}
 	socketPath := strings.TrimPrefix(client.runtimeBinding.Endpoint, "unix:")
 	removePrivateTestPath(t, filepath.Join(fixture.stateRoot, privateSupervisorDirectory, "ready"))
 	return refusedPrivateEndpointFixture{

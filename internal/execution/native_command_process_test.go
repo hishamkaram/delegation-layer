@@ -11,10 +11,18 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hishamkaram/delegation-layer/internal/guardian"
 	"github.com/hishamkaram/delegation-layer/internal/testutil/goroutinecheck"
+	"golang.org/x/sys/unix"
 )
 
 func TestMain(m *testing.M) {
+	if len(os.Args) > 1 && os.Args[1] == guardian.LaunchGateMode {
+		if err := guardian.RunLaunchGate(os.Args[2:], unix.Exec); err != nil {
+			os.Exit(31)
+		}
+		os.Exit(0)
+	}
 	if code, handled := RunCommandOwnerMode(os.Args[1:]); handled {
 		os.Exit(code)
 	}

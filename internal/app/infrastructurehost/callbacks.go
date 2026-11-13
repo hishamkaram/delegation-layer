@@ -5,16 +5,18 @@ import (
 
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
 	"github.com/hishamkaram/delegation-layer/internal/task"
+	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 )
 
 // Callbacks is immutable native application composition. It carries no launch
 // inputs; accepted context owns executable, environment and resident guards.
 type Callbacks struct {
-	MaintenanceLaunch      func(context.Context, string, string, []string) error
-	SuccessfulCleanup      func(context.Context, string, task.SupervisorRef, []pueue.Job) (pueue.PrivateQueueCleanupPlan, error)
-	TerminalEvidence       func(context.Context, string, task.SupervisorRef, []pueue.Job) error
-	TerminalCustody        func(context.Context, string, task.SupervisorRef, pueue.PrivateTerminalCustodyScope) error
-	MigrationAuthorization func(context.Context, string, task.SupervisorRef, []pueue.Job) error
+	MaintenanceLaunch           func(context.Context, string, string, []string) error
+	SuccessfulCleanup           func(context.Context, string, task.SupervisorRef, []pueue.Job) (pueue.PrivateQueueCleanupPlan, error)
+	TerminalEvidence            func(context.Context, string, task.SupervisorRef, []pueue.Job) error
+	TerminalCustody             func(context.Context, string, task.SupervisorRef, pueue.PrivateTerminalCustodyScope) error
+	MigrationAuthorization      func(context.Context, string, task.SupervisorRef, []pueue.Job) error
+	RuntimeRestartAuthorization func(context.Context, *taskdir.Store, pueue.RuntimeRestartReference, task.SupervisorRef, []pueue.Job) error
 }
 
 func (c Callbacks) ApplyTo(options pueue.Options) pueue.Options {

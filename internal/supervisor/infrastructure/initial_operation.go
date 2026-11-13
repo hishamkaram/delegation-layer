@@ -13,14 +13,16 @@ const (
 	InitialRecoverSaved        InitialOperationKind = "recover-saved"
 	InitialPrepareContinuation InitialOperationKind = "prepare-continuation"
 	InitialMigrateOwn          InitialOperationKind = "migrate-own"
+	InitialRuntimeRestart      InitialOperationKind = "runtime-restart"
 )
 
 // InitialOperation is immutable purpose and subject data owned by the accepted
 // startup intent. Its zero value preserves the legacy EnsureOwn operation.
 // Subject records remain authoritative; these selectors confer no authority.
 type InitialOperation struct {
-	Kind   InitialOperationKind `json:"kind"`
-	Source SavedBindingSource   `json:"source,omitzero"`
+	Kind        InitialOperationKind `json:"kind"`
+	Source      SavedBindingSource   `json:"source,omitzero"`
+	RestartFrom StartupReference     `json:"restart_from,omitzero"`
 }
 
 func (o InitialOperation) Validate(rootID string) error {
@@ -34,6 +36,9 @@ func (o InitialOperation) Validate(rootID string) error {
 }
 
 func (o InitialOperation) validateSubject() error {
+	if o.Kind != InitialRuntimeRestart && o.RestartFrom != (StartupReference{}) {
+		return ErrIdentity
+	}
 	switch o.Kind {
 	case "", InitialEnsureOwn, InitialMigrateOwn:
 		if o.Source != (SavedBindingSource{}) {
@@ -46,6 +51,11 @@ func (o InitialOperation) validateSubject() error {
 		fallthrough
 	case InitialRecoverSaved:
 		return o.Source.Validate()
+	case InitialRuntimeRestart:
+		if o.Source != (SavedBindingSource{}) {
+			return ErrIdentity
+		}
+		return o.RestartFrom.Validate()
 	default:
 		return fmt.Errorf("%w: unknown initial operation", ErrIdentity)
 	}

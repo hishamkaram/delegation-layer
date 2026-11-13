@@ -1,15 +1,22 @@
 package taskdir
 
-import "path/filepath"
+import (
+	"context"
+	"path/filepath"
+)
 
 // OutcomeReference reads the actual immutable outcome file's digest after the
 // normal inspection owner validates its record and publication. It is an
 // observation reference, not native-lifetime closure authority.
 func (td *TaskDir) OutcomeReference() (string, error) {
-	inspection, err := td.Inspect()
+	return td.OutcomeReferenceContext(context.Background())
+}
+
+func (td *TaskDir) OutcomeReferenceContext(ctx context.Context) (string, error) {
+	inspection, err := td.InspectContext(ctx)
 	if err != nil || inspection.Outcome == nil {
 		return "", err
 	}
-	digest, _, err := td.store.fileDigest(filepath.Join(td.Dir, "outcome.json"))
+	digest, _, err := td.store.fileDigestContext(ctx, filepath.Join(td.Dir, "outcome.json"))
 	return digest, err
 }

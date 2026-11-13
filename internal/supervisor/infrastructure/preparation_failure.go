@@ -27,6 +27,8 @@ const (
 	PreparationCauseInfrastructureIdentity
 	PreparationCauseTaskIdentity
 	PreparationCauseEvidenceFault
+	PreparationCauseRuntimeRestartPending
+	PreparationCauseRuntimeQuiescenceBusy
 )
 
 const preparationKnownCauses = PreparationCausePrivateMigrationRequired |
@@ -37,7 +39,7 @@ const preparationKnownCauses = PreparationCausePrivateMigrationRequired |
 	PreparationCauseConfiguration | PreparationCauseUnknown | PreparationCauseInFlight |
 	PreparationCauseStatusOperational | PreparationCauseControlLimit | PreparationCauseLockBusy |
 	PreparationCauseDeadline | PreparationCauseCanceled | PreparationCauseInfrastructureIdentity |
-	PreparationCauseTaskIdentity | PreparationCauseEvidenceFault
+	PreparationCauseTaskIdentity | PreparationCauseEvidenceFault | PreparationCauseRuntimeRestartPending | PreparationCauseRuntimeQuiescenceBusy
 
 func (c PreparationCauses) Validate() error {
 	if c & ^preparationKnownCauses != 0 {
@@ -95,4 +97,13 @@ func (f PreparationFailure) Validate() error {
 		return ErrIdentity
 	}
 	return nil
+}
+
+func (f PreparationFailure) runtimeRestartPending() bool {
+	const allowed = PreparationCauseRuntimeRestartPending | PreparationCauseDeadline | PreparationCauseCanceled | PreparationCauseInFlight
+	return f.Validate() == nil && !f.IndependentFault && f.Causes&PreparationCauseRuntimeRestartPending != 0 && f.Causes & ^allowed == 0
+}
+
+func (f PreparationFailure) runtimeQuiescenceBusy() bool {
+	return f.Validate() == nil && f.Causes == PreparationCauseRuntimeQuiescenceBusy && !f.IndependentFault
 }

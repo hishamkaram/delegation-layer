@@ -1,6 +1,7 @@
 package taskdir
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -31,19 +32,26 @@ func (insp *TaskInspection) Terminal() bool {
 }
 
 func (td *TaskDir) Inspect() (*TaskInspection, error) {
+	return td.InspectContext(context.Background())
+}
+
+func (td *TaskDir) InspectContext(ctx context.Context) (*TaskInspection, error) {
+	if err := lifetimeContextErr(ctx); err != nil {
+		return nil, err
+	}
 	insp := &TaskInspection{TaskID: td.TaskID, Publication: task.PublicationUnknown}
 	if err := td.inspectPresence(insp); err != nil {
 		return insp, err
 	}
-	_, meta, spec, metaHash, err := td.loadAndValidatePreparedSet()
+	_, meta, spec, metaHash, err := td.loadAndValidatePreparedSetContext(ctx)
 	if err != nil {
 		return insp, err
 	}
 	if insp.OutcomeExists {
-		return td.inspectWinner(insp, meta, spec, metaHash)
+		return td.inspectWinnerContext(ctx, insp, meta, spec, metaHash)
 	}
 	if insp.SealExists {
-		if _, err = td.readSeal(meta.Predicate, spec, metaHash); err != nil {
+		if _, err = td.readSealContext(ctx, meta.Predicate, spec, metaHash); err != nil {
 			return insp, err
 		}
 		insp.Publication = task.PublicationPending
@@ -78,8 +86,8 @@ func (td *TaskDir) inspectPresence(insp *TaskInspection) error {
 	return nil
 }
 
-func (td *TaskDir) inspectWinner(insp *TaskInspection, meta *task.MetaRecord, spec, metaHash string) (*TaskInspection, error) {
-	winner, e := td.readWinner(meta, spec, metaHash)
+func (td *TaskDir) inspectWinnerContext(ctx context.Context, insp *TaskInspection, meta *task.MetaRecord, spec, metaHash string) (*TaskInspection, error) {
+	winner, e := td.readWinnerContext(ctx, meta, spec, metaHash)
 	if e != nil {
 		return insp, e
 	}

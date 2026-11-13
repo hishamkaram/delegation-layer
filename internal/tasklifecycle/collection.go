@@ -43,11 +43,11 @@ func collectPrepared(ctx context.Context, root string, td *taskdir.TaskDir, req 
 		}
 		var supervisorErr error
 		nextSupervisorReconcile, supervisorErr = reconcileCollectionTimeoutIfActive(ctx, deadline, nextSupervisorReconcile, root, td, req, meta, options, &observed.Observation)
-		inspection, inspectErr := td.Inspect()
+		inspection, inspectErr := td.InspectContext(ctx)
 		if inspection != nil {
 			observed.Inspection = inspection
 		}
-		descriptors, descriptorErr := td.LogDescriptors()
+		descriptors, descriptorErr := td.LogDescriptorsContext(ctx)
 		observed.Raw = descriptors
 		if winner, terminalErr, handled := CollectionInspectionOutcome(inspection, collectErr, inspectErr, descriptorErr); handled {
 			return finishCollection(ctx, observed, root, td, req, meta, options, winner, terminalErr)

@@ -132,10 +132,24 @@ def packed_filename(output: bytes, version: str) -> str:
         value = json.loads(output)
     except ValueError:
         raise VerificationError("npm_pack_output_invalid", STAGE) from None
-    if (not isinstance(value, list) or len(value) != 1 or not isinstance(value[0], dict)
-            or value[0].get("filename") != npm_package_path(version)):
+    keyed = False
+    if isinstance(value, list) and len(value) == 1:
+        entry = value[0]
+    elif isinstance(value, dict) and set(value) == {PACKAGE_NAME}:
+        keyed = True
+        entry = value[PACKAGE_NAME]
+    else:
         raise VerificationError("npm_pack_output_invalid", STAGE)
-    return npm_package_path(version)
+    expected = npm_package_path(version)
+    if not isinstance(entry, dict) or entry.get("filename") != expected:
+        raise VerificationError("npm_pack_output_invalid", STAGE)
+    identities = {"name": PACKAGE_NAME, "version": version, "id": f"{PACKAGE_NAME}@{version}"}
+    # Legacy reports may omit identity fields; their exact filename still
+    # binds name/version. npm 12's keyed report requires explicit identity.
+    if any((field in entry or keyed and field != "id") and entry.get(field) != identity
+           for field, identity in identities.items()):
+        raise VerificationError("npm_pack_output_invalid", STAGE)
+    return expected
 
 
 def require_vcs_identity(go_version_output: bytes, commit: str) -> None:

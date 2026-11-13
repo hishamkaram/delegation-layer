@@ -265,6 +265,13 @@ func RejectPrivateAdmissionMigrationWithEndpointProof(ctx context.Context, store
 	if store == nil || supervisor == nil {
 		return errors.New("missing private admission supervisor")
 	}
+	// Runtime restart is an admission fence, never permission for ordinary
+	// bootstrap recovery or a request to migrate the existing generation.
+	if pending, err := pueue.PrivateRuntimeRestartPending(ctx, store.Root); err != nil {
+		return err
+	} else if pending {
+		return pueue.ErrPrivateRuntimeRestartPending
+	}
 	resolution, err := ResolveGenerationWithLock(ctx, store, supervisor.Binding())
 	if err != nil {
 		return err

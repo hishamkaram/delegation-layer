@@ -77,7 +77,7 @@ func (lifetimeWireNoopLaunchGate) Release() error { return nil }
 
 func (lifetimeWireNoopLaunchGate) Abort() error { return nil }
 
-func lifetimeWireNoopLaunchGateFactory(*exec.Cmd) (LaunchGate, error) {
+func lifetimeWireNoopLaunchGateFactory(*exec.Cmd, *ProjectDirectory) (LaunchGate, error) {
 	return lifetimeWireNoopLaunchGate{}, nil
 }
 
@@ -164,6 +164,52 @@ func TestLifetimeWorkerClientProtocolOrder(t *testing.T) {
 	}
 	if scope.observed != 0 || scope.terminated != 0 || scope.empty != 0 {
 		t.Fatalf("unexpected cleanup calls observed=%d terminated=%d empty=%d", scope.observed, scope.terminated, scope.empty)
+	}
+}
+
+func TestLifetimeProjectStartUsesExistingWorkerProtocol(t *testing.T) {
+	workerConn, guardianConn := net.Pipe()
+	cleanupLifetimeTestResource(t, workerConn)
+	taskID := strings.Repeat("6", 32)
+	serverErr := startLifetimeWireServer(t, guardianConn, taskID, []lifetimeWireExpectation{
+		{kind: lifetimeMessageHello, accepted: true},
+		{kind: lifetimeMessageBegin, sequence: 1, accepted: true},
+		{kind: lifetimeMessageStarted, sequence: 1, pid: 123, accepted: true},
+		{kind: lifetimeMessageFinish, sequence: 1, accepted: true},
+		{kind: lifetimeMessageClose, accepted: true},
+	})
+	project := projectLaunchDirectory(t)
+	factoryCalls := 0
+	factory := func(_ *exec.Cmd, received *ProjectDirectory) (LaunchGate, error) {
+		factoryCalls++
+		if received == nil || received.File != project.File || received.Identity != project.Identity {
+			return nil, task.ErrIdentityMismatch
+		}
+		return lifetimeWireNoopLaunchGate{}, nil
+	}
+	client, err := NewWorkerClient(workerConn, &lifetimeWireScope{}, taskID, time.Now().Add(time.Minute), factory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	closeClient := ownLifetimeWireClient(t, client)
+	command := exec.Command("unused-protocol-fixture")
+	if err = client.StartProjectCommand(command, project.File, project.Identity, func() error {
+		command.Process = &os.Process{Pid: 123}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err = errors.Join(client.FinishCommand(t.Context(), command), client.CloseTask(t.Context()), closeClient()); err != nil {
+		t.Fatal(err)
+	}
+	if err = <-serverErr; err != nil {
+		t.Fatal(err)
+	}
+	if factoryCalls != 1 {
+		t.Fatalf("project launch gate calls = %d, want one", factoryCalls)
+	}
+	if _, err = project.File.Stat(); err != nil {
+		t.Fatal("worker protocol closed borrowed project custody:", err)
 	}
 }
 

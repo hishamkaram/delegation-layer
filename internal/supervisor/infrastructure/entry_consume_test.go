@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/hishamkaram/delegation-layer/internal/lifetime"
+	"github.com/hishamkaram/delegation-layer/internal/pueue"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 	"golang.org/x/sys/unix"
@@ -48,6 +49,21 @@ func (h *componentEntryHost) ValidateRunner(ctx context.Context, root, runner st
 
 func (*componentEntryHost) EnsureOwnRoot(context.Context, Operation, LaunchContext, ResidentGuards, DaemonWaitOwner) (Disposition, error) {
 	return Disposition{}, errors.New("component must not prepare supervisor")
+}
+
+func (*componentEntryHost) ValidateEstablishment(_ context.Context, _ *taskdir.Store, initial InitialOperation) error {
+	if initial.Kind == InitialRuntimeRestart {
+		return errors.New("component must not establish runtime restart")
+	}
+	return nil
+}
+
+func (*componentEntryHost) PrepareRuntimeRestart(context.Context, Operation, LaunchContext, StartupReference, ResidentGuards, DaemonWaitOwner) (Disposition, RuntimeRestartReport, error) {
+	return Disposition{}, RuntimeRestartReport{}, errors.New("component must not restart runtime")
+}
+
+func (*componentEntryHost) ObserveRuntimeRestartCustody(context.Context, Operation, LaunchContext, DaemonWaitOwner) (RuntimeRestartCustody, error) {
+	return RuntimeRestartCustodyUnknown, errors.New("component must not inspect runtime custody")
 }
 
 func (*componentEntryHost) RecoverSaved(context.Context, Operation, LaunchContext, SavedBindingSource, ResidentGuards, DaemonWaitOwner) (Disposition, error) {
@@ -98,7 +114,10 @@ func componentPreparationCause(err error) (PreparationCauses, bool) {
 		{context.DeadlineExceeded, PreparationCauseDeadline},
 		{context.Canceled, PreparationCauseCanceled},
 		{ErrOwnerIncompatible, 0},
-		{ErrOwnerIncompatible, 0},
+		{pueue.ErrPrivateRuntimeRestartPending, PreparationCauseRuntimeRestartPending},
+		{pueue.ErrUnknown, PreparationCauseUnknown},
+		{pueue.ErrInFlight, PreparationCauseInFlight},
+		{pueue.ErrBinding, PreparationCauseBinding},
 	} {
 		// Equal compares exact pointer/value identity without invoking a leaf's Is method.
 		if value.Equal(reflect.ValueOf(mapping.err)) {

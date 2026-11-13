@@ -121,6 +121,12 @@ func (s *Store) CreateTask(id string, req *task.TaskRecord, brief []byte, meta *
 }
 
 func (s *Store) CreateTaskContext(ctx context.Context, id string, req *task.TaskRecord, brief []byte, meta *task.MetaRecord) (_ *TaskDir, resultErr error) {
+	creationAttempted := false
+	defer func() {
+		if !creationAttempted && resultErr != nil {
+			resultErr = &TaskCreationNotAttemptedError{cause: resultErr}
+		}
+	}()
 	if err := lifetimeContextErr(ctx); err != nil {
 		return nil, err
 	}
@@ -128,32 +134,42 @@ func (s *Store) CreateTaskContext(ctx context.Context, id string, req *task.Task
 	if err != nil {
 		return nil, annotateTaskCreationError("validating task creation", err)
 	}
-	if err = s.maintLock.LockSHNonblockingContext(ctx); err != nil {
-		return nil, annotateTaskCreationError("acquiring task maintenance", err)
-	}
-	defer func() { resultErr = errors.Join(resultErr, s.maintLock.Unlock()) }()
-	dir := filepath.Join(s.Root, "tasks", id)
-	if err = s.mkdirContext(ctx, dir, s.faultInjector); err != nil {
-		return nil, annotateTaskCreationError("creating task directory", err)
-	}
-	createLocks, err := s.allowInitialLocks(dir)
+	ancestors, err := s.beginConnectorMutationContext(ctx, false)
 	if err != nil {
-		return nil, annotateTaskCreationError("checking initial task locks", err)
+		return nil, annotateTaskCreationError("acquiring task mutation ancestors", err)
 	}
-	td, err := s.newTaskHandle(id, createLocks)
+	defer s.finishConnectorAncestors(&resultErr, ancestors)
+	namespace, err := s.acquireCreationNamespaceContext(ctx, id)
 	if err != nil {
-		return nil, annotateTaskCreationError(fmt.Sprintf("opening task locks (create=%t)", createLocks), err)
+		return nil, err
 	}
-	if err = td.admissionLock.LockEXNonblockingContext(ctx); err != nil {
-		closeTaskQuietly(td)
-		return nil, annotateTaskCreationError("acquiring task admission", err)
+	if namespace != nil {
+		defer s.finishCreationNamespace(&resultErr, namespace)
 	}
-	err = td.prepareSetContext(ctx, brief, reqData, metaData)
-	err = errors.Join(err, td.admissionLock.Unlock())
+	if err = s.requireNamespaceUnrefusedContext(ctx, id); err != nil {
+		return nil, err
+	}
+	contextLease, err := s.retainTaskCreationContext(ctx, req)
 	if err != nil {
-		closeTaskQuietly(td)
-		return nil, annotateTaskCreationError("preparing task records", err)
+		return nil, err
 	}
+	if contextLease != nil {
+		defer func() { resultErr = errors.Join(resultErr, contextLease.Close()) }()
+	}
+
+	if err = s.requireOriginAdmissionContext(ctx, req.Origin); err != nil {
+		return nil, err
+	}
+	creationAttempted = true
+	td, err := s.commitPreparedTaskContext(ctx, id, brief, reqData, metaData)
+	if err != nil {
+		return nil, err
+	}
+
+	if err = s.validateCreatedConnectorContext(ctx, req, contextLease); err != nil {
+		return nil, s.closeFailedTaskCreation(td, err, false)
+	}
+
 	return td, nil
 }
 
@@ -461,7 +477,7 @@ func (td *TaskDir) PrepareSubmissionContext(ctx context.Context, supervisor task
 	if err = td.requireTaskLaunchPermissionContext(ctx); err != nil {
 		return nil, err
 	}
-	if err = td.validateExecutionDirectories(req); err != nil {
+	if err = td.validateExecutionDirectories(ctx, req); err != nil {
 		return nil, err
 	}
 	rec := task.SubmitRecord{SchemaVersion: task.SchemaVersion, RootID: td.store.RootID, TaskID: td.TaskID, SpecSHA256: specHash, MetaSHA256: metaHash, Label: fmt.Sprintf("delegate:%s:%s", td.store.RootID, td.TaskID), Supervisor: supervisor, CreatedAt: timestamp()}
@@ -500,10 +516,11 @@ func (td *TaskDir) PrepareStart(budget int64) (_ *StartPermit, resultErr error) 
 	if err := td.runLock.LockEXNonblocking(); err != nil {
 		return nil, errors.Join(err, td.store.maintLock.Unlock())
 	}
+	var project *ConnectorContextLease
 	success := false
 	defer func() {
 		if !success {
-			resultErr = errors.Join(resultErr, td.runLock.Unlock(), td.store.maintLock.Unlock())
+			resultErr = errors.Join(resultErr, td.releaseStartPreparation(project))
 		}
 	}()
 	req, _, specHash, metaHash, err := td.loadAndValidatePreparedSet()
@@ -516,19 +533,17 @@ func (td *TaskDir) PrepareStart(budget int64) (_ *StartPermit, resultErr error) 
 	if budget != req.BudgetNanos {
 		return nil, task.ErrRequestConflict
 	}
-	for _, name := range []string{"provider.start", "provider.exit", "outcome.json"} {
-		exists, e := td.store.exists(filepath.Join(td.Dir, name))
-		if e != nil {
-			return nil, e
-		}
-		if exists {
-			return nil, task.ErrAlreadyStarted
-		}
+	if err = td.requireNotAlreadyStarted(); err != nil {
+		return nil, err
+	}
+	project, err = td.store.retainTaskCreationContext(context.Background(), req)
+	if err != nil {
+		return nil, err
 	}
 	if err = td.requireTaskLaunchPermissionContext(context.Background()); err != nil {
 		return nil, err
 	}
-	if err = td.validateExecutionDirectories(req); err != nil {
+	if err = td.validateExecutionDirectories(context.Background(), req); err != nil {
 		return nil, err
 	}
 	if err = td.initializeRaw(); err != nil {
@@ -542,11 +557,33 @@ func (td *TaskDir) PrepareStart(budget int64) (_ *StartPermit, resultErr error) 
 		return nil, err
 	}
 	lease := newRunnerLease(td.runLock, td.store.maintLock, filepath.Join(td.Dir, "raw"))
+	lease.state.project = project
 	td.mu.Lock()
 	td.runnerLease = lease
 	td.mu.Unlock()
 	success = true
 	return newStartPermit(td.TaskID, lease, rec), nil
+}
+
+func (td *TaskDir) requireNotAlreadyStarted() error {
+	for _, name := range []string{"provider.start", "provider.exit", "outcome.json"} {
+		exists, err := td.store.exists(filepath.Join(td.Dir, name))
+		if err != nil {
+			return err
+		}
+		if exists {
+			return task.ErrAlreadyStarted
+		}
+	}
+	return nil
+}
+
+func (td *TaskDir) releaseStartPreparation(project *ConnectorContextLease) error {
+	lockErr := errors.Join(td.runLock.Unlock(), td.store.maintLock.Unlock())
+	if project != nil {
+		return errors.Join(lockErr, project.Close())
+	}
+	return lockErr
 }
 
 func (td *TaskDir) initializeRaw() error {
@@ -590,4 +627,33 @@ func (s *Store) allowInitialLocks(dir string) (bool, error) {
 		}
 	}
 	return true, nil
+}
+
+// Caller retains maintenance, mutation and opted-in namespace ownership.
+func (s *Store) commitPreparedTaskContext(ctx context.Context, id string, brief, reqData, metaData []byte) (*TaskDir, error) {
+	dir := filepath.Join(s.Root, "tasks", id)
+
+	if err := s.mkdirContext(ctx, dir, s.faultInjector); err != nil {
+		return nil, annotateTaskCreationError("creating task directory", err)
+	}
+	createLocks, err := s.allowInitialLocks(dir)
+	if err != nil {
+		return nil, annotateTaskCreationError("checking initial task locks", err)
+	}
+	td, err := s.newTaskHandle(id, createLocks)
+	if err != nil {
+		return nil, annotateTaskCreationError(fmt.Sprintf("opening task locks (create=%t)", createLocks), err)
+	}
+	if err = td.admissionLock.LockEXNonblockingContext(ctx); err != nil {
+		return nil, s.closeFailedTaskCreation(td, annotateTaskCreationError("acquiring task admission", err), false)
+	}
+	err = td.prepareSetContext(ctx, brief, reqData, metaData)
+	unlockErr := td.admissionLock.Unlock()
+	if unlockErr != nil {
+		return nil, s.closeFailedTaskCreation(td, annotateTaskCreationError("preparing task records", errors.Join(err, unlockErr)), true)
+	}
+	if err != nil {
+		return nil, s.closeFailedTaskCreation(td, annotateTaskCreationError("preparing task records", err), false)
+	}
+	return td, nil
 }

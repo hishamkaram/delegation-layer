@@ -32,6 +32,16 @@ func cancelContext(ctx context.Context, a Arguments, deps Dependencies) (result 
 		return failed(response, err, 1)
 	}
 	defer func() { mergeCommandClose(&result, td.Close) }()
+	contextGuard, guardErr := retainOpenedTaskGuardContext(ctx, a, store, td)
+	if guardErr != nil {
+		return connectorFailure(response, guardErr)
+	}
+	if contextGuard != nil {
+		defer func() {
+			mergeCommandClose(&result, func() error { return contextGuard.Validate(ctx) })
+		}()
+	}
+
 	response.RootID, response.TaskID = store.RootID, a.TaskID
 	observed, err := tasklifecycle.CancelWithRequestIDContext(ctx, root, td, a.remoteCancelID, deps.supervisorControlScope(), deps.supervisorLookup(), deps.supervisorControlClientOpener())
 	fillInspection(&response, observed.Inspection)
@@ -73,7 +83,7 @@ func logsContext(ctx context.Context, a Arguments, deps storeDependencies) (resu
 	}
 	defer func() { mergeCommandClose(&result, td.Close) }()
 	response.RootID, response.TaskID = store.RootID, a.TaskID
-	inspection, descriptors, err := tasklifecycle.ReadLogs(td)
+	inspection, descriptors, err := tasklifecycle.ReadLogsContext(ctx, td)
 	fillInspection(&response, inspection)
 	response.Raw = descriptors
 	if err != nil {

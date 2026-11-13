@@ -98,6 +98,9 @@ func requestForCurrentOwner(ctx context.Context, store *taskdir.ReadOnlyStore, p
 	if err != nil {
 		return ownerRequest{}, pin, err
 	}
+	if (action == ownerRuntimeRestart || action == ownerRuntimeRestartPreflight) && publication.RuntimeRestartProtocol != runtimeRestartProtocolVersion {
+		return ownerRequest{}, pin, ErrOwnerIncompatible
+	}
 	digest, err := publication.Digest(intent, assumption)
 	if err != nil {
 		return ownerRequest{}, pin, err
@@ -110,6 +113,9 @@ func requestForCurrentOwner(ctx context.Context, store *taskdir.ReadOnlyStore, p
 		Protocol: ownerProtocolVersion, RootID: pin.RootID(), Owner: reference,
 		PublicationSHA256: digest, Client: ProcessIdentity{PID: self.PID(), StartToken: self.StartToken()},
 		Action: action, Deadline: deadline.UTC().Format(time.RFC3339Nano),
+	}
+	if action == ownerRuntimeRestartPreflight {
+		request.Context = intent.Inputs.Context
 	}
 	return request, pin, nil
 }

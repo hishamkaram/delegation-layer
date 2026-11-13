@@ -41,38 +41,36 @@ func (td *TaskDir) withCollection(fn func() (*task.OutcomeRecord, error, error))
 var errNoOutcome = errors.New("outcome absent")
 
 func (td *TaskDir) readWinner(meta *task.MetaRecord, specHash, metaHash string) (*task.OutcomeRecord, error) {
-	out, err := td.readWinnerRecord(meta, specHash, metaHash)
+	return td.readWinnerContext(context.Background(), meta, specHash, metaHash)
+}
+
+func (td *TaskDir) readWinnerContext(ctx context.Context, meta *task.MetaRecord, specHash, metaHash string) (*task.OutcomeRecord, error) {
+	out, err := td.readWinnerRecordContext(ctx, meta, specHash, metaHash)
 	if err != nil && !errors.Is(err, errNoOutcome) {
 		return nil, fmt.Errorf("%w: %w", task.ErrInvariantFault, err)
 	}
 	return out, err
 }
 
-func (td *TaskDir) readWinnerRecord(meta *task.MetaRecord, specHash, metaHash string) (*task.OutcomeRecord, error) {
+func (td *TaskDir) readWinnerRecordContext(ctx context.Context, meta *task.MetaRecord, specHash, metaHash string) (*task.OutcomeRecord, error) {
 	var outcome task.OutcomeRecord
-	if err := td.store.readRecord(filepath.Join(td.Dir, "outcome.json"), &outcome); err != nil {
+	if err := td.store.readRecordContext(ctx, filepath.Join(td.Dir, "outcome.json"), &outcome); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return nil, errNoOutcome
 		}
 		return nil, err
 	}
-	if err := task.ValidateOutcomeRecord(&outcome); err != nil {
+	if err := td.validateOutcomeBinding(&outcome, meta, specHash, metaHash); err != nil {
 		return nil, err
 	}
-	if outcome.RootID != td.store.RootID || outcome.TaskID != td.TaskID || outcome.SpecSHA256 != specHash || outcome.MetaSHA256 != metaHash {
-		return nil, task.ErrIdentityMismatch
-	}
-	if !outcome.Predicate.Equal(meta.Predicate) {
-		return nil, task.ErrIncompatiblePredicate
-	}
-	digest, size, err := td.store.fileDigest(filepath.Join(td.Dir, outcome.Payload.Basename))
+	digest, size, err := td.store.fileDigestContext(ctx, filepath.Join(td.Dir, outcome.Payload.Basename))
 	if err != nil {
 		return nil, err
 	}
 	if digest != outcome.Payload.SHA256 || size != outcome.Payload.Length {
 		return nil, task.ErrEvidenceFault
 	}
-	_, evidence, err := td.rawManifest()
+	_, evidence, err := td.rawManifestContext(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -162,7 +160,7 @@ func (td *TaskDir) collectOwnedContext(ctx context.Context, predicate task.Predi
 	if !predicate.Equal(meta.Predicate) {
 		return nil, nil, task.ErrIncompatiblePredicate
 	}
-	winner, err := td.readWinner(meta, spec, metaHash)
+	winner, err := td.readWinnerContext(ctx, meta, spec, metaHash)
 	if err == nil {
 		winner, err = td.acknowledgeWinner(winner)
 		return winner, nil, err
@@ -179,7 +177,7 @@ func (td *TaskDir) collectOwnedContext(ctx context.Context, predicate task.Predi
 	if exists {
 		return nil, nil, task.ErrEvidenceFault
 	}
-	seal, err := td.readSeal(predicate, spec, metaHash)
+	seal, err := td.readSealContext(ctx, predicate, spec, metaHash)
 	if errors.Is(err, task.ErrNoSeal) {
 		return nil, nil, task.ErrNoSeal
 	}
@@ -218,7 +216,7 @@ func (td *TaskDir) commitOutcomeContext(ctx context.Context, candidate *task.Out
 		if readErr != nil {
 			return nil, nil, readErr
 		}
-		winner, readErr := td.readWinner(meta, spec, metaHash)
+		winner, readErr := td.readWinnerContext(ctx, meta, spec, metaHash)
 		if readErr != nil {
 			return nil, nil, readErr
 		}
@@ -255,7 +253,7 @@ func (td *TaskDir) ensurePayloadContext(ctx context.Context, descriptor task.Pay
 			return cleanupErr
 		}
 	}
-	digest, size, err := td.store.fileDigest(path)
+	digest, size, err := td.store.fileDigestContext(ctx, path)
 	if err != nil {
 		return fmt.Errorf("%w: %w", task.ErrInvariantFault, err)
 	}
@@ -378,4 +376,17 @@ func (td *TaskDir) validateRecordCandidate(candidate *task.OutcomeRecord, conten
 		return nil, nil, task.ErrEvidenceFault
 	}
 	return td.publishCandidate(candidate, bytes.NewReader(content))
+}
+
+func (td *TaskDir) validateOutcomeBinding(outcome *task.OutcomeRecord, meta *task.MetaRecord, specHash, metaHash string) error {
+	if err := task.ValidateOutcomeRecord(outcome); err != nil {
+		return err
+	}
+	if outcome.RootID != td.store.RootID || outcome.TaskID != td.TaskID || outcome.SpecSHA256 != specHash || outcome.MetaSHA256 != metaHash {
+		return task.ErrIdentityMismatch
+	}
+	if !outcome.Predicate.Equal(meta.Predicate) {
+		return task.ErrIncompatiblePredicate
+	}
+	return nil
 }

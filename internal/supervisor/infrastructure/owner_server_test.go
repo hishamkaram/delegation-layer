@@ -34,7 +34,31 @@ type ownerServerTestHost struct {
 	continuation func(context.Context, Operation, LaunchContext, SavedBindingSource, ResidentGuards, DaemonWaitOwner) (Disposition, error)
 	recoverSaved func(context.Context, Operation, LaunchContext, SavedBindingSource, ResidentGuards, DaemonWaitOwner) (Disposition, error)
 	manual       func(context.Context, Operation, LaunchContext, ResidentGuards, DaemonWaitOwner) (Disposition, ManualMigrationReport, error)
+	restart      func(context.Context, Operation, LaunchContext, StartupReference, ResidentGuards, DaemonWaitOwner) (Disposition, RuntimeRestartReport, error)
 	classify     func(error) PreparationFailure
+	establish    func(context.Context, *taskdir.Store, InitialOperation) error
+	preflight    func(context.Context, Operation, LaunchContext, DaemonWaitOwner) (RuntimeRestartCustody, error)
+}
+
+func (h *ownerServerTestHost) ObserveRuntimeRestartCustody(ctx context.Context, op Operation, selected LaunchContext, wait DaemonWaitOwner) (RuntimeRestartCustody, error) {
+	if h.preflight != nil {
+		return h.preflight(ctx, op, selected, wait)
+	}
+	return h.componentEntryHost.ObserveRuntimeRestartCustody(ctx, op, selected, wait)
+}
+
+func (h *ownerServerTestHost) PrepareRuntimeRestart(ctx context.Context, op Operation, selected LaunchContext, from StartupReference, guards ResidentGuards, waits DaemonWaitOwner) (Disposition, RuntimeRestartReport, error) {
+	if h.restart != nil {
+		return h.restart(ctx, op, selected, from, guards, waits)
+	}
+	return h.componentEntryHost.PrepareRuntimeRestart(ctx, op, selected, from, guards, waits)
+}
+
+func (h *ownerServerTestHost) ValidateEstablishment(ctx context.Context, store *taskdir.Store, initial InitialOperation) error {
+	if h.establish != nil {
+		return h.establish(ctx, store, initial)
+	}
+	return h.componentEntryHost.ValidateEstablishment(ctx, store, initial)
 }
 
 func (h *ownerServerTestHost) EnsureOwnRoot(ctx context.Context, operation Operation, selected LaunchContext, guard ResidentGuards, waits DaemonWaitOwner) (Disposition, error) {
@@ -120,7 +144,7 @@ func newOwnerServerFixtureWithSelection(t *testing.T, host *ownerServerTestHost,
 	if err != nil {
 		t.Fatal(err)
 	}
-	intent := ownerServerIntentFixture(t, entry.journal, reference, selection)
+	intent := ownerServerIntentFixture(t, entry.journal, entry.lease, reference, selection)
 	requireJournalPut(t, entry.journal, entry.lease, intent)
 	entry.operation, err = newRootOwnerOperation(intent, selected)
 	if err != nil {
@@ -149,10 +173,22 @@ func (f *ownerServerFixture) birthContext(t *testing.T) LaunchContext {
 	return selected
 }
 
-func ownerServerIntentFixture(t *testing.T, journal *intentJournal, reference LaunchContextReference, selection ownerServerFixtureSelection) StartupIntent {
+func ownerServerIntentFixture(t *testing.T, journal *intentJournal, lease *Lease, reference LaunchContextReference, selection ownerServerFixtureSelection) StartupIntent {
 	t.Helper()
 	intent := liveJournalIntent(t, journal)
 	intent.Inputs.Initial = ownerInitialOperationFixture(journal.pin.RootID(), selection.initial)
+	if selection.initial == InitialRuntimeRestart {
+		previous := journalIntent(t, journal, 1)
+		requireJournalPut(t, journal, lease, previous)
+		from, err := ReferenceStartup(previous)
+		if err != nil {
+			t.Fatal(err)
+		}
+		intent.Sequence = 2
+		intent.Epoch = "fedcba9876543210fedcba9876543210"
+		intent.Inputs.Initial.RestartFrom = from
+		intent.Inputs.RuntimeProducer = producerOutside
+	}
 	if selection.artifacts != (Artifacts{}) {
 		intent.Inputs.Artifacts = selection.artifacts
 	}

@@ -5,9 +5,11 @@ from __future__ import annotations
 if __name__ != "scripts.acceptance.processes.operations":
     raise ImportError("Import shared owners through scripts.acceptance")
 
+import fcntl
 import json
 import os
 import selectors
+import stat
 import subprocess
 import time
 from scripts.acceptance.directories.operations import DirectoryOwner
@@ -19,6 +21,7 @@ from scripts.acceptance.evidence.files import read_json
 from scripts.acceptance.evidence.files import write_json
 from scripts.acceptance.processes.contracts import BoundedCommandError
 from scripts.acceptance.processes.contracts import BoundedCommandResult
+from scripts.acceptance.processes.contracts import BorrowedInput
 from scripts.acceptance.processes.contracts import CommandFailure
 from scripts.acceptance.processes.contracts import OutputCapture
 from scripts.acceptance.processes.contracts import OutputSink
@@ -52,7 +55,8 @@ class Process:
                  failure_type=RuntimeError,
                  on_start_uncertain: Callable[[Process], None] | None = None,
                  start_new_session: bool = False,
-                 terminal: TerminalIO | None = None):
+                 terminal: TerminalIO | None = None,
+                 borrowed_input: BorrowedInput | None = None):
         self.directory = Path(directory)
         self.argv = [str(arg) for arg in argv]
         self.cwd = Path(cwd)
@@ -67,6 +71,7 @@ class Process:
         self._return_result = return_result
         self._failure_type = failure_type
         require(callable(self._failure_type), "process failure type must be callable")
+        self._borrowed_pipe = _validate_borrowed_input(borrowed_input, stdin, terminal)
         _validate_terminal_io(terminal, stdin, stdout_capture)
         self._terminal = terminal
         self._stdin_data = bytes(stdin) if stdin is not None else None
@@ -94,7 +99,8 @@ class Process:
                 self.argv,
                 cwd=str(cwd),
                 env=self.environment,
-                stdin=(terminal.input_fd if terminal is not None else
+                stdin=(borrowed_input.input_fd if borrowed_input is not None else
+                       terminal.input_fd if terminal is not None else
                        subprocess.PIPE if stdin is not None else subprocess.DEVNULL),
                 stdout=child_stdout,
                 stderr=self.stderr,
@@ -230,11 +236,13 @@ class Process:
                 self._close_stdin()
                 marker = self.directory / "observation-expired.json"
                 if not marker.exists():
-                    write_json(marker, {"pid": self.pid, "timeout_seconds": timeout,
-                                        "termination": "unknown", "signals_sent": 0,
-                                        "stdin_bytes_sent": self._stdin_offset,
-                                        "stdin_complete": self._stdin_data is None or
-                                        self._stdin_offset == len(self._stdin_data)})
+                    observation = {"pid": self.pid, "timeout_seconds": timeout,
+                                   "termination": "unknown", "signals_sent": 0,
+                                   "stdin_bytes_sent": self._stdin_offset,
+                                   "stdin_complete": self._stdin_data is None or
+                                   self._stdin_offset == len(self._stdin_data)}
+                    _record_borrowed_input(self, observation)
+                    write_json(marker, observation)
                 raise self._failure_type(
                     "process observation expired; ownership retained: " + str(self.directory))
             time.sleep(0.025)
@@ -315,9 +323,11 @@ class Processes:
 
     def start(self, name, argv, cwd, stdin=None, on_spawned=None, *,
               environment: Mapping[str, str] | None = None, start_new_session: bool = False,
-              terminal: TerminalIO | None = None):
+              terminal: TerminalIO | None = None,
+              borrowed_input: BorrowedInput | None = None):
         if callable(stdin) and on_spawned is None:
             on_spawned, stdin = stdin, None
+        _validate_borrowed_input(borrowed_input, stdin, terminal)
         _validate_terminal_io(terminal, stdin, None)
         if terminal is not None and self.stdout_capture_factory is not None:
             raise ValueError("terminal stdio cannot use an output capture factory")
@@ -344,7 +354,8 @@ class Processes:
                           failure_type=self.failure_type,
                           on_started=register_started,
                           on_start_uncertain=register_uncertain,
-                          start_new_session=start_new_session, terminal=terminal)
+                          start_new_session=start_new_session, terminal=terminal,
+                          borrowed_input=borrowed_input)
         write_json(directory / "started.json", {
             "pid": process.pid, "started_ns": time.time_ns()})
         return process
@@ -416,6 +427,7 @@ def _record_process_invocation(
         "stdin_sha256": sha(process._stdin_data) if process._stdin_data is not None else None,
         "shell": False,
     }
+    _record_borrowed_input(process, invocation)
     if environment_keys_only:
         invocation.update({
             "environment_keys": sorted(process.environment),
@@ -426,6 +438,38 @@ def _record_process_invocation(
         invocation["environment_sha256"] = sha(
             json.dumps(process.environment, sort_keys=True).encode())
     write_json(process.directory / "invocation.json", invocation)
+
+
+def _validate_borrowed_input(borrowed: BorrowedInput | None, stdin: bytes | None,
+                             terminal: TerminalIO | None) -> tuple[int, int] | None:
+    """Validate caller custody before capture allocation; never change the fd."""
+    if borrowed is None:
+        return None
+    if not isinstance(borrowed, BorrowedInput):
+        raise TypeError("borrowed stdin requires BorrowedInput")
+    if stdin is not None or terminal is not None:
+        raise ValueError("borrowed stdin cannot be combined with finite input or terminal stdio")
+    descriptor = borrowed.input_fd
+    if type(descriptor) is not int or descriptor < 3:
+        raise ValueError("borrowed stdin descriptor must be an integer >= 3")
+    try:
+        info = os.fstat(descriptor)
+        flags = fcntl.fcntl(descriptor, fcntl.F_GETFL)
+    except OSError as error:
+        raise ValueError("borrowed stdin descriptor must be open") from error
+    if not stat.S_ISFIFO(info.st_mode) or flags & os.O_ACCMODE != os.O_RDONLY or os.isatty(descriptor):
+        raise ValueError("borrowed stdin requires a read-only pipe descriptor")
+    return info.st_dev, info.st_ino
+
+
+def _record_borrowed_input(process: Process, record: dict[str, object]) -> None:
+    """Pipe identity proves selection, never input contents or EOF delivery."""
+    if process._borrowed_pipe is None:
+        return
+    device, inode = process._borrowed_pipe
+    for key in ("stdin_bytes", "stdin_sha256", "stdin_bytes_sent", "stdin_complete", "stdin_error"):
+        record.pop(key, None)
+    record.update({"stdin": "BORROWED_PIPE", "stdin_pipe": {"device": device, "inode": inode}})
 
 
 def _validate_terminal_io(terminal: TerminalIO | None, stdin: bytes | None,
@@ -612,6 +656,7 @@ def _observed_result(process: Process, code: int) -> dict[str, object]:
                            process._stdin_offset == len(process._stdin_data)),
         "stdin_error": process._stdin_error,
     }
+    _record_borrowed_input(process, result)
     if process._stdout_capture is not None:
         result["stdout_redaction"] = "pueue-status-envs"
         result["capture_error"] = process._stdout_capture.error

@@ -4,6 +4,8 @@ import (
 	"context"
 	"runtime"
 	"runtime/debug"
+
+	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 )
 
 // Operation exposes immutable, verified startup records. Only the fixed entry
@@ -82,9 +84,12 @@ type ResidentCleanupCompletion interface {
 // fault through disposal; neither that marker nor a reply certifies closure.
 type EntryHost interface {
 	ValidateRunner(context.Context, string, string, *debug.BuildInfo) error
+	ValidateEstablishment(context.Context, *taskdir.Store, InitialOperation) error
+	ObserveRuntimeRestartCustody(context.Context, Operation, LaunchContext, DaemonWaitOwner) (RuntimeRestartCustody, error)
 	EnsureOwnRoot(context.Context, Operation, LaunchContext, ResidentGuards, DaemonWaitOwner) (Disposition, error)
 	RecoverSaved(context.Context, Operation, LaunchContext, SavedBindingSource, ResidentGuards, DaemonWaitOwner) (Disposition, error)
 	PrepareContinuation(context.Context, Operation, LaunchContext, SavedBindingSource, ResidentGuards, DaemonWaitOwner) (Disposition, error)
 	MigrateOwnRoot(context.Context, Operation, LaunchContext, ResidentGuards, DaemonWaitOwner) (Disposition, ManualMigrationReport, error)
+	PrepareRuntimeRestart(context.Context, Operation, LaunchContext, StartupReference, ResidentGuards, DaemonWaitOwner) (Disposition, RuntimeRestartReport, error)
 	ClassifyPreparation(error) PreparationFailure
 }

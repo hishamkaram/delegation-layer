@@ -37,6 +37,17 @@ class OutputSink(Protocol):
         ...
 
 
+@dataclass(frozen=True, kw_only=True)
+class BorrowedInput:
+    """Caller-owned read pipe, kept stable until Start returns or raises.
+
+    The caller owns writes, EOF and descriptor closure. The process owner only
+    borrows this descriptor for child stdin; it never mutates or closes it.
+    """
+
+    input_fd: int
+
+
 @dataclass(frozen=True)
 class TerminalIO:
     """Borrowed terminal descriptors; the caller keeps them through exact Wait.

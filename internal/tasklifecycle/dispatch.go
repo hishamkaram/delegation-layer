@@ -85,6 +85,8 @@ func dispatchPreparedContext(ctx context.Context, request DispatchRequest, optio
 	base.Workspace = request.WorkspaceBinding
 	base.Team = request.TeamContext.Clone()
 	base.Remote = request.Remote.Clone()
+	base.Origin = request.Origin.Clone()
+	base.ConnectorContext = request.ConnectorContext.Clone()
 	options, predecessorMeta, err := prepareDispatchContinuationContext(ctx, store, options, &base, request.ResumeTask)
 	if err != nil {
 		return dispatchFailure(result, DispatchPredecessor, "resolve-predecessor", err)

@@ -371,7 +371,7 @@ func (r *ReadOnlyStore) RemoteTaskClosed(ctx context.Context, id string) (bool, 
 		return false, nil
 	}
 	td := &TaskDir{store: r.store, TaskID: id, Dir: filepath.Join(r.store.Root, "tasks", id)}
-	inspection, err := td.Inspect()
+	inspection, err := td.InspectContext(ctx)
 	if err != nil || !inspection.Terminal() {
 		return false, err
 	}

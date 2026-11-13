@@ -66,20 +66,29 @@ func LoadOperation(ctx context.Context, store *taskdir.Store, id string) (operat
 	var request contract.OperationRequest
 	var deadline time.Time
 	err = control.WithLock(ctx, func(tx *taskdir.ControlTransaction) error {
-		if readErr := tx.Read(operationRequestName, &request); readErr != nil {
-			return readErr
-		}
-		var validationErr error
-		deadline, validationErr = contract.ValidateOperation(request, store.RootID)
-		if validationErr != nil || request.OperationID != id {
-			return task.ErrIdentityMismatch
-		}
-		return tx.Verify(operationRequestName, request)
+		var readErr error
+		request, deadline, readErr = readOperationRequestTx(tx, store.RootID, id)
+		return readErr
 	})
 	if err != nil {
 		return nil, err
 	}
 	return newOperation(control, request, deadline)
+}
+
+func readOperationRequestTx(tx *taskdir.ControlTransaction, rootID, id string) (contract.OperationRequest, time.Time, error) {
+	var request contract.OperationRequest
+	if err := tx.Read(operationRequestName, &request); err != nil {
+		return request, time.Time{}, err
+	}
+	deadline, err := contract.ValidateOperation(request, rootID)
+	if err != nil || request.OperationID != id {
+		return request, time.Time{}, task.ErrIdentityMismatch
+	}
+	if err = tx.Verify(operationRequestName, request); err != nil {
+		return request, time.Time{}, err
+	}
+	return request, deadline, nil
 }
 
 func newOperation(control *taskdir.ControlDir, request contract.OperationRequest, deadline time.Time) (*Operation, error) {

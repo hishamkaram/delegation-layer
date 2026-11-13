@@ -17,12 +17,19 @@ type leaseState struct {
 	maintenance       *LockFile
 	released          bool
 	releaseErr        error
+	project           *ConnectorContextLease
+	projectBorrows    int
 	activeWriters     int
 	filesPrepared     bool
 	artifactsImported bool
 	sealed            bool
 	poisoned          error
 	permit            *permitState
+}
+
+// hasUnsettledExecution is called only while the shared state mutex is held.
+func (s *leaseState) hasUnsettledExecution() bool {
+	return s.activeWriters != 0 || s.projectBorrows != 0 || s.poisoned != nil
 }
 
 func (s *leaseState) release() error {
@@ -34,11 +41,14 @@ func (s *leaseState) release() error {
 	if s.released {
 		return s.releaseErr
 	}
-	if s.activeWriters != 0 {
+	if s.activeWriters != 0 || s.projectBorrows != 0 {
 		return task.ErrEvidenceFault
 	}
 	s.released = true
 	s.releaseErr = errors.Join(s.lock.Unlock(), s.maintenance.Unlock())
+	if s.project != nil {
+		s.releaseErr = errors.Join(s.releaseErr, s.project.Close())
+	}
 	return s.releaseErr
 }
 

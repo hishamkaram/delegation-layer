@@ -53,7 +53,7 @@ func SubmitWithClientContext(ctx context.Context, td *taskdir.TaskDir, req *task
 		response.Admission = task.AdmissionUnknown
 	}
 	if req != nil && meta != nil {
-		inspection, inspectErr := td.Inspect()
+		inspection, inspectErr := td.InspectContext(ctx)
 		response.Inspection = inspection
 		err = errors.Join(err, inspectErr)
 	}

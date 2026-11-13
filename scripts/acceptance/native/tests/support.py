@@ -107,9 +107,6 @@ case "$1" in
         exec "$REAL_PYTHON" "$@"
         ;;
     *acceptance/native/cli.py)
-        if [ "${FAKE_READ_STDIN:-0}" -eq 1 ]; then
-            cat >/dev/null
-        fi
         output=
         provider=
         mode=
@@ -129,11 +126,6 @@ case "$1" in
         model_json=$("$REAL_PYTHON" -c 'import json, sys; print(json.dumps(sys.argv[2] if sys.argv[1] == "present" else None))' "$model_set" "$model")
         code=2
         case "${FAKE_NATIVE_RESULT:-blocked}" in
-            one-failure)
-                if [ "$provider" = codex:exec ] && [ "$scenario" = non-git ] && [ "$mode" = read-only ]; then
-                    code=1
-                fi
-                ;;
             mixed)
                 case "$provider" in
                     claude:print) code=0 ;;

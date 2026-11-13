@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"sync"
 	"time"
@@ -54,6 +55,19 @@ func NewWorkerClient(conn io.ReadWriteCloser, scope CommandScope, taskID string,
 }
 
 func (c *WorkerClient) StartCommand(cmd *exec.Cmd, start func() error) error {
+	return c.startCommand(cmd, nil, start)
+}
+
+// StartProjectCommand borrows the caller's retained project directory. The
+// existing guardian Start/ACK owns launch; execution still owns the only Wait.
+func (c *WorkerClient) StartProjectCommand(cmd *exec.Cmd, directory *os.File, identity task.DirectoryIdentity, start func() error) error {
+	if directory == nil {
+		return task.ErrIdentityMismatch
+	}
+	return c.startCommand(cmd, &ProjectDirectory{File: directory, Identity: identity}, start)
+}
+
+func (c *WorkerClient) startCommand(cmd *exec.Cmd, project *ProjectDirectory, start func() error) error {
 	if c == nil || cmd == nil || start == nil {
 		return task.ErrEvidenceFault
 	}
@@ -66,7 +80,7 @@ func (c *WorkerClient) StartCommand(cmd *exec.Cmd, start func() error) error {
 		c.mu.Unlock()
 		return err
 	}
-	gate, err := c.launchGateFactory(cmd)
+	gate, err := c.launchGateFactory(cmd, project)
 	if err != nil {
 		c.mu.Unlock()
 		return err

@@ -210,7 +210,7 @@ func (td *TaskDir) sessionProofRecordContext(ctx context.Context, digest string)
 	if err != nil {
 		return "", err
 	}
-	winner, err := td.readWinner(meta, spec, metaHash)
+	winner, err := td.readWinnerContext(ctx, meta, spec, metaHash)
 	if err == nil {
 		if winner.EvidenceSHA256 == digest || winner.Payload.SHA256 == digest {
 			return "outcome.json", nil
@@ -240,7 +240,7 @@ func (td *TaskDir) sessionProofRecordContext(ctx context.Context, digest string)
 	} else if matches {
 		return "", nil
 	}
-	seal, err := td.readSeal(meta.Predicate, spec, metaHash)
+	seal, err := td.readSealContext(ctx, meta.Predicate, spec, metaHash)
 	if err != nil {
 		return "", fmt.Errorf("%w: %w", task.ErrSessionBusy, err)
 	}

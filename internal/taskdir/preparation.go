@@ -1,6 +1,7 @@
 package taskdir
 
 import (
+	"context"
 	"errors"
 	"reflect"
 
@@ -29,9 +30,12 @@ func NormalizeTaskRecord(root string, record *task.TaskRecord) error {
 
 // Saved evidence can outlive its workspace. Probe live directories only before
 // issuing fresh execution authority, after checking immutable admission guards.
-func (td *TaskDir) validateExecutionDirectories(record *task.TaskRecord) error {
+func (td *TaskDir) validateExecutionDirectories(ctx context.Context, record *task.TaskRecord) error {
 	normalized := *record
 	if err := NormalizeTaskRecord(td.store.Root, &normalized); err != nil {
+		return err
+	}
+	if err := td.store.validateConnectorRecordContext(ctx, record); err != nil {
 		return err
 	}
 	if !reflect.DeepEqual(*record, normalized) {

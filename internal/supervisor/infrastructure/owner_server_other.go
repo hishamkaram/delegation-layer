@@ -23,6 +23,9 @@ func (s *ownerServer) executeOtherPreparation(ctx context.Context, work accepted
 // establishment, publication observation and parent cleanup. Preparation belongs
 // to the client's direct, bound B request.
 func (s *ownerServer) prepareOtherRoot(ctx context.Context, work acceptedOwnerWork) (established EstablishedOwner, resultErr error) {
+	if work.request.Initial.Kind == InitialRuntimeRestart {
+		return established, ErrOwnerRequest
+	}
 	starter, err := s.entry.captureOwnerProducer(ctx)
 	if err != nil {
 		return established, err
@@ -56,6 +59,9 @@ func (s *ownerServer) prepareOtherRoot(ctx context.Context, work acceptedOwnerWo
 			return "", err
 		}
 		if err := work.operation.Validate(); err != nil {
+			return "", err
+		}
+		if err := s.host.ValidateEstablishment(operation, target, work.request.Initial); err != nil {
 			return "", err
 		}
 		return work.operation.Artifacts().Runner, nil

@@ -40,10 +40,8 @@ func pendingAdmissionCleanup(cause error) bool {
 }
 
 func admissionCleanupFault(cause error) bool {
-	var lifetime *taskdir.LifetimeOwnerCleanupError
-	var admission *workspaces.AdmissionCleanupError
-	return errors.As(cause, &lifetime) || errors.As(cause, &admission) || task.AnyErrorNode(cause, func(node error) bool {
-		var retained interface{ RetainedStore() *taskdir.Store }
-		return errors.As(node, &retained) && retained != nil
+	return taskdir.CleanupFault(cause) || task.AnyErrorNode(cause, func(node error) bool {
+		var admission *workspaces.AdmissionCleanupError
+		return errors.As(node, &admission)
 	})
 }

@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -322,12 +323,7 @@ func closeManagedHelperWithoutCompletion(t *testing.T, fixture checkpointRuntime
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() {
-		if closeErr := operation.Close(); closeErr != nil {
-			t.Error(closeErr)
-		}
-	})
-	workspacefixture.RunRealGuardianLifetime(t, store, operation, func() { fixture.performAction(t, operation) })
+	runCheckpointFixtureLifetime(t, store, operation, func() { fixture.performAction(t, operation) })
 	if qualified {
 		if _, err = workspaces.QualifyCheckpoint(fixture.ctx(), store, operation); err != nil {
 			t.Fatal(err)
@@ -422,4 +418,61 @@ func TestCheckpointStatusRefusesCorruptManagedReservation(t *testing.T) {
 		t.Fatalf("corrupt reservation was submitted: %v", err)
 	}
 	fixture.requireAdds(t, 0)
+}
+
+// The existing child harness bounds a broken guardian join and proves every
+// recorded owner free before removing its parent-owned fixture directory.
+func TestCheckpointFixtureAbortRetainsRecordsUntilGuardianJoin(t *testing.T) {
+	base := workspacefixture.NewOwnerReleaseBase(t)
+	if !base.Child() {
+		base.RunChild(t, nativeLineageStateRoot(base.Dir))
+		return
+	}
+	fixture := newCheckpointRuntimeFixtureOf(t, newNativeLineageIn(t, base.Dir, "sha1"))
+	resource, _ := fixture.lineage.provisionedChild(t, fixture.lineage.main)
+	id := beginManagedCheckpoint(t, fixture, resource).id
+	operation, err := workspace.LoadOperation(fixture.ctx(), fixture.lineage.store, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Registered first, so this observes proof only after guardian join and the
+	// original operation handle's cleanup. The store remains owned by lineage.
+	t.Cleanup(func() { requireCheckpointFixtureClosure(t, fixture.lineage.store, id) })
+	abort := errors.New("controlled checkpoint fixture abort")
+	aborted := false
+	func() {
+		defer func() {
+			if cause := recover(); cause != nil {
+				failure, ok := cause.(error)
+				if !ok || !errors.Is(failure, abort) {
+					panic(cause)
+				}
+				aborted = true
+			}
+		}()
+		runCheckpointFixtureLifetime(t, fixture.lineage.store, operation, func() { panic(abort) })
+	}()
+	if !aborted {
+		t.Fatal("fixture did not take its early-unwind path")
+	}
+}
+
+func requireCheckpointFixtureClosure(t *testing.T, store *taskdir.Store, id string) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(t.Context()), 30*time.Second)
+	defer cancel()
+	operation, err := workspace.LoadOperation(ctx, store, id)
+	if err != nil {
+		t.Error(err)
+		return
+	}
+	defer func() {
+		if closeErr := operation.Close(); closeErr != nil {
+			t.Error(closeErr)
+		}
+	}()
+	proof, err := workspaces.ReadOperationProof(ctx, operation)
+	if err != nil || proof.TerminationSHA256() == "" || proof.WorkerWaitSHA256() == "" {
+		t.Errorf("aborted fixture did not join and persist canonical closure: %v", err)
+	}
 }

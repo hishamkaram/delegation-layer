@@ -36,7 +36,7 @@ func statusContext(ctx context.Context, a Arguments, deps Dependencies) (result 
 	defer func() { mergeCommandClose(&result, td.Close) }()
 	// Runs before td.Close; it never changes the command result.
 	defer func() {
-		if !cleanupRetainsStore(result.err, store) {
+		if a.Connector.ExpectedRoot == "" && !cleanupRetainsStore(result.err, store) {
 			reportContextTaskMaintenance(ctx, taskMaintenanceObserver{root: root, options: deps.supervisorControlScope(), lookup: deps.supervisorLookup()}, td, deps.ReportDiagnostic)
 		}
 	}()
@@ -68,6 +68,9 @@ func collect(a Arguments, deps storeDependencies) commandResult {
 
 func collectContext(ctx context.Context, a Arguments, deps storeDependencies) (result commandResult) {
 	response := newResponse("collect")
+	if a.Connector.ExpectedRoot != "" {
+		deps.observeSupervisor = false
+	}
 	root, err := tasklifecycle.ResolveRoot(a.Root)
 	if err != nil {
 		return failed(response, err, 1)
@@ -82,9 +85,19 @@ func collectContext(ctx context.Context, a Arguments, deps storeDependencies) (r
 		return failed(response, err, 1)
 	}
 	defer func() { mergeCommandClose(&result, td.Close) }()
+	contextGuard, guardErr := retainOpenedTaskGuardContext(ctx, a, store, td)
+	if guardErr != nil {
+		return connectorFailure(response, guardErr)
+	}
+	if contextGuard != nil {
+		defer func() {
+			mergeCommandClose(&result, func() error { return contextGuard.Validate(ctx) })
+		}()
+	}
+
 	// Runs before td.Close; it never changes the command result.
 	defer func() {
-		if !cleanupRetainsStore(result.err, store) {
+		if a.Connector.ExpectedRoot == "" && !cleanupRetainsStore(result.err, store) {
 			reportContextTaskMaintenance(ctx, taskMaintenanceObserver{root: root, options: deps.supervisorOptions, lookup: deps.supervisorLookup}, td, deps.reportDiagnostic)
 		}
 	}()

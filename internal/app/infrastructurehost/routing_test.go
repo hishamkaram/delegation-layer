@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"maps"
 	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -13,6 +15,7 @@ import (
 	supervisorfixture "github.com/hishamkaram/delegation-layer/internal/supervisor/testsupport"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 
+	"github.com/hishamkaram/delegation-layer/internal/pueue"
 	"github.com/hishamkaram/delegation-layer/internal/supervisor/infrastructure"
 )
 
@@ -105,5 +108,42 @@ func TestInfrastructureRoutingCleanupRetainsActualBorrowedStore(t *testing.T) {
 	}
 	if _, err := store.PinRootContext(t.Context()); err != nil {
 		t.Fatalf("routing closed caller-owned Store: %v", err)
+	}
+}
+
+func TestInfrastructureRoutingRejectsLongRootBeforeAcceptanceAndNativeBirth(t *testing.T) {
+	base := supervisorfixture.CanonicalTempDir(t)
+	root := filepath.Join(base, strings.Repeat("r", 100))
+	store, err := taskdir.InitStore(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if closeErr := store.Close(); closeErr != nil {
+			t.Error(closeErr)
+		}
+	})
+	// This finite installed runner would permit native birth if routing reached
+	// establishment. No provider or daemon can be launched by the regression.
+	runner := filepath.Join(base, "selected-runner")
+	supervisorfixture.WriteExecutable(t, runner, "#!/bin/sh\nexit 0\n")
+	invocation := CaptureInvocation(t.Context())
+	if invocation.err != nil {
+		t.Fatal(invocation.err)
+	}
+	selected := infrastructure.LaunchContext{Protocol: infrastructure.RecordProtocolVersion, Root: store.Root, RootID: store.RootID, OS: runtime.GOOS, SupervisorExecutable: filepath.Join(base, "selected-pueue"), ControlEnvironment: []string{}, MaintenanceEnvironment: []string{}}
+	if err = selected.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	routing := Routing{invocation: invocation, defaultRunner: runner}
+	ctx, cancel := context.WithTimeout(t.Context(), time.Minute)
+	defer cancel()
+	before := supervisorfixture.SnapshotStore(t, root)
+	_, err = routing.prepare(ctx, store, selected, infrastructure.InitialOperation{})
+	if !errors.Is(err, pueue.ErrConfiguration) || !strings.Contains(err.Error(), "unix socket path too long") {
+		t.Fatalf("long root reached native startup instead of actionable preflight: %v", err)
+	}
+	if !maps.Equal(before, supervisorfixture.SnapshotStore(t, root)) {
+		t.Fatal("long-root refusal staged startup data or accepted an intent before native birth")
 	}
 }

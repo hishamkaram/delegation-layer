@@ -350,6 +350,15 @@ func ownerReplySubjectFixture(fixture *ownerAuthFixture, action ownerAction) (ow
 	reply := ownerReply{Protocol: ownerProtocolVersion, RootID: request.RootID, OwnerRef: request.Owner, PublicationSHA256: request.PublicationSHA256, Action: action, Code: ownerOK}
 	switch action {
 	case ownerStatus:
+	case ownerRuntimeRestartPreflight:
+		request.Context = fixture.intent.Inputs.Context
+		reply.Context = request.Context
+		reply.RestartPreflight = RuntimeRestartPreflight{Protocol: runtimeRestartProtocolVersion, From: RuntimeRestartReference{RootID: request.RootID, Startup: request.Owner}, Custody: RuntimeRestartCustodyUnknown, ObservedAt: "2026-11-12T00:00:00Z"}
+	case ownerRuntimeRestart:
+		request.RestartFrom, reply.RestartFrom = request.Owner, request.Owner
+		reply.Target = originRecord{Root: fixture.root, RootID: request.RootID}
+		reply.Startup = request.Owner
+		reply.RuntimeRestart = RuntimeRestartReport{From: request.Owner, Phase: RuntimeRestartDaemonClosed}
 	case ownerRecoverSaved, ownerPrepareContinuation:
 		selected := ownerPreparationSubjectFixture(action)
 		request.Source, request.Context = selected.Source, selected.Context

@@ -29,7 +29,7 @@ func (td *TaskDir) permanentLaunchRefusalContext(ctx context.Context) (string, s
 	if err != nil {
 		return "", "", err
 	}
-	outcome, err := td.readWinnerRecord(meta, specHash, metaHash)
+	outcome, err := td.readWinnerRecordContext(ctx, meta, specHash, metaHash)
 	if contextErr := ctx.Err(); contextErr != nil {
 		return "", "", contextErr
 	}
@@ -70,6 +70,9 @@ func (td *TaskDir) RequireTaskLaunchPermissionContext(ctx context.Context) error
 }
 
 func (td *TaskDir) requireTaskLaunchPermissionContext(ctx context.Context) error {
+	if err := td.store.requireNamespaceUnrefusedContext(ctx, td.TaskID); err != nil {
+		return err
+	}
 	refused, err := td.TaskLaunchRefusedContext(ctx)
 	if err != nil {
 		return err
@@ -304,7 +307,7 @@ func (td *TaskDir) unlaunchedTaskRawEmptyContext(ctx context.Context) (bool, err
 
 func (td *TaskDir) recordAutomaticAbandonmentContext(ctx context.Context) error {
 	id := task.ComputeSHA256([]byte(task.StopCauseAutomaticAbandonment + ":" + td.TaskID))[:32]
-	candidate, err := td.newStopRequest(id, task.StopCauseAutomaticAbandonment, time.Time{})
+	candidate, err := td.newStopRequestContext(ctx, id, task.StopCauseAutomaticAbandonment, time.Time{})
 	if err != nil {
 		return err
 	}

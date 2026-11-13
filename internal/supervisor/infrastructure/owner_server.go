@@ -43,6 +43,7 @@ type ownerServer struct {
 	initialOutcome    PreparationOutcome
 	initialError      error
 	terminalHandoff   bool
+	runtimeFrom       StartupReference
 	admissionStopped  chan struct{}
 	initialDelivered  chan struct{}
 	deliveryCompleted bool
@@ -77,6 +78,7 @@ func newOwnerServer(ctx context.Context, entry *ownedResidentEntry, host EntryHo
 	if err != nil {
 		return nil, err
 	}
+	waits.resident = entry // Immutable link to the validated current serving owner.
 	return &ownerServer{
 		entry: entry, host: host, listener: entry.endpoint.listener,
 		journal: entry.journal, waits: waits,
@@ -128,7 +130,7 @@ func (s *ownerServer) prepareInitial(ctx context.Context) (disposition Dispositi
 	if err != nil {
 		return disposition, err
 	}
-	work := acceptedOwnerWork{operation: s.entry.operation, selected: selected, selectedReference: reference, request: ownerRequest{Owner: startup, Action: preparationAction(initial), Source: initial.Source}}
+	work := acceptedOwnerWork{operation: s.entry.operation, selected: selected, selectedReference: reference, request: ownerRequest{Owner: startup, Action: preparationAction(initial), Source: initial.Source, RestartFrom: initial.RestartFrom}}
 	dispatched = true
 	outcome, resultErr = s.executePreparation(operation, work)
 	return outcome.Disposition, resultErr
@@ -211,7 +213,7 @@ func (s *ownerServer) admitConnection(connection *net.UnixConn, action ownerActi
 		return os.ErrClosed
 	}
 	class, limit := ownerConnectionOperation, ownerOperationLimit
-	if action == ownerStatus {
+	if action == ownerStatus || action == ownerRuntimeRestartPreflight {
 		class, limit = ownerConnectionControl, ownerControlLimit
 	}
 	count := s.connectionCount(class)

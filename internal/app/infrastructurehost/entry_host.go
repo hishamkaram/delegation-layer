@@ -29,7 +29,7 @@ func (Host) ValidateRunner(ctx context.Context, root, runner string, image *debu
 	if !installation.ManagedRunnerBuildInfo(image) {
 		return infrastructure.ErrIdentity
 	}
-	if err := pueue.ValidateUnixSocketPathBytes(runtime.GOOS, infrastructure.OwnerEndpointPathBytes(root)); err != nil {
+	if err := validateOwnerEndpointPath(root); err != nil {
 		return err
 	}
 	selected, err := installation.ResolveRunner(runner, "")
@@ -56,4 +56,10 @@ func (h Host) ensureOwnRoot(ctx context.Context, operation infrastructure.Operat
 		preparation.observation.RecordReady()
 	}
 	return infrastructure.Disposition{}, supervisor.ClosePrivateAdmissionTransition(client, prepareErr)
+}
+
+// The application shares one native endpoint budget before acceptance and in
+// the executing child; the infrastructure owner retains the canonical encoder.
+func validateOwnerEndpointPath(root string) error {
+	return pueue.ValidateUnixSocketPathBytes(runtime.GOOS, infrastructure.OwnerEndpointPathBytes(root))
 }

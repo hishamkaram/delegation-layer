@@ -59,6 +59,15 @@ func (s *Store) OpenInspectionContext(ctx context.Context, taskID string, create
 	return s.openControlDirContext(ctx, filepath.Join(s.Root, "inspections", taskID), create)
 }
 
+// TryOpenInspectionContext opens only an existing inspection directory. It
+// attempts maintenance once and never waits for a conflicting owner.
+func (s *Store) TryOpenInspectionContext(ctx context.Context, taskID string) (*ControlDir, error) {
+	if err := task.ValidateTaskID(taskID); err != nil {
+		return nil, err
+	}
+	return s.tryOpenControlDirContext(ctx, filepath.Join(s.Root, "inspections", taskID))
+}
+
 // OpenInspectionGroup opens the root-scoped supervisor group journal. Its
 // records, rather than its directory name, bind the selected daemon identity.
 func (s *Store) OpenInspectionGroup(create bool) (*ControlDir, error) {
@@ -101,18 +110,38 @@ func (s *Store) OpenRunnerRepairContext(ctx context.Context, create bool) (*Cont
 }
 
 func (s *Store) openControlDirContext(ctx context.Context, path string, create bool) (result *ControlDir, err error) {
+	return s.openControlDirWithWaitContext(ctx, path, create, false)
+}
+
+func (s *Store) tryOpenControlDirContext(ctx context.Context, path string) (*ControlDir, error) {
+	return s.openControlDirWithWaitContext(ctx, path, false, true)
+}
+
+func (s *Store) openControlDirWithWaitContext(ctx context.Context, path string, create, nonblocking bool) (result *ControlDir, err error) {
 	ctx, cancel, err := persistenceContext(ctx)
 	if err != nil {
 		return nil, err
 	}
 	defer cancel()
-	if err = s.maintLock.LockSH(ctx); err != nil {
+	lockMaintenance := s.maintLock.LockSH
+	if nonblocking {
+		lockMaintenance = s.maintLock.LockSHNonblockingContext
+	}
+	if err = lockMaintenance(ctx); err != nil {
 		return nil, err
 	}
 	defer func() {
-		err = errors.Join(err, s.maintLock.Unlock())
+		if nonblocking {
+			s.finishConnectorMaintenance(&err)
+		} else {
+			err = errors.Join(err, s.maintLock.Unlock())
+		}
 		if err != nil && result != nil {
-			err = errors.Join(err, result.Close())
+			if nonblocking {
+				err = result.CloseWithError(err)
+			} else {
+				err = errors.Join(err, result.Close())
+			}
 			result = nil
 		}
 	}()
@@ -143,6 +172,16 @@ func (s *Store) openControlDirContext(ctx context.Context, path string, create b
 // Use the scoped transaction argument for all record operations in fn so Close
 // can reject unrelated calls without interrupting this transaction.
 func (d *ControlDir) WithLock(ctx context.Context, fn func(*ControlTransaction) error) (err error) {
+	return d.withLock(ctx, fn, false)
+}
+
+// TryWithLock gives one transaction the existing maintenance and operation
+// leases without waiting for a conflicting owner. It creates no lock or record.
+func (d *ControlDir) TryWithLock(ctx context.Context, fn func(*ControlTransaction) error) error {
+	return d.withLock(ctx, fn, true)
+}
+
+func (d *ControlDir) withLock(ctx context.Context, fn func(*ControlTransaction) error, nonblocking bool) (err error) {
 	ctx, cancel, err := persistenceContext(ctx)
 	if err != nil {
 		return err
@@ -157,14 +196,29 @@ func (d *ControlDir) WithLock(ctx context.Context, fn func(*ControlTransaction) 
 	if fn == nil {
 		return errors.New("missing control transaction")
 	}
-	if err = d.store.maintLock.LockSH(ctx); err != nil {
+	lockMaintenance, lockOperation := d.store.maintLock.LockSH, d.lock.LockEX
+	if nonblocking {
+		lockMaintenance = d.store.maintLock.LockSHNonblockingContext
+		lockOperation = d.lock.LockEXNonblockingContext
+	}
+	if err = lockMaintenance(ctx); err != nil {
 		return err
 	}
-	defer func() { err = errors.Join(err, d.store.maintLock.Unlock()) }()
-	if err = d.lock.LockEX(ctx); err != nil {
+	var cleanup *ControlObservationCleanupError
+	if nonblocking {
+		cleanup = &ControlObservationCleanupError{control: d, maintenanceHeld: true}
+		defer func() { err = cleanup.releaseWithError(err) }()
+	} else {
+		defer func() { err = errors.Join(err, d.store.maintLock.Unlock()) }()
+	}
+	if err = lockOperation(ctx); err != nil {
 		return err
 	}
-	defer func() { err = errors.Join(err, d.lock.Unlock()) }()
+	if nonblocking {
+		cleanup.operationHeld = true
+	} else {
+		defer func() { err = errors.Join(err, d.lock.Unlock()) }()
+	}
 	// Drain scoped operations before releasing either lock. A callback may
 	// hand a transaction method to a bounded helper goroutine; releasing the
 	// operation lock first would let the next transaction overlap that write.
@@ -409,13 +463,7 @@ func (d *ControlDir) Close() error {
 		d.closeDone = make(chan struct{})
 	}
 	if d.closed {
-		done := d.closeDone
-		d.mu.Unlock()
-		<-done
-		d.mu.Lock()
-		err := d.closeErr
-		d.mu.Unlock()
-		return err
+		return d.retryCloseLocked()
 	}
 	d.closed = true
 	for d.active > 0 {
@@ -424,6 +472,32 @@ func (d *ControlDir) Close() error {
 	done := d.closeDone
 	d.mu.Unlock()
 
+	return d.finishClose(done)
+}
+
+// The caller holds mu. Exactly one closer retries a completed failed close;
+// concurrent callers wait for that attempt rather than racing its descriptor.
+func (d *ControlDir) retryCloseLocked() error {
+	for {
+		done := d.closeDone
+		d.mu.Unlock()
+		<-done
+		d.mu.Lock()
+		if done != d.closeDone {
+			continue
+		}
+		if d.closeErr == nil {
+			d.mu.Unlock()
+			return nil
+		}
+		d.closeDone = make(chan struct{})
+		done = d.closeDone
+		d.mu.Unlock()
+		return d.finishClose(done)
+	}
+}
+
+func (d *ControlDir) finishClose(done chan struct{}) error {
 	err := d.lock.Close()
 	d.mu.Lock()
 	d.closeErr = err

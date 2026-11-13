@@ -18,6 +18,9 @@ func DispatchExistingContext(ctx context.Context, options ExistingTaskOptions, s
 	defer func() { result.TaskCloseError = td.Close() }()
 	oldReq, oldMeta, err := td.PreparedRecords()
 	if err != nil {
+		if options.ExistingOnly {
+			return existingFailure(result, ExistingPreparation, err)
+		}
 		created := CreateTaskContext(ctx, options.Selection, options.Creation, store, req, nil, options.BriefPath)
 		result.Creation = &created
 		return result
@@ -27,7 +30,7 @@ func DispatchExistingContext(ctx context.Context, options ExistingTaskOptions, s
 		return existingFailure(result, ExistingPreparation, err)
 	}
 	result.RootID, result.TaskID = oldReq.RootID, oldReq.TaskID
-	inspection, inspectErr := td.Inspect()
+	inspection, inspectErr := td.InspectContext(ctx)
 	result.Inspection = inspection
 	if inspectErr != nil {
 		return existingFailure(result, ExistingPreparation, inspectErr)

@@ -15,9 +15,9 @@ func PredecessorTerminated(root string, td *taskdir.TaskDir, req *task.TaskRecor
 }
 
 func PredecessorTerminatedContext(ctx context.Context, root string, td *taskdir.TaskDir, req *task.TaskRecord, options SupervisorOptions) error {
-	inspection, err := td.Inspect()
+	inspection, err := td.InspectContext(ctx)
 	if err != nil {
-		return err
+		return withContinuationFailure(ContinuationPredecessorObservationFailed, err)
 	}
 	if inspection.Terminal() {
 		if err = requireRunnerLeaseRelease(td); err != nil {
@@ -32,7 +32,7 @@ func PredecessorTerminatedContext(ctx context.Context, root string, td *taskdir.
 	}
 	inspection, err = reconcilePredecessor(ctx, root, td, req, options)
 	if err != nil {
-		return err
+		return withContinuationFailure(ContinuationPredecessorReconciliationFailed, err)
 	}
 	if inspection.Terminal() && inspection.Outcome != nil {
 		return releaseTerminalPredecessor(ctx, td, req, inspection)
@@ -42,14 +42,14 @@ func PredecessorTerminatedContext(ctx context.Context, root string, td *taskdir.
 	} else if handedOff {
 		return nil
 	}
-	return errPredecessorOutcomeUnavailable
+	return withContinuationFailure(ContinuationPredecessorOutcomeUnavailable, errPredecessorOutcomeUnavailable)
 }
 
 func releaseTerminalPredecessor(ctx context.Context, td *taskdir.TaskDir, req *task.TaskRecord, inspection *taskdir.TaskInspection) error {
 	if inspection == nil || !inspection.Terminal() || inspection.Outcome == nil {
-		return errPredecessorOutcomeUnavailable
+		return withContinuationFailure(ContinuationPredecessorOutcomeUnavailable, errPredecessorOutcomeUnavailable)
 	}
-	return ReleaseContinuationSessionContext(ctx, td, req, inspection.Outcome)
+	return withContinuationFailure(ContinuationPredecessorSessionHandoffFailed, ReleaseContinuationSessionContext(ctx, td, req, inspection.Outcome))
 }
 
 func reconcilePredecessor(ctx context.Context, root string, td *taskdir.TaskDir, req *task.TaskRecord, options SupervisorOptions) (*taskdir.TaskInspection, error) {
@@ -68,7 +68,7 @@ func reconcilePredecessor(ctx context.Context, root string, td *taskdir.TaskDir,
 	if observation.State != pueue.StateEnded {
 		return nil, errors.Join(pueue.ErrUnknown, response.MaintenanceError)
 	}
-	return td.Inspect()
+	return td.InspectContext(ctx)
 }
 
 // releaseHandedOffPredecessor releases a predecessor whose provider turn ended
@@ -78,13 +78,13 @@ func reconcilePredecessor(ctx context.Context, root string, td *taskdir.TaskDir,
 func releaseHandedOffPredecessor(ctx context.Context, td *taskdir.TaskDir, req *task.TaskRecord) (bool, error) {
 	records, err := td.ReadStopRecords()
 	if err != nil {
-		return false, err
+		return false, withContinuationFailure(ContinuationPredecessorObservationFailed, err)
 	}
 	budget := HasTerminatedBudgetStop(records)
 	if !budget {
 		_, interrupted, interruptionErr := closureInterruption(ctx, td)
 		if interruptionErr != nil || !interrupted {
-			return false, interruptionErr
+			return false, withContinuationFailure(ContinuationPredecessorObservationFailed, interruptionErr)
 		}
 	}
 	if err = requireRunnerLeaseRelease(td); err != nil {
@@ -94,9 +94,9 @@ func releaseHandedOffPredecessor(ctx context.Context, td *taskdir.TaskDir, req *
 		return true, nil
 	}
 	if budget {
-		return true, td.ReleaseSessionAfterTimeoutContext(ctx, req.Provider, req.PriorSession.ConversationID)
+		return true, withContinuationFailure(ContinuationPredecessorSessionHandoffFailed, td.ReleaseSessionAfterTimeoutContext(ctx, req.Provider, req.PriorSession.ConversationID))
 	}
-	return true, td.ReleaseSessionAfterLifetimeClosureContext(ctx, req.Provider, req.PriorSession.ConversationID)
+	return true, withContinuationFailure(ContinuationPredecessorSessionHandoffFailed, td.ReleaseSessionAfterLifetimeClosureContext(ctx, req.Provider, req.PriorSession.ConversationID))
 }
 
 // closureInterruption is the single eligibility rule for a closure-proven
@@ -107,7 +107,7 @@ func releaseHandedOffPredecessor(ctx context.Context, td *taskdir.TaskDir, req *
 // eligible closure returns its validated proof so callers can read the
 // recorded termination cause. Callers keep their own runner-lease checks.
 func closureInterruption(ctx context.Context, td *taskdir.TaskDir) (guardian.ClosureProof, bool, error) {
-	inspection, err := td.Inspect()
+	inspection, err := td.InspectContext(ctx)
 	if err != nil {
 		return guardian.ClosureProof{}, false, err
 	}
@@ -127,10 +127,10 @@ func closureInterruption(ctx context.Context, td *taskdir.TaskDir) (guardian.Clo
 func requireRunnerLeaseRelease(td *taskdir.TaskDir) error {
 	released, err := td.RunnerLeaseReleased()
 	if err != nil {
-		return err
+		return withContinuationFailure(ContinuationPredecessorRunnerLeaseObservationFailed, err)
 	}
 	if !released {
-		return task.ErrSessionBusy
+		return withContinuationFailure(ContinuationPredecessorRunnerLeaseBusy, task.ErrSessionBusy)
 	}
 	return nil
 }

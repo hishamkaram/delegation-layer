@@ -68,7 +68,7 @@ func validatePrivateMigrationClient(c *Client, stateRoot string) error {
 }
 
 func (c *Client) retryIncompletePrivateBootstrap(ctx context.Context, stateRoot string) error {
-	bootstrapPending, bootstrapErr := PrivateBootstrapPending(stateRoot)
+	bootstrapPending, bootstrapErr := privateLegacyBootstrapPending(stateRoot)
 	if bootstrapErr != nil {
 		return fmt.Errorf("%w: read private bootstrap state: %w", ErrPrivateSupervisorMigrationRequired, bootstrapErr)
 	}

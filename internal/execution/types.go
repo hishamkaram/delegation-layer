@@ -15,6 +15,7 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/execution/plan"
 	"github.com/hishamkaram/delegation-layer/internal/providerjson"
 	"github.com/hishamkaram/delegation-layer/internal/task"
+	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 )
 
 // Plan is the immutable launch plan constructed by a trusted compiled adapter.
@@ -76,6 +77,14 @@ type Lifetime interface {
 	CloseTask(context.Context) error
 }
 
+// ProjectLifetime starts through the same native guardian while borrowing the
+// physical directory retained by the task's start permit. The caller keeps
+// ownership of directory and of the command's sole Wait.
+type ProjectLifetime interface {
+	Lifetime
+	StartProjectCommand(*exec.Cmd, *os.File, task.DirectoryIdentity, func() error) error
+}
+
 type budgetRequestContextKey struct{}
 
 var budgetRequestContextMarker budgetRequestContextKey
@@ -128,6 +137,7 @@ type Hooks struct {
 }
 
 type Options struct {
+	project *taskdir.StartPermit
 	// Protocol selects a machine-only native protocol on the same transport as
 	// Interaction, without a user interaction journal. It is valid only for a
 	// non-interactive task; see ValidateProtocolSelection.
@@ -168,6 +178,13 @@ type Options struct {
 	PrepareEnvironment func(context.Context, []string) ([]string, error)
 	Identity           IdentityObserver
 	Hooks              Hooks
+}
+
+func (o Options) validateProject(ctx context.Context) error {
+	if o.project == nil {
+		return nil
+	}
+	return o.project.RunnerLease().ValidateProject(ctx)
 }
 
 type Result struct {

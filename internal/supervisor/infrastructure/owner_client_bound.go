@@ -23,6 +23,7 @@ func RequestBoundPreparation(ctx context.Context, store *taskdir.ReadOnlyStore, 
 	}
 	request.Context, request.InitialResultFor = selection.Context, selection.InitialResultFor
 	request.Source = selection.Operation.Source
+	request.RestartFrom = selection.Operation.RestartFrom
 	reply, err := contactOwner(ctx, store, pin, request)
 	if reply == (ownerReply{}) {
 		return PreparationOutcome{}, err
@@ -59,6 +60,8 @@ func preparationAction(operation InitialOperation) ownerAction {
 		return ownerRecoverSaved
 	case InitialMigrateOwn:
 		return ownerMigrateOwn
+	case InitialRuntimeRestart:
+		return ownerRuntimeRestart
 	default:
 		return ""
 	}
@@ -74,9 +77,11 @@ func (r ownerRequest) preparationOperation() InitialOperation {
 		return InitialOperation{Kind: InitialRecoverSaved, Source: r.Source}
 	case ownerMigrateOwn:
 		return InitialOperation{Kind: InitialMigrateOwn}
+	case ownerRuntimeRestart:
+		return InitialOperation{Kind: InitialRuntimeRestart, RestartFrom: r.RestartFrom}
 	case ownerEnsureOther:
 		return r.Initial
-	case ownerStatus:
+	case ownerStatus, ownerRuntimeRestartPreflight:
 		return InitialOperation{}
 	default:
 		return InitialOperation{Kind: InitialOperationKind(r.Action)}
@@ -84,5 +89,5 @@ func (r ownerRequest) preparationOperation() InitialOperation {
 }
 
 func (r ownerReply) preparationOutcome() PreparationOutcome {
-	return PreparationOutcome{Condition: PreparationCondition(r.Code), Startup: r.Startup, Disposition: r.Disposition, Report: r.Report, Failure: r.Failure}
+	return PreparationOutcome{Condition: PreparationCondition(r.Code), Startup: r.Startup, Disposition: r.Disposition, Report: r.Report, RuntimeRestart: r.RuntimeRestart, Failure: r.Failure}
 }

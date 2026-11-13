@@ -120,6 +120,12 @@ func openPrivateMigrationStore(ctx context.Context, stateRoot string, store **ta
 }
 
 func supervisorCommand(a Arguments, deps Dependencies) (result commandResult) {
+	if a.SupervisorAction == "restart" {
+		return supervisorRuntimeRestart(a, deps)
+	}
+	if a.SupervisorAction == "status" && a.SupervisorRuntimeRestart {
+		return supervisorRuntimeRestartPreflight(a, deps)
+	}
 	if a.SupervisorAction == "ensure-owner" {
 		return supervisorEnsureOwner(a, deps)
 	}

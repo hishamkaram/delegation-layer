@@ -19,7 +19,7 @@ func Status(store *taskdir.Store, td *taskdir.TaskDir, options SupervisorOptions
 
 func StatusContext(ctx context.Context, store *taskdir.Store, td *taskdir.TaskDir, options SupervisorOptions, runner string, catalog commonprovider.Catalog) (result StatusResult, resultErr error) {
 	options.AdmissionStore = store
-	inspection, err := td.Inspect()
+	inspection, err := td.InspectContext(ctx)
 	interaction, interactionErr := ReadInteraction(td)
 	result.Interaction, result.Inspection = interaction, inspection
 	if !inspection.Terminal() {
