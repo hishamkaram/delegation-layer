@@ -14,8 +14,19 @@ local directories; replace them with your own.
 ## Browser or headless login
 
 ```sh
-delegate gateway connect https://gateway.example.com
+delegate gateway connect https://gateway.example.com --name mac-home
 ```
+
+`--provider` is optional. Without it, connection saves defaults for the eligible
+provider profiles compiled into this Delegate installation: `read-only`, a
+maximum of 60 seconds, and each profile's permitted native model and effort
+defaults. These are request ceilings, not a check that a provider is installed
+or logged in. Profiles requiring an explicit model or effort are excluded unless
+that option is supplied with an explicit `--provider`.
+
+Use `--name mac-home` to give the device a recognizable display name. Otherwise,
+the name defaults to the local hostname. The name can help an MCP client find
+the device later; it is not its routing identity.
 
 The command prints the verified login URL and a short user code, then requests
 that your desktop open the URL. Finish approval in that browser. A browser
@@ -117,6 +128,13 @@ delegate gateway workspace allow /absolute/work --alias work
 delegate gateway workspace list --json
 ```
 
+`--provider` is optional on workspace approval too. A **new** approval without
+policy overrides copies the saved connection profile's provider, permission,
+model, effort and budget policy. This is a snapshot at approval time; later
+profile changes do not synchronize existing approvals. An existing narrowed
+workspace stays narrowed. Use the revision-checked update below to change its
+policy rather than repeating `allow`.
+
 Approval records that directory's canonical path. Replacing or recloning the
 ancestor or a project at the same path is allowed. Approval does not scan
 projects, create directories or clone repositories. The default alias is the
@@ -142,21 +160,22 @@ The Native root guard remains strict: if a host restart changes its observed
 filesystem identity, connection fails closed and needs explicit operator
 reconciliation. No task history or saved guard is silently rewritten.
 
-Approval has a local provider, permission and budget ceiling. Connection defaults
-to eligible provider profiles compiled into this Delegate installation,
-`read-only`, a maximum of 60 seconds, and each profile's permitted native model
-and effort defaults. This describes allowed requests, not installed-provider or
-login readiness. Select a narrower ceiling explicitly when connecting:
+To limit a **new** workspace to Claude only, use this alternative approval
+instead of the provider-free `allow` command above:
 
 ```sh
-delegate gateway connect https://gateway.example.com --headless \
-  --provider claude:print --permission read-only --max-budget 60s
+delegate gateway workspace allow /absolute/work --alias work \
+  --provider claude:print
 ```
 
+This limits the new workspace's provider set; it does not test Claude login.
+You can also set `--provider claude:print` when connecting to save Claude-only
+defaults for future approvals. Omitting `--provider` later does not automatically
+broaden a previously narrowed profile or workspace.
+
 An explicit `--model` or `--effort` also requires one explicit `--provider`.
-Profiles requiring an option are excluded from the implicit default unless it
-has been supplied explicitly. Gateway's owner policy and the local workspace
-ceiling must both permit a request. Neither a workspace approval nor read-only
+Gateway's server-side owner policy and the local workspace ceiling must both
+permit a request. Neither a workspace approval nor read-only
 provider mode is an OS sandbox; trusted providers retain their native account
 and filesystem access.
 
@@ -196,6 +215,25 @@ reports a qualified busy profile or an unconfirmed connector stop. Joined
 storage, identity, manager or cleanup faults remain operational failures, even
 when the stop also remains unconfirmed. Inspect the response;
 command success alone is not a provider readiness or task closure claim.
+
+## Select the device and provider in your cloud client
+
+After connecting and approving a workspace, a prompt can name the device:
+
+> On mac-home, use workspace work and project team/service. Ask Claude to read
+> the project and summarize it, read-only, with a 60-second budget.
+
+The client must call `list_devices`, find one unambiguous matching device name,
+and use its returned `device_id` when selecting that device in tool calls.
+Tool inputs still require the ID. If names are duplicated or the device is
+offline, stop and ask for the intended device rather than guessing or switching
+devices.
+
+Choosing Claude for this task selects an execution provider; it does not limit
+or expand the workspace's allowed providers. The request must fit both the
+approved workspace policy and Gateway's owner policy. The selected provider
+must also be available and usable in the device's execution context; connection
+and workspace approval do not establish provider login or execution readiness.
 
 ## Per-user service and disconnect
 
@@ -294,9 +332,9 @@ profile or task history.
 
 ## Verification limits
 
-Unverified: the new connection, dynamic-workspace and service flow still needs
-the integrated live acceptance checks for the release being installed. Unit,
-fixture and race checks do not establish real browser authorization, provider
-authentication, service persistence or cloud-client compatibility. Consult the
-Gateway's [verification record](https://github.com/hishamkaram/delegation-layer-gateway/blob/main/docs/verification.md)
-for the exact tested release and environment.
+The Gateway's [November 14 public Native onboarding checkpoint](https://github.com/hishamkaram/delegation-layer-gateway/blob/main/docs/verification.md#november-14-public-native-onboarding-checkpoint)
+records dated live observations and their limits. Match its exact tested
+revisions and environments to the release being installed; preparing a release
+does not publish it or extend that evidence to other installations. Unit,
+fixture and race checks alone do not establish real browser authorization,
+provider authentication, service persistence or cloud-client compatibility.
