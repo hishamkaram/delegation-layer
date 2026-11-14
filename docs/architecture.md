@@ -90,10 +90,15 @@ store boundary before preparing files; there is no separate task engine or
 connector database. Receipts and inventory derive from canonical requests and
 refusals. Execution closure uses the existing pure lifetime resolver and exact
 owner evidence, while `internal/resultread` streams complete verification before
-releasing bounded bytes. Guarded runners retain project-directory custody in the
-existing runner lease; the authenticated child launch gate borrows its descriptor
-and validates the initial cwd before provider execution. Existing lifecycle and terminal frontend owners in the
-diagrams remain unchanged.
+releasing bounded bytes. Guarded runners retain project constraints in the
+existing runner lease. Legacy physical bindings retain their checks. For path
+bindings the authenticated child launch gate selects the current approved path
+after authorization and changes directory through its own descriptor. A running
+command keeps that cwd; later replacement or removal alone cannot invalidate
+its accepted output. Root identity, process and capture evidence stay strict.
+Native continuation inherits the same path constraints without copying Gateway
+correlation. Existing lifecycle and terminal frontend owners in the diagrams
+remain unchanged.
 
 ## Remote execution boundary
 

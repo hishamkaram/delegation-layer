@@ -1,6 +1,7 @@
 package tasklifecycle
 
 import (
+	admissioncore "github.com/hishamkaram/delegation-layer/internal/admission"
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
 	supervisorcore "github.com/hishamkaram/delegation-layer/internal/supervisor"
 	"github.com/hishamkaram/delegation-layer/internal/task"
@@ -8,6 +9,12 @@ import (
 
 func BuildContinuationRequest(a DispatchRequest, root string, predecessor *task.TaskRecord, meta *task.MetaRecord, brief []byte) (DispatchRequest, error) {
 	continuationArgs := a
+	binding, err := admissioncore.ContinuationConnectorContext(predecessor.ConnectorContext, a.ConnectorContext)
+	if err != nil {
+		return DispatchRequest{}, err
+	}
+	continuationArgs.ConnectorContext = binding
+	continuationArgs.Origin = a.Origin.Clone()
 	continuationArgs.Root = root
 	continuationArgs.Auto = false
 	continuationArgs.TaskID = ""

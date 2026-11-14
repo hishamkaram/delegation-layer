@@ -13,28 +13,33 @@ import (
 const defaultConnectorControlTimeout = 30 * time.Second
 
 type ConnectorArguments struct {
-	ControlTimeout           time.Duration
-	Action                   string
-	ExpectedRoot             string
-	ExpectedProject          string
-	OriginFile               string
-	ExpectedSpecSHA256       string
-	DescriptorFile           string
-	ResumeAdmission          bool
-	FenceIfAbsent            bool
-	FenceUnattributedPartial bool
-	OfflineCutoverConfirmed  bool
-	GatewayID                string
-	RecoveryID               string
-	ExpectedGeneration       string
-	Generation               string
-	CompletenessReceipt      string
-	Cursor                   string
-	Limit                    int
-	Offset                   int64
-	ResultLimit              int64
-	origin                   *task.GatewayOrigin
-	binding                  *task.ConnectorContext
+	ControlTimeout             time.Duration
+	Action                     string
+	ExpectedRoot               string
+	ExpectedProject            string
+	ExpectedWorkspace          string
+	RelativeProject            string
+	WorkspaceConstrained       bool
+	IncludeWorkspaceConstraint bool
+	IncludeExecutionAssurance  bool
+	OriginFile                 string
+	ExpectedSpecSHA256         string
+	DescriptorFile             string
+	ResumeAdmission            bool
+	FenceIfAbsent              bool
+	FenceUnattributedPartial   bool
+	OfflineCutoverConfirmed    bool
+	GatewayID                  string
+	RecoveryID                 string
+	ExpectedGeneration         string
+	Generation                 string
+	CompletenessReceipt        string
+	Cursor                     string
+	Limit                      int
+	Offset                     int64
+	ResultLimit                int64
+	origin                     *task.GatewayOrigin
+	binding                    *task.ConnectorContext
 }
 
 func registerConnectorFlags(fs *flag.FlagSet, a *Arguments) {
@@ -42,6 +47,12 @@ func registerConnectorFlags(fs *flag.FlagSet, a *Arguments) {
 	fs.DurationVar(&c.ControlTimeout, "control-timeout", defaultConnectorControlTimeout, "finite public connector control deadline")
 	fs.StringVar(&c.ExpectedRoot, "expected-root", "", "expected opaque root context token")
 	fs.StringVar(&c.ExpectedProject, "expected-project", "", "expected opaque project context token")
+	fs.StringVar(&c.ExpectedWorkspace, "expected-workspace", "", "expected opaque approved workspace token")
+	fs.StringVar(&c.RelativeProject, "relative-project", "", "project selection beneath approved workspace")
+	fs.BoolVar(&c.IncludeWorkspaceConstraint, "include-workspace-constraint", false, "include workspace constraints in local receipt projections")
+	if a.Command == "status" || a.Command == "context" {
+		fs.BoolVar(&c.IncludeExecutionAssurance, "include-execution-assurance", false, "include task-lifetime-assurance-v1 diagnostics")
+	}
 	if a.Command == "dispatch" {
 		fs.StringVar(&c.OriginFile, "origin", "", "strict immutable origin JSON file or - for stdin")
 		return
@@ -55,6 +66,7 @@ func registerConnectorFlags(fs *flag.FlagSet, a *Arguments) {
 	case "cancel":
 		fs.StringVar(&a.remoteCancelID, "id", "", "stable cancellation control ID")
 	case "context":
+		fs.BoolVar(&c.WorkspaceConstrained, "workspace-constrained", false, "require workspace-constrained connector root feature")
 		fs.StringVar(&c.GatewayID, "gateway-id", "", "observe this explicitly registered gateway origin")
 		fs.StringVar(&a.Cwd, "cwd", "", "existing canonical project directory")
 		fs.BoolVar(&c.OfflineCutoverConfirmed, "offline-cutover-confirmed", false, "attest old writers/frontends are stopped and tasks drained")
@@ -91,7 +103,7 @@ func registerConnectorCommandFlags(fs *flag.FlagSet, a *Arguments) bool {
 }
 
 func hasConnectorGuards(c ConnectorArguments) bool {
-	return c.ExpectedRoot != "" || c.ExpectedProject != "" || c.OriginFile != "" || c.ExpectedSpecSHA256 != ""
+	return c.ExpectedRoot != "" || c.ExpectedProject != "" || c.OriginFile != "" || c.ExpectedSpecSHA256 != "" || c.ExpectedWorkspace != "" || c.RelativeProject != ""
 }
 
 func usesConnectorControl(a Arguments) bool {
@@ -122,7 +134,17 @@ func validateGuardedDispatchArguments(a *Arguments) error {
 	return nil
 }
 
+func connectorWorkspace(c ConnectorArguments) *task.WorkspaceConstraint {
+	if c.ExpectedWorkspace == "" && c.RelativeProject == "" {
+		return nil
+	}
+	return &task.WorkspaceConstraint{Token: c.ExpectedWorkspace, RelativeProject: c.RelativeProject}
+}
+
 func validateConnectorArguments(a *Arguments, positional []string) error {
+	if err := connectorWorkspace(a.Connector).Validate(); err != nil {
+		return err
+	}
 	if a.Connector.OriginFile == "-" && a.Connector.DescriptorFile == "-" {
 		return errors.New("origin and descriptor cannot both consume stdin")
 	}
@@ -158,12 +180,31 @@ func validateConnectorArguments(a *Arguments, positional []string) error {
 	return nil
 }
 
+func validateConnectorContextSelection(a Arguments) error {
+	if a.Connector.IncludeExecutionAssurance && a.Connector.Action != "inspect" {
+		return errors.New("execution assurance capability applies only to context inspect")
+	}
+	if a.Cwd != "" && (a.Connector.Action != "inspect" || connectorWorkspace(a.Connector) != nil) {
+		return errors.New("context cwd requires plain project inspection; workspace inspection uses relative-project")
+	}
+	if a.Connector.WorkspaceConstrained && a.Connector.Action == "inspect" {
+		return errors.New("workspace-constrained requires initialize or explicit enable-connector")
+	}
+	if connectorWorkspace(a.Connector) != nil && a.Connector.Action != "inspect" {
+		return errors.New("workspace selection only applies to inspection")
+	}
+	return nil
+}
+
 func validateConnectorContextArguments(a Arguments, positional []string) error {
+	if err := validateConnectorContextSelection(a); err != nil {
+		return err
+	}
 	if a.Connector.ExpectedRoot != "" || a.Connector.ExpectedProject != "" || a.Connector.OriginFile != "" {
 		return errors.New("context does not accept task context or origin guards")
 	}
-	if a.Connector.Action != "inspect" && a.Connector.Action != "enable-connector" {
-		return errors.New("context requires inspect or enable-connector")
+	if a.Connector.Action != "inspect" && a.Connector.Action != "enable-connector" && a.Connector.Action != "initialize" {
+		return errors.New("context requires inspect, initialize or enable-connector")
 	}
 	if a.Cwd != "" && !filepath.IsAbs(a.Cwd) {
 		return errors.New("context cwd must be absolute")
@@ -178,7 +219,7 @@ func validateConnectorContextArguments(a Arguments, positional []string) error {
 
 func validateConnectorOriginArguments(a Arguments, positional []string) error {
 	c := a.Connector
-	if c.ExpectedProject != "" || c.OriginFile != "" {
+	if c.ExpectedProject != "" || c.OriginFile != "" || connectorWorkspace(c) != nil {
 		return errors.New("origin does not accept task project or origin guards")
 	}
 	if c.Action != "barrier" && c.Action != "inventory" && c.Action != "reopen" {

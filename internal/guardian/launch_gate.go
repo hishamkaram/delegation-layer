@@ -1,6 +1,7 @@
 package guardian
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -11,6 +12,7 @@ import (
 	"strconv"
 
 	"github.com/hishamkaram/delegation-layer/internal/task"
+	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 	"golang.org/x/sys/unix"
 )
 
@@ -19,6 +21,7 @@ const (
 	lifetimeLaunchGateFD = "--gate-fd"
 	lifetimeProjectFD    = "--project-fd"
 	lifetimeProjectID    = "--project-identity"
+	lifetimeProjectPath  = "--project-path-context"
 	lifetimeLaunchToken  = byte(1)
 )
 
@@ -29,10 +32,11 @@ type LaunchGate interface {
 }
 
 // ProjectDirectory borrows runner-owned custody only for a native Start. The
-// factory never closes File; the child owns its inherited descriptor.
+// factory never closes File. Legacy launches inherit custody; path launches
+// carry only the saved binding and select their own directory after release.
 type ProjectDirectory struct {
-	File     *os.File
-	Identity task.DirectoryIdentity
+	File    *os.File
+	Context task.ProjectLaunchContext
 }
 
 type LaunchGateFactory func(*exec.Cmd, *ProjectDirectory) (LaunchGate, error)
@@ -75,7 +79,7 @@ func NewLaunchGateFactory(runner string) LaunchGateFactory {
 			return nil, fmt.Errorf("create lifetime launch gate: %w", err)
 		}
 		gate := &runnerLifetimeLaunchGate{reader: reader, writer: writer}
-		if project != nil {
+		if project != nil && !project.Context.Binding.Project.IsPath() {
 			cmd.ExtraFiles = append(cmd.ExtraFiles, project.File)
 		}
 		gateFD := 3 + len(cmd.ExtraFiles)
@@ -98,13 +102,25 @@ func (p *ProjectDirectory) arguments(fd int) ([]string, error) {
 	if p == nil {
 		return nil, nil
 	}
-	if p.File == nil || !validProjectIdentity(p.Identity) {
+	observed := p.Context.Observed
+	binding := p.Context.Binding
+	if p.File == nil || !validProjectIdentity(observed) || !binding.Project.MatchesObservation(observed) {
 		return nil, task.ErrIdentityMismatch
 	}
-	if err := validateProjectFile(p.File, p.Identity); err != nil {
+	if err := validateProjectFile(p.File, observed); err != nil {
 		return nil, err
 	}
-	identity, err := task.MarshalCanonical(p.Identity)
+	if binding.Project.IsPath() {
+		if err := validatePathProjectBinding(binding); err != nil {
+			return nil, err
+		}
+		encoded, err := task.MarshalCanonical(binding)
+		if err != nil || len(encoded) > task.MaxControlRecordSize {
+			return nil, errors.Join(task.ErrEvidenceFault, err)
+		}
+		return []string{lifetimeProjectPath, string(encoded)}, nil
+	}
+	identity, err := task.MarshalCanonical(observed)
 	if err != nil {
 		return nil, err
 	}
@@ -112,7 +128,14 @@ func (p *ProjectDirectory) arguments(fd int) ([]string, error) {
 }
 
 func validProjectIdentity(identity task.DirectoryIdentity) bool {
-	return task.IsCanonicalCwd(identity.Path) && identity.Inode != 0
+	return identity.Kind == "" && identity.Validate() == nil
+}
+
+func validatePathProjectBinding(binding task.ConnectorContext) error {
+	if !binding.Project.IsPath() {
+		return task.ErrIdentityMismatch
+	}
+	return task.ValidateConnectorBinding(&task.TaskRecord{CanonicalCwd: binding.Project.Path, ConnectorContext: &binding})
 }
 
 func validateProjectFile(file *os.File, identity task.DirectoryIdentity) error {
@@ -182,6 +205,11 @@ func RunLaunchGate(args []string, execProcess func(string, []string, []string) e
 			return err
 		}
 	}
+	if parsed.pathContext != nil {
+		if err = enterPathLaunchProject(*parsed.pathContext); err != nil {
+			return err
+		}
+	}
 	return execProcess(parsed.providerPath, parsed.providerArgs, os.Environ())
 }
 
@@ -189,6 +217,7 @@ type lifetimeLaunchArguments struct {
 	gateFD       int
 	projectFD    int
 	project      task.DirectoryIdentity
+	pathContext  *task.ConnectorContext
 	providerPath string
 	providerArgs []string
 }
@@ -202,13 +231,16 @@ func parseLifetimeLaunchGateArguments(args []string) (parsed lifetimeLaunchArgum
 		return parsed, task.ErrEvidenceFault
 	}
 	remaining := args[2:]
-	if remaining[0] == lifetimeProjectFD {
+	switch remaining[0] {
+	case lifetimeProjectFD:
 		remaining, err = parsed.readProjectArguments(remaining)
-		if err != nil {
-			return parsed, err
-		}
+	case lifetimeProjectPath:
+		remaining, err = parsed.readPathProjectArguments(remaining)
 	}
-	if remaining[0] != "--" {
+	if err != nil {
+		return parsed, err
+	}
+	if len(remaining) < 3 || remaining[0] != "--" {
 		return parsed, task.ErrEvidenceFault
 	}
 	parsed.providerPath, parsed.providerArgs = remaining[1], slices.Clone(remaining[2:])
@@ -216,6 +248,21 @@ func parseLifetimeLaunchGateArguments(args []string) (parsed lifetimeLaunchArgum
 		return parsed, task.ErrEvidenceFault
 	}
 	return parsed, nil
+}
+
+func (p *lifetimeLaunchArguments) readPathProjectArguments(args []string) ([]string, error) {
+	if len(args) < 5 || len(args[1]) > task.MaxControlRecordSize {
+		return nil, task.ErrEvidenceFault
+	}
+	var binding task.ConnectorContext
+	if err := task.DecodeStrict([]byte(args[1]), &binding); err != nil {
+		return nil, errors.Join(task.ErrIdentityMismatch, err)
+	}
+	if err := validatePathProjectBinding(binding); err != nil {
+		return nil, err
+	}
+	p.pathContext = &binding
+	return args[2:], nil
 }
 
 func (p *lifetimeLaunchArguments) readProjectArguments(args []string) ([]string, error) {
@@ -259,6 +306,20 @@ func enterLaunchProject(fd int, identity task.DirectoryIdentity) (resultErr erro
 	}
 	if uint64(visible.Dev) != identity.Device || uint64(visible.Ino) != identity.Inode {
 		return task.ErrIdentityMismatch
+	}
+	return nil
+}
+
+// The child selects the current path only after the guardian's positive token.
+// The selection owns its descriptors and closes all of them before provider exec.
+func enterPathLaunchProject(binding task.ConnectorContext) (resultErr error) {
+	selection, err := taskdir.OpenPathProjectDirectory(context.Background(), binding)
+	if err != nil {
+		return err
+	}
+	defer func() { resultErr = errors.Join(resultErr, selection.Close()) }()
+	if err = selection.File().Chdir(); err != nil {
+		return errors.Join(task.ErrIdentityMismatch, err)
 	}
 	return nil
 }

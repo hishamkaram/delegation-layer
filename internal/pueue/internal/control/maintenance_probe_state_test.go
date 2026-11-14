@@ -112,12 +112,12 @@ func TestPrivateMaintenanceReleasesQueueIdentityWhileSettling(t *testing.T) {
 // MaintainPrivateQueue reports availability. An opportunistic pass whose
 // command outlives the caller is deferred and is not resumed by that pass.
 func TestPrivateMaintenanceAvailabilityDoesNotImplyRemoval(t *testing.T) {
-	fixture, client := newMaintenanceProbeFixture(t)
+	owner := newPrivateStatusFixture(t)
+	fixture, client := newMaintenanceProbeFixtureAtBase(t, owner)
 	base := filepath.Join(fixture.stateRoot, privateSupervisorDirectory)
 	removedPath := filepath.Join(base, "test-kill-task-id")
 	logOutput := captureMaintenanceProbeLog(t)
-	gate := canonicalTemp(t)
-	started, release := filepath.Join(gate, "status-started"), filepath.Join(gate, "status-release")
+	started, release := filepath.Join(owner.base, "status-started"), owner.releasePath
 	client.options.Environment = append(os.Environ(), "PRIVATE_STATUS_STARTED="+started, "PRIVATE_STATUS_RELEASE="+release)
 	var authorizations atomic.Int64
 	client.options.SuccessfulCleanupAuthorizer = func(context.Context, string, task.SupervisorRef, []Job) (PrivateQueueCleanupPlan, error) {
@@ -135,26 +135,21 @@ func TestPrivateMaintenanceAvailabilityDoesNotImplyRemoval(t *testing.T) {
 	callerContext, cancelCaller := context.WithCancel(t.Context())
 	budget, cancelBudget := context.WithTimeout(t.Context(), privateQueueMaintenanceTimeout(client.options.ObservationTimeout))
 	defer cancelBudget()
-	maintained := make(chan struct{})
-	var available bool
-	t.Cleanup(func() {
-		releasePrivateStatusOnCleanup(t, release)
-		cancelCaller()
-		<-maintained
+	scope := newTestCallScope(t, client.options)
+	scope.cancels = append(scope.cancels, cancelCaller)
+	scope.onRelease(func() { releasePrivateStatusOnCleanup(t, release) })
+	call := startTestCall(scope, func() privateMaintenanceCallResult {
+		return privateMaintenanceCallResult{available: client.MaintainPrivateQueue(callerContext)}
 	})
-	go func() {
-		defer close(maintained)
-		available = client.MaintainPrivateQueue(callerContext)
-	}()
 	waitForPrivateFixtureMarker(t, started)
 	// The caller leaves while the held status command still owns the pass.
 	cancelCaller()
 	select {
-	case <-maintained:
+	case <-call.done:
 	case <-budget.Done():
 		t.Fatalf("canceled maintenance caller did not return within the derived pass budget: %v", budget.Err())
 	}
-	if !available {
+	if !call.result.available {
 		t.Fatal("private maintenance was unavailable")
 	}
 	assertPrivateTestPathMissing(t, removedPath)

@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -30,10 +31,11 @@ var (
 
 // ConnectorContextObservation contains opaque identities, never filesystem paths.
 type ConnectorContextObservation struct {
-	ContractVersion int      `json:"contract_version"`
-	Features        []string `json:"features"`
-	RootToken       string   `json:"root_token"`
-	ProjectToken    string   `json:"project_token,omitempty"`
+	ContractVersion     int                       `json:"contract_version"`
+	Features            []string                  `json:"features"`
+	RootToken           string                    `json:"root_token"`
+	ProjectToken        string                    `json:"project_token,omitempty"`
+	WorkspaceConstraint *task.WorkspaceConstraint `json:"workspace_constraint,omitempty"`
 }
 
 func identityToken(value any) (string, error) {
@@ -94,13 +96,43 @@ func ObserveProjectContext(ctx context.Context, path string) (identity task.Dire
 	return task.DirectoryIdentity{Path: canonical, Device: uint64(held.Dev), Inode: uint64(held.Ino)}, ctx.Err()
 }
 
+// ObservePathProjectContext approves the current canonical pathname. Physical
+// metadata is observed for acquisition consistency, never saved as authority.
+func ObservePathProjectContext(ctx context.Context, path string) (task.DirectoryIdentity, error) {
+	observed, err := ObserveProjectContext(ctx, path)
+	if err != nil {
+		return task.DirectoryIdentity{}, err
+	}
+	identity := task.DirectoryIdentity{Kind: task.PathDirectoryBinding, Path: observed.Path}
+	if err = identity.Validate(); err != nil {
+		return task.DirectoryIdentity{}, err
+	}
+	return identity, nil
+}
+
 type projectContextToken struct {
 	Version int                    `json:"version"`
 	Project task.DirectoryIdentity `json:"project"`
 }
 
+type pathProjectContextToken struct {
+	Version int                 `json:"version"`
+	Project pathProjectIdentity `json:"project"`
+}
+
+type pathProjectIdentity struct {
+	Path string `json:"path"`
+}
+
 func ProjectToken(identity task.DirectoryIdentity) (string, error) {
-	data, err := task.MarshalCanonical(projectContextToken{1, identity})
+	if err := identity.Validate(); err != nil {
+		return "", err
+	}
+	var value any = projectContextToken{1, identity}
+	if identity.IsPath() {
+		value = pathProjectContextToken{Version: 2, Project: pathProjectIdentity{Path: identity.Path}}
+	}
+	data, err := task.MarshalCanonical(value)
 	if err != nil {
 		return "", err
 	}
@@ -118,10 +150,10 @@ func ResolveProjectTokenContext(ctx context.Context, token string) (task.Directo
 	if err != nil {
 		return task.DirectoryIdentity{}, err
 	}
-	if actual != project {
+	if !project.MatchesObservation(actual) {
 		return task.DirectoryIdentity{}, task.ErrIdentityMismatch
 	}
-	return actual, nil
+	return project, nil
 }
 
 func parseProjectToken(token string) (task.DirectoryIdentity, error) {
@@ -132,21 +164,50 @@ func parseProjectToken(token string) (task.DirectoryIdentity, error) {
 	if err != nil {
 		return task.DirectoryIdentity{}, task.ErrIdentityMismatch
 	}
-	var parsed projectContextToken
+	var parsed struct {
+		Version int             `json:"version"`
+		Project json.RawMessage `json:"project"`
+	}
 	if err = task.DecodeStrict(data, &parsed); err != nil {
 		return task.DirectoryIdentity{}, err
 	}
-	if parsed.Version != 1 || !task.IsCanonicalCwd(parsed.Project.Path) || parsed.Project.Inode == 0 {
-		return task.DirectoryIdentity{}, task.ErrIdentityMismatch
+	project, err := parseProjectTokenIdentity(parsed.Version, parsed.Project)
+	if err != nil {
+		return task.DirectoryIdentity{}, err
 	}
-	canonical, err := ProjectToken(parsed.Project)
+	canonical, err := ProjectToken(project)
 	if err != nil {
 		return task.DirectoryIdentity{}, err
 	}
 	if canonical != token {
 		return task.DirectoryIdentity{}, task.ErrIdentityMismatch
 	}
-	return parsed.Project, nil
+	return project, nil
+}
+
+func parseProjectTokenIdentity(version int, data []byte) (task.DirectoryIdentity, error) {
+	var project task.DirectoryIdentity
+	switch version {
+	case 1:
+		if err := task.DecodeStrict(data, &project); err != nil {
+			return task.DirectoryIdentity{}, err
+		}
+		if project.IsPath() {
+			return task.DirectoryIdentity{}, task.ErrIdentityMismatch
+		}
+	case 2:
+		var path pathProjectIdentity
+		if err := task.DecodeStrict(data, &path); err != nil {
+			return task.DirectoryIdentity{}, err
+		}
+		project = task.DirectoryIdentity{Kind: task.PathDirectoryBinding, Path: path.Path}
+	default:
+		return task.DirectoryIdentity{}, task.ErrIdentityMismatch
+	}
+	if err := project.Validate(); err != nil {
+		return task.DirectoryIdentity{}, err
+	}
+	return project, nil
 }
 
 // ConnectorControlGuard borrows the Store's physical root custody. It owns no
@@ -195,25 +256,50 @@ func (r *ReadOnlyStore) RequireConnectorContext(ctx context.Context, expectedRoo
 }
 
 func (s *Store) RequireConnectorContext(ctx context.Context, expectedRoot, expectedProject, cwd string) (*task.ConnectorContext, error) {
+	return s.requireConnectorContext(ctx, expectedRoot, expectedProject, cwd, nil)
+}
+
+func (s *Store) requireConnectorContext(ctx context.Context, expectedRoot, expectedProject, cwd string, workspace *task.WorkspaceConstraint) (_ *task.ConnectorContext, resultErr error) {
 	if err := s.RequireConnectorEnabled(ctx); err != nil {
 		return nil, err
+	}
+	project, err := parseProjectToken(expectedProject)
+	if err != nil {
+		return nil, err
+	}
+	if project.IsPath() {
+		if err = s.requirePathConnectorEnabled(ctx); err != nil {
+			return nil, err
+		}
 	}
 	root, err := s.RootTokenContext(ctx)
 	if err != nil {
 		return nil, err
 	}
-	project, err := ObserveProjectContext(ctx, cwd)
+	actual, err := ObserveProjectContext(ctx, cwd)
 	if err != nil {
 		return nil, err
 	}
-	token, err := ProjectToken(project)
-	if err != nil {
-		return nil, err
-	}
-	if root != expectedRoot || token != expectedProject {
+	if !project.MatchesObservation(actual) {
 		return nil, task.ErrIdentityMismatch
 	}
-	return &task.ConnectorContext{RootToken: root, Project: project}, nil
+	if workspace != nil {
+		if err = s.RequireWorkspaceConnectorEnabled(ctx); err != nil {
+			return nil, err
+		}
+		selection, selectErr := openWorkspaceSelection(ctx, workspace)
+		if selectErr != nil {
+			return nil, selectErr
+		}
+		defer func() { resultErr = errors.Join(resultErr, selection.Close()) }()
+		if project != selection.leaf {
+			return nil, task.ErrIdentityMismatch
+		}
+	}
+	if root != expectedRoot {
+		return nil, task.ErrIdentityMismatch
+	}
+	return &task.ConnectorContext{RootToken: root, Project: project, WorkspaceConstraint: workspace.Clone()}, nil
 }
 
 func (s *Store) RequireConnectorEnabled(ctx context.Context) error {
@@ -266,7 +352,11 @@ func (r *ReadOnlyStore) InspectConnectorContext(ctx context.Context, cwd string)
 
 // EnableConnectorContext is a one-way offline operator transition. The boolean
 // attests external process/service closure; this method cannot prove that closure.
-func (s *Store) EnableConnectorContext(ctx context.Context, offlineCutoverConfirmed bool) (resultErr error) {
+func (s *Store) EnableConnectorContext(ctx context.Context, offlineCutoverConfirmed bool) error {
+	return s.EnableWorkspaceConnectorContext(ctx, offlineCutoverConfirmed, false)
+}
+
+func (s *Store) EnableWorkspaceConnectorContext(ctx context.Context, offlineCutoverConfirmed, workspace bool) (resultErr error) {
 	if !offlineCutoverConfirmed {
 		return errors.New("offline cutover attestation required: stop/drain old writers and frontends first")
 	}
@@ -284,6 +374,9 @@ func (s *Store) EnableConnectorContext(ctx context.Context, offlineCutoverConfir
 	changed, err := s.prepareConnectorFeaturesContext(ctx, record)
 	if err != nil {
 		return err
+	}
+	if addWorkspaceConnectorFeatures(record, workspace) {
+		changed = true
 	}
 	if !changed {
 		return s.barrierDir(s.Root)
@@ -315,6 +408,20 @@ func (s *Store) EnableConnectorContext(ctx context.Context, offlineCutoverConfir
 	return s.RequireConnectorEnabled(ctx)
 }
 
+func addWorkspaceConnectorFeatures(record *task.RootRecord, workspace bool) bool {
+	if !workspace {
+		return false
+	}
+	changed := false
+	for _, feature := range []string{task.WorkspaceConstrainedConnectorFeature, task.PathProjectConnectorFeature} {
+		if !slices.Contains(record.RequiredFeatures, feature) {
+			record.RequiredFeatures = append(record.RequiredFeatures, feature)
+			changed = true
+		}
+	}
+	return changed
+}
+
 func (s *Store) validateConnectorRecordContext(ctx context.Context, req *task.TaskRecord) error {
 	if req.ConnectorContext == nil {
 		return nil
@@ -323,7 +430,7 @@ func (s *Store) validateConnectorRecordContext(ctx context.Context, req *task.Ta
 	if err != nil {
 		return err
 	}
-	_, err = s.RequireConnectorContext(ctx, req.ConnectorContext.RootToken, expected, req.CanonicalCwd)
+	_, err = s.requireConnectorContext(ctx, req.ConnectorContext.RootToken, expected, req.CanonicalCwd, req.ConnectorContext.WorkspaceConstraint)
 	return err
 }
 
@@ -335,12 +442,31 @@ type ConnectorContextLease struct {
 	directory *os.Root
 	file      *os.File
 	binding   task.ConnectorContext
+	workspace *workspaceSelection
 }
 
-func (l *ConnectorContextLease) Binding() task.ConnectorContext { return l.binding }
+func (l *ConnectorContextLease) Binding() task.ConnectorContext { return *l.binding.Clone() }
 func (l *ConnectorContextLease) Validate(ctx context.Context) error {
+	if ctx == nil {
+		return context.Canceled
+	}
 	if err := ctx.Err(); err != nil {
 		return err
+	}
+	if l.binding.Project.IsPath() {
+		return l.validatePath(ctx)
+	}
+	return l.validatePhysical(ctx)
+}
+
+func (l *ConnectorContextLease) validatePhysical(ctx context.Context) error {
+	if l.workspace != nil {
+		if err := l.store.RequireWorkspaceConnectorEnabled(ctx); err != nil {
+			return err
+		}
+		if err := l.workspace.Validate(ctx); err != nil {
+			return err
+		}
 	}
 	root, err := l.store.RootTokenContext(ctx)
 	if err != nil {
@@ -369,11 +495,42 @@ func (l *ConnectorContextLease) Validate(ctx context.Context) error {
 	return ctx.Err()
 }
 
+func (l *ConnectorContextLease) validatePath(ctx context.Context) error {
+	if err := l.store.requirePathConnectorEnabled(ctx); err != nil {
+		return err
+	}
+	root, err := l.store.RootTokenContext(ctx)
+	if err != nil {
+		return err
+	}
+	if root != l.binding.RootToken || l.workspace == nil {
+		return task.ErrIdentityMismatch
+	}
+	return l.workspace.Validate(ctx)
+}
+
 func (l *ConnectorContextLease) Close() error {
+	if l.workspace != nil {
+		return l.workspace.Close()
+	}
 	return errors.Join(l.file.Close(), l.directory.Close())
 }
 
 func (s *Store) RetainConnectorContext(ctx context.Context, rootToken, projectToken string) (*ConnectorContextLease, error) {
+	return s.retainConnectorContext(ctx, rootToken, projectToken, nil)
+}
+
+func (s *Store) retainConnectorContext(ctx context.Context, rootToken, projectToken string, workspace *task.WorkspaceConstraint) (*ConnectorContextLease, error) {
+	identity, err := parseProjectToken(projectToken)
+	if err != nil {
+		return nil, err
+	}
+	if identity.IsPath() {
+		return s.retainPathConnectorContext(ctx, rootToken, identity, workspace)
+	}
+	if workspace != nil {
+		return s.retainWorkspaceConnectorContext(ctx, rootToken, projectToken, workspace)
+	}
 	project, err := ResolveProjectTokenContext(ctx, projectToken)
 	if err != nil {
 		return nil, err
@@ -1719,7 +1876,7 @@ func (s *Store) retainTaskCreationContext(ctx context.Context, req *task.TaskRec
 	if err != nil {
 		return nil, err
 	}
-	return s.RetainConnectorContext(ctx, req.ConnectorContext.RootToken, token)
+	return s.retainConnectorContext(ctx, req.ConnectorContext.RootToken, token, req.ConnectorContext.WorkspaceConstraint)
 }
 
 func (s *Store) validateCreatedConnectorContext(ctx context.Context, req *task.TaskRecord, lease *ConnectorContextLease) error {
@@ -1787,13 +1944,14 @@ func (s *Store) validateRefusedTaskFragmentsContext(ctx context.Context, id stri
 
 // ConnectorReceipt derives immutable correlation directly from canonical task.json.
 type ConnectorReceipt struct {
-	ExecutionOptions ConnectorExecutionOptions `json:"execution_options"`
-	RootToken        string                    `json:"root_token"`
-	ProjectToken     string                    `json:"project_token"`
-	TaskID           string                    `json:"task_id"`
-	Origin           task.GatewayOrigin        `json:"origin"`
-	SpecSHA256       string                    `json:"spec_sha256"`
-	BriefSHA256      string                    `json:"brief_sha256"`
+	ExecutionOptions    ConnectorExecutionOptions `json:"execution_options"`
+	RootToken           string                    `json:"root_token"`
+	ProjectToken        string                    `json:"project_token"`
+	WorkspaceConstraint *task.WorkspaceConstraint `json:"workspace_constraint,omitempty"`
+	TaskID              string                    `json:"task_id"`
+	Origin              task.GatewayOrigin        `json:"origin"`
+	SpecSHA256          string                    `json:"spec_sha256"`
+	BriefSHA256         string                    `json:"brief_sha256"`
 }
 
 func (r *ReadOnlyStore) ReadConnectorReceiptContext(ctx context.Context, id string) (*ConnectorReceipt, error) {
@@ -1835,7 +1993,7 @@ func connectorReceipt(request task.TaskRecord, data []byte) (*ConnectorReceipt, 
 	if err != nil {
 		return nil, err
 	}
-	return &ConnectorReceipt{ExecutionOptions: connectorExecutionOptions(request), RootToken: request.ConnectorContext.RootToken, ProjectToken: project, TaskID: request.TaskID, Origin: *request.Origin, SpecSHA256: task.ComputeSHA256(data), BriefSHA256: request.BriefSHA256}, nil
+	return &ConnectorReceipt{ExecutionOptions: connectorExecutionOptions(request), RootToken: request.ConnectorContext.RootToken, ProjectToken: project, WorkspaceConstraint: request.ConnectorContext.WorkspaceConstraint.Clone(), TaskID: request.TaskID, Origin: *request.Origin, SpecSHA256: task.ComputeSHA256(data), BriefSHA256: request.BriefSHA256}, nil
 }
 
 func (r *ReadOnlyStore) ConnectorTaskEntryExistsContext(ctx context.Context, id string) (bool, error) {

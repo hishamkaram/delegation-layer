@@ -18,8 +18,9 @@ func leaf(name, summary, operands string) commandSpec {
 
 func commandTree() commandSpec {
 	return commandSpec{Register: argumentFlags(registerGlobalFlags), Notes: "\nTask results keep admission, liveness and publication independent.\n", Summary: "Manage bounded agent tasks and their evidence", Children: []commandSpec{
+		gatewaySpec(),
 		withFlags(commandSpec{Name: "tui", Summary: "Open the terminal workbench", Operands: "", Example: []string{"delegate", "tui"}, Notes: "\nRequires terminal stdin and stdout. Closing the workbench does not cancel admitted tasks or stop the independent scheduler host.\n", ExitNotes: "  3 forced exit with unresolved operations; signals use 128 + signal.\n"}, registerGlobalFlags),
-		{Name: "context", Summary: "Inspect or explicitly upgrade connector context", Children: []commandSpec{leaf("inspect", "Passively inspect pinned root and project", ""), leaf("enable-connector", "Explicit offline one-way root upgrade", "")}},
+		{Name: "context", Summary: "Inspect or explicitly upgrade connector context", Children: []commandSpec{leaf("inspect", "Passively inspect pinned root and project", ""), leaf("initialize", "Create-only connector state without starting a supervisor", ""), leaf("enable-connector", "Explicit offline one-way root upgrade", "")}},
 		{Name: "resolve", Summary: "Passively resolve an immutable task or explicitly fence/recover it", Operands: "TASK_ID"},
 		{Name: "result", Summary: "Read verified committed result ranges", Children: []commandSpec{leaf("read", "Verify complete result before returning a range", "TASK_ID")}},
 		{Name: "origin", Summary: "Explicit local origin recovery administration", Children: []commandSpec{leaf("barrier", "Close a fresh generation under root exclusion", ""), leaf("inventory", "Read canonical origin membership", ""), leaf("reopen", "Reopen only with current complete inventory proof", "")}},
@@ -103,6 +104,8 @@ func argumentsForPath(path []string) Arguments {
 		return a
 	}
 	switch a.Command {
+	case "gateway":
+		configureGatewayPath(&a.Gateway, path)
 	case "context", "result", "origin":
 		a.Connector.Action = path[1]
 	case "supervisor":
@@ -191,6 +194,12 @@ func (p *argumentParser) validate(fs *flag.FlagSet) error {
 	a := &p.arguments
 	noteControlFlags(fs, a)
 	switch a.Command {
+	case "gateway":
+		a.Gateway.NoteFlags(fs)
+		if err := a.validatePaths(); err != nil {
+			return err
+		}
+		return a.Gateway.Validate(fs.Args())
 	case "workspace":
 		return validateWorkspaceArguments(a, fs.Args(), p.watch)
 	case "checkpoint":

@@ -11,7 +11,7 @@ import (
 // WithProjectDirectory borrows the runner-owned directory for one callback.
 // The callback receives no ownership; it must neither close nor retain the file.
 // No lease mutex is held across filesystem checks, callback code or child I/O.
-func (p *StartPermit) WithProjectDirectory(ctx context.Context, use func(*os.File, task.DirectoryIdentity) error) error {
+func (p *StartPermit) WithProjectDirectory(ctx context.Context, use func(*os.File, task.ProjectLaunchContext) error) (resultErr error) {
 	if p == nil || p.lease == nil || p.state == nil || use == nil {
 		return task.ErrInvalidPermit
 	}
@@ -24,11 +24,21 @@ func (p *StartPermit) WithProjectDirectory(ctx context.Context, use func(*os.Fil
 	if err = state.validateBorrowedProject(ctx, project); err != nil {
 		return err
 	}
-	return use(project.file, project.binding.Project)
+	launch := task.ProjectLaunchContext{Binding: project.Binding(), Observed: project.binding.Project}
+	if launch.Binding.Project.IsPath() {
+		selection, selectErr := OpenPathProjectDirectory(ctx, launch.Binding)
+		if selectErr != nil {
+			return selectErr
+		}
+		defer func() { resultErr = errors.Join(resultErr, selection.Close()) }()
+		launch.Observed = selection.selection.observedLeaf
+		return use(selection.File(), launch)
+	}
+	return use(project.file, launch)
 }
 
-// ValidateProject latches observed directory or binding failures in the shared
-// runner state. A later pathname restoration cannot authorize sealing again.
+// ValidateProject latches custody failures in the shared runner state. Path
+// bindings retain root/owned-FD custody without probing the project pathname.
 // Ordinary, unguarded tasks have no project custody and need no such check.
 func (l *RunnerLease) ValidateProject(ctx context.Context) error {
 	if l == nil || l.state == nil {

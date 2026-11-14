@@ -66,6 +66,20 @@ func TestConnectorCwdHelper(t *testing.T) {
 
 func connectorCwdTask(t *testing.T, guarded bool) (*taskdir.TaskDir, *taskdir.StartPermit, Plan, string) {
 	t.Helper()
+	return connectorCwdTaskBinding(t, guarded, false)
+}
+
+func connectorCwdTaskBinding(t *testing.T, guarded, pathBinding bool) (*taskdir.TaskDir, *taskdir.StartPermit, Plan, string) {
+	t.Helper()
+	directory, plan, evidence := connectorCwdPreparedTaskBinding(t, guarded, pathBinding)
+	permit, err := directory.PrepareStart(0)
+	require(t, err)
+	t.Cleanup(func() { require(t, permit.Release()) })
+	return directory, permit, plan, evidence
+}
+
+func connectorCwdPreparedTaskBinding(t *testing.T, guarded, pathBinding bool) (*taskdir.TaskDir, Plan, string) {
+	t.Helper()
 	store, err := taskdir.InitStore(filepath.Join(t.TempDir(), "state"))
 	require(t, err)
 	t.Cleanup(func() { require(t, store.Close()) })
@@ -83,7 +97,11 @@ func connectorCwdTask(t *testing.T, guarded bool) (*taskdir.TaskDir, *taskdir.St
 	config := task.TaskConfig{Permission: "read-only", Budget: "20s"}
 	request := &task.TaskRecord{SchemaVersion: task.SchemaVersion, RootID: store.RootID, TaskID: id, Provider: "fixture:test", Mode: "read-only", CanonicalCwd: cwd, RequestedConfig: config, BudgetNanos: int64(20 * time.Second), BriefSHA256: task.ComputeSHA256(brief), BriefLength: int64(len(brief))}
 	if guarded {
-		connectorCwdBind(t, store, request)
+		if pathBinding {
+			connectorPathCwdBind(t, store, request)
+		} else {
+			connectorCwdBind(t, store, request)
+		}
 	}
 	meta := &task.MetaRecord{SchemaVersion: task.SchemaVersion, RootID: store.RootID, TaskID: id, RequestedConfig: config, EffectiveConfig: task.EffectiveConfig{Containment: "fixture-only", Approval: "never", Digest: task.ComputeSHA256([]byte("execution-test"))}, Containment: "fixture-only", Approval: "never", ProviderExecutable: executable, ProviderVersion: "fixture-v1", PublisherBuild: "test-build", PublisherVersion: "test", Predicate: task.FixturePredicateRef(), SupervisorConfig: task.SupervisorRef{ConfigPath: "/fake/pueue.yml", ConfigDigest: task.ComputeSHA256([]byte("pueue")), Endpoint: "/fake/socket", ObservedVersion: "fixture-v1"}, CreatedAt: time.Now().UTC().Format(time.RFC3339Nano)}
 	evidence := filepath.Join(t.TempDir(), "actual-cwd.json")
@@ -91,10 +109,7 @@ func connectorCwdTask(t *testing.T, guarded bool) (*taskdir.TaskDir, *taskdir.St
 	directory, err := store.CreateTaskContext(t.Context(), id, request, brief, meta)
 	require(t, err)
 	t.Cleanup(func() { require(t, directory.Close()) })
-	permit, err := directory.PrepareStart(0)
-	require(t, err)
-	t.Cleanup(func() { require(t, permit.Release()) })
-	return directory, permit, plan, evidence
+	return directory, plan, evidence
 }
 
 func connectorCwdBind(t *testing.T, store *taskdir.Store, request *task.TaskRecord) {
@@ -208,9 +223,9 @@ func (l *connectorProjectGateLifetime) StartCommand(_ *exec.Cmd, start func() er
 	return start()
 }
 
-func (l *connectorProjectGateLifetime) StartProjectCommand(command *exec.Cmd, directory *os.File, identity task.DirectoryIdentity, start func() error) error {
+func (l *connectorProjectGateLifetime) StartProjectCommand(command *exec.Cmd, directory *os.File, launch task.ProjectLaunchContext, start func() error) error {
 	l.projectStarts.Add(1)
-	gate, err := guardian.NewLaunchGateFactory(l.runner)(command, &guardian.ProjectDirectory{File: directory, Identity: identity})
+	gate, err := guardian.NewLaunchGateFactory(l.runner)(command, &guardian.ProjectDirectory{File: directory, Context: launch})
 	if err != nil {
 		return err
 	}

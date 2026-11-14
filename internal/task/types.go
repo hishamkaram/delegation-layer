@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 )
 
@@ -441,12 +442,25 @@ func ValidateRootRecord(r *RootRecord) error {
 	if err := ValidateRootID(r.RootID); err != nil {
 		return err
 	}
-	for _, feature := range r.RequiredFeatures {
-		if feature != NamespaceAdmissionFeature && feature != NamespaceMutationFeature {
+	if err := validateRootRequiredFeatures(r.RequiredFeatures); err != nil {
+		return err
+	}
+	return validateTimestamp(r.CreatedAt)
+}
+
+func validateRootRequiredFeatures(features []string) error {
+	for _, feature := range features {
+		if feature != NamespaceAdmissionFeature && feature != NamespaceMutationFeature && feature != WorkspaceConstrainedConnectorFeature && feature != PathProjectConnectorFeature {
 			return fmt.Errorf("%w: required feature %q", ErrUnsupportedSchema, feature)
 		}
 	}
-	return validateTimestamp(r.CreatedAt)
+	if slices.Contains(features, WorkspaceConstrainedConnectorFeature) && (!slices.Contains(features, NamespaceAdmissionFeature) || !slices.Contains(features, NamespaceMutationFeature)) {
+		return fmt.Errorf("%w: workspace constraint requires connector namespace features", ErrUnsupportedSchema)
+	}
+	if slices.Contains(features, PathProjectConnectorFeature) && (!slices.Contains(features, WorkspaceConstrainedConnectorFeature) || !slices.Contains(features, NamespaceAdmissionFeature) || !slices.Contains(features, NamespaceMutationFeature)) {
+		return fmt.Errorf("%w: path project requires connector namespace and workspace features", ErrUnsupportedSchema)
+	}
+	return nil
 }
 
 // ValidateTaskRecord validates a task.json record.

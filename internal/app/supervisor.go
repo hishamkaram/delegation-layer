@@ -143,17 +143,23 @@ func supervisorCommand(a Arguments, deps Dependencies) (result commandResult) {
 	return supervisorMigrate(root, deps, response)
 }
 
+// Taskdir owns root validity. Missing required metadata cannot make an
+// existing root namespace an uninitialized supervisor installation.
+func supervisorRootAbsent(root string, operationErr error) bool {
+	if !task.RecordAbsent(operationErr) {
+		return false
+	}
+	_, namespaceErr := os.Lstat(root)
+	return task.RecordAbsent(namespaceErr)
+}
+
 func supervisorStatus(root string, deps Dependencies, response Response) (result commandResult) {
 	options := supervisorControlOptions(deps)
 	controlContext, cancel := supervisorcore.ControlContext(options)
 	defer cancel()
 	store, err := openStoreContext(controlContext, root, deps.storeDependencies(), false)
-	if errors.Is(err, os.ErrNotExist) {
-		response.SupervisorControl.State = "not_initialized"
-		response.SupervisorControl.LegacyReachability = "not_present"
-		response.SupervisorControl.ActiveWork = "none"
-		response.SupervisorControl.NextAction = "none"
-		return commandResult{response: response, code: 0}
+	if supervisorRootAbsent(root, err) {
+		return notInitializedSupervisor(response)
 	}
 	if err != nil {
 		return failedSupervisor(response, "supervisor state root is unavailable", 1)
@@ -554,7 +560,7 @@ func supervisorMigrate(root string, deps Dependencies, response Response) (resul
 	controlContext, cancel := supervisorcore.ControlContext(options)
 	defer cancel()
 	store, err := openStoreContext(controlContext, root, deps.storeDependencies(), false)
-	if errors.Is(err, os.ErrNotExist) {
+	if supervisorRootAbsent(root, err) {
 		return notInitializedSupervisor(response)
 	}
 	if err != nil {

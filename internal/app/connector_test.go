@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -448,6 +449,118 @@ func TestConnectorPublicAcceptedOutcomeDoesNotProveExecutionClosure(t *testing.T
 	}
 	if response.Connector == nil || response.Connector.ExecutionClosure != nil || response.Connector.ExecutionClosurePending == "" {
 		t.Fatalf("publication fabricated lifetime closure: %+v", response.Connector)
+	}
+}
+
+func TestConnectorPublicRejectedCollectDiagnosticKeepsHealthyResolve(t *testing.T) {
+	f := newConnectorFixture(t)
+	diagnostic := task.ProviderAuthenticationFailureDiagnostic()
+	spec, meta := sealConnectorRejectedDiagnostic(t, f, diagnostic)
+	collected, code := f.public(t, "collect", f.request.TaskID, "--expected-spec-sha256", spec, "--watch", "0s")
+	requireConnectorRejectedCollection(t, f, collected, code, spec, meta, diagnostic)
+	// A second public collection needs the first call's collection and context
+	// leases released. This fixture has no provider session or guardian closure.
+	replayed, code := f.public(t, "collect", f.request.TaskID, "--expected-spec-sha256", spec, "--watch", "0s")
+	if code != 4 || replayed.Error != collected.Error || replayed.Publication != collected.Publication || !reflect.DeepEqual(replayed.Outcome, collected.Outcome) || !reflect.DeepEqual(replayed.Failure, collected.Failure) || !reflect.DeepEqual(replayed.Payload, collected.Payload) || !slices.Equal(replayed.Diagnostics, collected.Diagnostics) {
+		t.Fatalf("same-task rejected collection changed its immutable winner or diagnostic: code=%d response=%+v", code, replayed)
+	}
+
+	resolved, code := f.public(t, "resolve", f.request.TaskID, "--expected-spec-sha256", spec)
+	requireConnectorRejectedResolve(t, resolved, code, collected.Outcome)
+	requireConnectorRejectedReceipt(t, f, resolved.Connector, spec)
+	if _, err := f.task.ReadSubmission(); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("observation submitted provider work: %v", err)
+	}
+}
+
+func sealConnectorRejectedDiagnostic(t *testing.T, f *connectorFixture, diagnostic task.OutputDiagnostic) (string, string) {
+	t.Helper()
+	interpreter := &appRecoveryInterpreter{ref: task.FixturePredicateRef(), diagnostics: []task.OutputDiagnostic{diagnostic}}
+	registry, err := predicate.New(interpreter)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.deps.PredicateRegistry = func() predicate.Registry { return registry }
+
+	permit, err := f.task.PrepareStart(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if releaseErr := permit.Release(); releaseErr != nil {
+			t.Error(releaseErr)
+		}
+	})
+	if err = permit.Consume(); err != nil {
+		t.Fatal(err)
+	}
+	if err = f.task.RecordStarted(0); err != nil {
+		t.Fatal(err)
+	}
+	if err = f.task.WriteRawFiles("fixture provider output", ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = f.task.Seal(task.InvocationStarted, 0, "", task.FixturePredicateRef()); err != nil {
+		t.Fatal(err)
+	}
+	if err = permit.Release(); err != nil {
+		t.Fatal(err)
+	}
+	_, _, spec, meta, err := f.task.PreparedIdentity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return spec, meta
+}
+
+func requireConnectorRejectedCollection(t *testing.T, f *connectorFixture, collected Response, code int, spec, meta string, diagnostic task.OutputDiagnostic) {
+	t.Helper()
+	if code != 4 || collected.Publication != task.PublicationRejected.String() || collected.Outcome == nil || collected.Outcome.Verdict != task.VerdictRejected {
+		t.Fatalf("guarded rejected collection lost terminal evidence: code=%d response=%+v", code, collected)
+	}
+	if collected.Error != diagnostic.Code+": "+diagnostic.Message || !slices.Equal(collected.Diagnostics, []task.OutputDiagnostic{diagnostic}) {
+		t.Fatalf("rejected collection omitted its public diagnostic error: %+v", collected)
+	}
+	if collected.Failure == nil || collected.Failure.Code != "provider_output_rejected" || collected.Failure.Stage != "collect" {
+		t.Fatalf("rejected collection lost its typed failure: %+v", collected.Failure)
+	}
+	requireConnectorRejectedOutcomeBinding(t, f, collected.Outcome, spec, meta, diagnostic)
+	if collected.Payload == nil || collected.Payload.Basename != "publish.reject" || *collected.Payload != collected.Outcome.Payload {
+		t.Fatalf("rejected collection changed outcome or payload binding: %+v", collected)
+	}
+}
+
+func requireConnectorRejectedOutcomeBinding(t *testing.T, f *connectorFixture, outcome *task.OutcomeRecord, spec, meta string, diagnostic task.OutputDiagnostic) {
+	t.Helper()
+	if outcome.SpecSHA256 != spec || outcome.MetaSHA256 != meta || outcome.RootID != f.store.RootID || outcome.TaskID != f.request.TaskID {
+		t.Fatalf("rejected collection changed outcome binding: %+v", outcome)
+	}
+	if !slices.Equal(outcome.Diagnostics, []task.OutputDiagnostic{diagnostic}) {
+		t.Fatalf("rejected outcome omitted its diagnostic: %+v", outcome)
+	}
+}
+
+func requireConnectorRejectedResolve(t *testing.T, resolved Response, code int, outcome *task.OutcomeRecord) {
+	t.Helper()
+	if code != 0 || resolved.Error != "" || resolved.Failure != nil || resolved.Publication != task.PublicationRejected.String() || resolved.Outcome == nil {
+		t.Fatalf("healthy passive resolve treated rejection as a read failure: code=%d response=%+v", code, resolved)
+	}
+	if !reflect.DeepEqual(resolved.Outcome, outcome) {
+		t.Fatalf("passive resolve changed the rejected winner: %+v", resolved.Outcome)
+	}
+}
+
+func requireConnectorRejectedReceipt(t *testing.T, f *connectorFixture, connector *ConnectorResponse, spec string) {
+	t.Helper()
+	if connector == nil || connector.Receipt == nil {
+		t.Fatalf("passive resolve omitted its frozen receipt: %+v", connector)
+	}
+	receipt := connector.Receipt
+	if receipt.TaskID != f.request.TaskID || receipt.RootToken != f.rootToken || receipt.ProjectToken != f.projectToken || receipt.Origin != f.origin || receipt.SpecSHA256 != spec {
+		t.Fatalf("passive resolve changed the frozen task binding: %+v", receipt)
+	}
+	if connector.ExecutionClosure != nil || connector.ExecutionClosurePending == "" {
+		t.Fatalf("rejected publication fabricated execution closure: %+v", connector)
 	}
 }
 

@@ -53,6 +53,16 @@ func statusContext(ctx context.Context, a Arguments, deps Dependencies) (result 
 	observed, err := tasklifecycle.StatusContext(ctx, store, td, observationSupervisorOptions(deps.supervisorControlScope(), deps.supervisorLookup(), deps.infrastructureRouting()), deps.RunnerExecutable, deps.storeDependencies().providerCatalog())
 	reportTaskMaintenanceDeferral(deps.ReportDiagnostic, observed.MaintenanceError)
 	applyTaskObservation(&response, observed.Observation, root)
+	if a.Connector.IncludeExecutionAssurance {
+		evidence, readErr := taskdir.LoadLifetimeEvidenceContext(ctx, td)
+		if readErr != nil {
+			return failed(response, errors.Join(err, readErr), 1)
+		}
+		response.ExecutionAssurance, readErr = describeExecutionAssurance(evidence)
+		if readErr != nil {
+			return failed(response, errors.Join(err, readErr), 1)
+		}
+	}
 	if observed.ControlObservation {
 		return statusObservationResult(response, err)
 	}

@@ -10,7 +10,9 @@ require (
 	github.com/charmbracelet/x/term v0.2.2
 	github.com/ebitengine/purego v0.11.1
 	github.com/go-co-op/gocron/v2 v2.23.0
+	github.com/godbus/dbus/v5 v5.2.4
 	github.com/google/uuid v1.6.0
+	github.com/hishamkaram/delegation-layer-gateway v0.0.0-20261114102202-2e6a269496c1
 	github.com/jonboulle/clockwork v0.5.0
 	github.com/shirou/gopsutil/v4 v4.26.9
 	go.uber.org/goleak v1.3.0
@@ -28,6 +30,7 @@ require (
 	github.com/charmbracelet/x/windows v0.2.2 // indirect
 	github.com/clipperhouse/displaywidth v0.11.0 // indirect
 	github.com/clipperhouse/uax29/v2 v2.7.0 // indirect
+	github.com/coder/websocket v1.8.15 // indirect
 	github.com/dustin/go-humanize v1.1.0 // indirect
 	github.com/go-ole/go-ole v1.2.6 // indirect
 	github.com/lucasb-eyer/go-colorful v1.4.1 // indirect
@@ -44,6 +47,7 @@ require (
 	github.com/tklauser/numcpus v0.12.0 // indirect
 	github.com/xo/terminfo v1.0.0 // indirect
 	github.com/yusufpapurcu/wmi v1.2.4 // indirect
+	golang.org/x/oauth2 v0.35.0 // indirect
 	golang.org/x/sync v0.24.0 // indirect
 	modernc.org/libc v1.79.0 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
