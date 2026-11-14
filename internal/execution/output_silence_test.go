@@ -3,6 +3,7 @@ package execution
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os/exec"
 	"strings"
@@ -97,6 +98,7 @@ type silenceRunStop struct {
 // read only after done closes; cleanup releases every gate before joining Run.
 type silenceRunFixture struct {
 	clock                             *silenceTestClock
+	events                            eventLog
 	started, readOutput, finish, done chan struct{}
 	captured                          chan error
 	stopped                           chan silenceRunStop
@@ -104,7 +106,7 @@ type silenceRunFixture struct {
 	result                            Result
 }
 
-func newSilenceRunFixture(t *testing.T) *silenceRunFixture {
+func newSilenceRunFixture(t *testing.T, beforeRelease func()) *silenceRunFixture {
 	t.Helper()
 	td, permit, plan, _ := fixtureTaskWithPlan(t, "echo", func(meta *task.MetaRecord, _ *Plan) {
 		meta.RequestedConfig.OutputSilenceTimeout = "10s"
@@ -115,14 +117,21 @@ func newSilenceRunFixture(t *testing.T) *silenceRunFixture {
 	}
 	opts := Options{Clock: f.clock, Stopper: silenceTestStopper{prepare: func(deadline time.Time, cause string) (BudgetRequest, error) {
 		return func(context.Context) error {
-			f.stopped <- silenceRunStop{deadline, cause}
+			if beforeRelease != nil {
+				beforeRelease()
+			}
 			f.release()
+			f.stopped <- silenceRunStop{deadline, cause}
 			return nil
 		}, nil
 	}}, Hooks: Hooks{
 		Event: func(event string) {
-			if event == "started-receipt" {
+			switch event {
+			case "started-receipt":
+				f.events.add(event)
 				close(f.started)
+			case "parent-fds-closed", "wait-completed", "stdout-raw-closed", "stderr-raw-closed", "completion-observed", "output-silence-observed", "sealed", "published":
+				f.events.add(event)
 			}
 		},
 		Wait: func(cmd *exec.Cmd) error {
@@ -160,7 +169,16 @@ func (f *silenceRunFixture) join() (Result, error) {
 	case <-f.done:
 		return f.result, nil
 	case <-time.After(5 * time.Second):
-		return Result{}, errors.New("Run did not join its finite child and capture hooks")
+		return Result{}, fmt.Errorf("Run did not complete within 5s: phases=%v gates(readOutput=%s finish=%s done=%s)", f.events.snapshot(), silenceGateState(f.readOutput), silenceGateState(f.finish), silenceGateState(f.done))
+	}
+}
+
+func silenceGateState(gate <-chan struct{}) string {
+	select {
+	case <-gate:
+		return "closed"
+	default:
+		return "open"
 	}
 }
 
@@ -181,7 +199,7 @@ func (f *silenceRunFixture) capture(name string, dst io.Writer, src io.Reader) e
 }
 
 func TestRunCaptureActivityExtendsOutputSilenceDeadline(t *testing.T) {
-	f := newSilenceRunFixture(t)
+	f := newSilenceRunFixture(t, nil)
 	start := f.clock.Now()
 	if wall := awaitSilenceTimer(t, f.clock); !wall.Equal(start.Add(time.Minute)) {
 		t.Fatalf("wall deadline=%s, want %s", wall, start.Add(time.Minute))
@@ -214,6 +232,49 @@ func TestRunCaptureActivityExtendsOutputSilenceDeadline(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("Run did not stop at the extended silence deadline")
+	}
+	result, err := f.join()
+	require(t, err)
+	if result.Outcome == nil || result.StopError != nil {
+		t.Fatalf("Run did not publish and join its stop request: %+v", result)
+	}
+}
+
+func TestSilenceRunStopAcknowledgesReleasedFixtureGates(t *testing.T) {
+	beforeRelease := make(chan struct{})
+	allowRelease := make(chan struct{})
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(allowRelease) }) }
+	f := newSilenceRunFixture(t, func() {
+		close(beforeRelease)
+		<-allowRelease
+	})
+	t.Cleanup(release)
+	start := f.clock.Now()
+	awaitSilenceTimer(t, f.clock)
+	awaitSilenceTimer(t, f.clock)
+	f.clock.advance(10 * time.Second)
+	select {
+	case <-beforeRelease:
+	case <-time.After(5 * time.Second):
+		t.Fatal("stop callback did not reach the fixture release gate")
+	}
+	select {
+	case stop := <-f.stopped:
+		t.Fatalf("stop acknowledged before fixture gates were released: %+v", stop)
+	default:
+	}
+	release()
+	select {
+	case stop := <-f.stopped:
+		if stop.cause != task.StopCauseOutputSilence || !stop.deadline.Equal(start.Add(10*time.Second)) {
+			t.Fatalf("Run selected the wrong stop: %+v", stop)
+		}
+		if read, finish := silenceGateState(f.readOutput), silenceGateState(f.finish); read != "closed" || finish != "closed" {
+			t.Fatalf("stop acknowledged with fixture gates readOutput=%s finish=%s", read, finish)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("stop callback did not acknowledge released fixture gates")
 	}
 	result, err := f.join()
 	require(t, err)

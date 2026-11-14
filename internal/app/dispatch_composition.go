@@ -68,7 +68,7 @@ func dispatchContext(ctx context.Context, a Arguments, deps Dependencies) comman
 			if err != nil {
 				return nil, err
 			}
-			if _, err = store.RequireConnectorContext(ctx, a.Connector.ExpectedRoot, a.Connector.ExpectedProject, a.Cwd); err != nil {
+			if _, err = store.RequireWorkspaceConnectorContext(ctx, a.Connector.ExpectedRoot, a.Connector.ExpectedProject, a.Cwd, connectorWorkspace(a.Connector)); err != nil {
 				return nil, errors.Join(err, store.Close())
 			}
 			return store, nil

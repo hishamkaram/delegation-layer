@@ -47,7 +47,11 @@ func TestProjectCustodyUnchangedAndCancelledValidationSeals(t *testing.T) {
 		t.Fatalf("cancelled guard check returned %v", err)
 	}
 	must(t, permit.RunnerLease().ValidateProject(context.WithoutCancel(cancelled)))
-	must(t, permit.WithProjectDirectory(t.Context(), func(file *os.File, identity task.DirectoryIdentity) error {
+	must(t, permit.WithProjectDirectory(t.Context(), func(file *os.File, launch task.ProjectLaunchContext) error {
+		identity := launch.Observed
+		if launch.Binding.Project != expected {
+			t.Error("launch binding changed")
+		}
 		if identity != expected {
 			t.Errorf("borrowed identity = %+v, want %+v", identity, expected)
 		}
@@ -66,7 +70,7 @@ func TestProjectCustodyUnchangedAndCancelledValidationSeals(t *testing.T) {
 		t.Fatalf("sealed runner granted new validation authority: %v", err)
 	}
 	called := false
-	err = permit.WithProjectDirectory(t.Context(), func(*os.File, task.DirectoryIdentity) error { called = true; return nil })
+	err = permit.WithProjectDirectory(t.Context(), func(*os.File, task.ProjectLaunchContext) error { called = true; return nil })
 	if !errors.Is(err, task.ErrInvalidPermit) || called {
 		t.Fatalf("sealed runner granted new project borrow: called=%v err=%v", called, err)
 	}
@@ -109,7 +113,7 @@ func TestProjectCustodyBorrowExcludesReleaseAndSeal(t *testing.T) {
 		}
 	})
 	go func() {
-		done <- permit.WithProjectDirectory(t.Context(), func(file *os.File, _ task.DirectoryIdentity) error {
+		done <- permit.WithProjectDirectory(t.Context(), func(file *os.File, _ task.ProjectLaunchContext) error {
 			close(entered)
 			<-release
 			_, err := file.Stat()
@@ -149,7 +153,7 @@ func TestProjectCustodyUnguardedValidationDoesNotGrantBorrow(t *testing.T) {
 	t.Cleanup(func() { must(t, permit.Release()) })
 	must(t, permit.RunnerLease().ValidateProject(t.Context()))
 	called := false
-	err := permit.WithProjectDirectory(t.Context(), func(*os.File, task.DirectoryIdentity) error { called = true; return nil })
+	err := permit.WithProjectDirectory(t.Context(), func(*os.File, task.ProjectLaunchContext) error { called = true; return nil })
 	if !errors.Is(err, task.ErrInvalidPermit) || called {
 		t.Fatalf("unguarded runner granted project borrow: called=%v err=%v", called, err)
 	}

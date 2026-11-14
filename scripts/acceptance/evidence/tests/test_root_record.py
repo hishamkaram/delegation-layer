@@ -27,13 +27,39 @@ class RootRecordContractTests(unittest.TestCase):
     def test_legacy_and_known_capability_preserve_identity(self):
         expected = self.read_with({})
         for features in ([], ["namespace-admission-v1"], ["namespace-mutation-lease-v1"],
-                         ["namespace-admission-v1", "namespace-mutation-lease-v1"]):
+                         ["namespace-admission-v1", "namespace-mutation-lease-v1"],
+                         ["namespace-admission-v1", "namespace-admission-v1"],
+                         ["namespace-admission-v1", "namespace-mutation-lease-v1",
+                          "workspace-constrained-connector-v1"],
+                         ["workspace-constrained-connector-v1", "namespace-mutation-lease-v1",
+                          "namespace-admission-v1", "workspace-constrained-connector-v1"],
+                         ["namespace-admission-v1", "namespace-mutation-lease-v1",
+                          "workspace-constrained-connector-v1", "connector-path-project-v1"]):
             with self.subTest(features=features):
                 self.assertEqual(self.read_with({"required_features": features}), expected)
 
+    def test_workspace_feature_requires_both_namespace_features(self):
+        for features in (["workspace-constrained-connector-v1"],
+                         ["namespace-admission-v1", "workspace-constrained-connector-v1"],
+                         ["namespace-mutation-lease-v1", "workspace-constrained-connector-v1"]):
+            with self.subTest(features=features):
+                with self.assertRaisesRegex(AcceptanceFailure, "requires connector namespace features"):
+                    self.read_with({"required_features": features})
+
+    def test_path_feature_requires_namespace_and_workspace_features(self):
+        dependencies = ["namespace-admission-v1", "namespace-mutation-lease-v1",
+                        "workspace-constrained-connector-v1"]
+        for missing in range(len(dependencies)):
+            features = [feature for index, feature in enumerate(dependencies) if index != missing]
+            features.append("connector-path-project-v1")
+            with self.subTest(missing=dependencies[missing]):
+                with self.assertRaisesRegex(AcceptanceFailure, "requires connector namespace"):
+                    self.read_with({"required_features": features})
+
     def test_unknown_or_malformed_required_features_are_rejected(self):
         for features in (None, True, "namespace-admission-v1", [1], [None], ["future-v2"],
-                         ["namespace-admission-v1", "future-v2"]):
+                         ["namespace-admission-v1", "future-v2"],
+                         ["workspace-constrained-connector-v1", "future-v2"]):
             with self.subTest(features=features):
                 with self.assertRaisesRegex(AcceptanceFailure, "unsupported required features"):
                     self.read_with({"required_features": features})

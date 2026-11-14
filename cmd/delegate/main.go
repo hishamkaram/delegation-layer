@@ -19,7 +19,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		switch parsed.Command {
 		case "tui":
 			return tui.Launch(parsed, app.Dependencies{PublisherVersion: version, Input: os.Stdin}, os.Stdin, stdout, stderr)
-		case "scheduler":
+		case "scheduler", "gateway":
 			ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
 			defer stop()
 			return app.RunContext(ctx, args, stdout, stderr, app.Dependencies{PublisherVersion: version, Input: os.Stdin})
