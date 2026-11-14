@@ -5,6 +5,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
+	"syscall"
 	"time"
 
 	"github.com/hishamkaram/delegation-layer/internal/config/policy"
@@ -109,7 +112,7 @@ func canonicalExistingPath(p string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	entries, err := os.ReadDir(canonicalParent)
+	entries, err := readCanonicalDirectoryEntries(canonicalParent)
 	if err != nil {
 		return "", err
 	}
@@ -121,7 +124,20 @@ func canonicalExistingPath(p string) (string, error) {
 	return canonicalAlias(canonicalParent, entries, info)
 }
 
+func readCanonicalDirectoryEntries(path string) ([]os.DirEntry, error) {
+	directory, err := os.OpenFile(path, os.O_RDONLY|syscall.O_DIRECTORY, 0)
+	if err != nil {
+		return nil, err
+	}
+	entries, readErr := directory.ReadDir(-1)
+	if err := errors.Join(readErr, directory.Close()); err != nil {
+		return nil, err
+	}
+	return entries, nil
+}
+
 func canonicalAlias(parent string, entries []os.DirEntry, info os.FileInfo) (string, error) {
+	slices.SortFunc(entries, func(a, b os.DirEntry) int { return strings.Compare(a.Name(), b.Name()) })
 	for _, entry := range entries {
 		candidate, err := entry.Info()
 		if err != nil {

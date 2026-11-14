@@ -77,8 +77,11 @@ func TestSupervisorStatusDoesNotInitializeState(t *testing.T) {
 		t.Fatal(err)
 	}
 	if response.Command != "supervisor" || response.SupervisorControl == nil ||
+		response.SupervisorControl.Action != "status" ||
 		response.SupervisorControl.State != "not_initialized" ||
-		response.SupervisorControl.LegacyReachability != "not_present" {
+		response.SupervisorControl.LegacyReachability != "not_present" ||
+		response.SupervisorControl.ActiveWork != "none" ||
+		response.SupervisorControl.NextAction != "none" || response.Error != "" {
 		t.Fatalf("unexpected supervisor status response: %+v", response)
 	}
 	if _, err := os.Stat(root); !errors.Is(err, os.ErrNotExist) {
@@ -95,6 +98,7 @@ func TestSupervisorStatusTreatsStoreWithoutPrivateConfigAsNotInitialized(t *test
 	if err := store.Close(); err != nil {
 		t.Fatal(err)
 	}
+	before := snapshotSupervisorProjectionRoot(t, root)
 
 	var stdout, stderr bytes.Buffer
 	code := Run([]string{"supervisor", "status", "--root", root, "--json"}, &stdout, &stderr, Dependencies{})
@@ -109,22 +113,33 @@ func TestSupervisorStatusTreatsStoreWithoutPrivateConfigAsNotInitialized(t *test
 	if control == nil || control.State != "not_initialized" || control.LegacyReachability != "not_present" || control.ActiveWork != "none" || control.NextAction != "none" {
 		t.Fatalf("store without private config was not treated as uninitialized: %+v", control)
 	}
+	requireSupervisorProjectionRootUnchanged(t, root, before)
 }
 
 func TestSupervisorStatusRejectsDamagedStateRoot(t *testing.T) {
 	root := t.TempDir()
+	if err := os.Chmod(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o700 {
+		t.Fatalf("damaged-root fixture permissions=%#o, want 0700", info.Mode().Perm())
+	}
+	before := snapshotSupervisorProjectionRoot(t, root)
 	var stdout, stderr bytes.Buffer
 	code := Run([]string{"supervisor", "status", "--root", root, "--json"}, &stdout, &stderr, Dependencies{})
-	if code == 0 {
-		t.Fatalf("damaged state root was reported as healthy: stdout=%q stderr=%q", stdout.String(), stderr.String())
+	if code != 1 {
+		t.Fatalf("damaged state root permissions=%#o exit=%d, want 1: stdout=%q stderr=%q", info.Mode().Perm(), code, stdout.String(), stderr.String())
 	}
 	var response Response
 	if err := json.Unmarshal(stdout.Bytes(), &response); err != nil {
 		t.Fatal(err)
 	}
-	if response.SupervisorControl == nil || response.SupervisorControl.State == "not_initialized" {
-		t.Fatalf("damaged state root was treated as absent: %+v", response)
-	}
+	requireUnavailableSupervisorProjection(t, response, "status")
+	requireSupervisorProjectionRootUnchanged(t, root, before)
 }
 
 func TestCollectReturnsCommittedWinnerAndBoundedResponse(t *testing.T) {
