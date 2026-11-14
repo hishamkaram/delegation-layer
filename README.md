@@ -9,6 +9,7 @@ exact-session continuation.
 · [Example](#ask-naturally)
 · [Providers](https://github.com/hishamkaram/delegation-layer/blob/main/docs/providers.md)
 · [Remote tasks](docs/remote-delegation.md)
+· [Gateway connection](docs/gateway-connect.md)
 · [Terminal workbench](docs/terminal-workbench.md)
 · [Teams](https://github.com/hishamkaram/delegation-layer/blob/main/docs/teams.md)
 · [Start recurring tasks](docs/getting-started.md#recurring-tasks)
@@ -38,8 +39,11 @@ Use `--cpu-guard=false` or `--memory-guard=false` for an explicit per-command
 opt-out; it does not change running tasks, saved settings or nested tasks. See the
 [resource-check contract](skills/agent-integration/references/command-reference.md#dispatch).
 
-Operator-managed gateways can use the additive [guarded local connector
-contract](docs/connector-contract.md) for context-pinned admission and recovery.
+Connect this device to a trusted self-hosted Gateway with
+[`delegate gateway connect`](docs/gateway-connect.md), then explicitly approve
+local workspace roots. Integrators can also use the additive [guarded local
+connector contract](docs/connector-contract.md) for context-pinned admission and
+recovery.
 
 ## Get started
 

@@ -58,13 +58,13 @@ func (c *WorkerClient) StartCommand(cmd *exec.Cmd, start func() error) error {
 	return c.startCommand(cmd, nil, start)
 }
 
-// StartProjectCommand borrows the caller's retained project directory. The
+// StartProjectCommand borrows the caller's directory observation and binding. The
 // existing guardian Start/ACK owns launch; execution still owns the only Wait.
-func (c *WorkerClient) StartProjectCommand(cmd *exec.Cmd, directory *os.File, identity task.DirectoryIdentity, start func() error) error {
+func (c *WorkerClient) StartProjectCommand(cmd *exec.Cmd, directory *os.File, launch task.ProjectLaunchContext, start func() error) error {
 	if directory == nil {
 		return task.ErrIdentityMismatch
 	}
-	return c.startCommand(cmd, &ProjectDirectory{File: directory, Identity: identity}, start)
+	return c.startCommand(cmd, &ProjectDirectory{File: directory, Context: launch}, start)
 }
 
 func (c *WorkerClient) startCommand(cmd *exec.Cmd, project *ProjectDirectory, start func() error) error {

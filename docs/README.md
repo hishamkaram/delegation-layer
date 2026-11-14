@@ -8,6 +8,7 @@ Start with [installation](installation.md), then the
 | Browse and control Tasks, Teams, Schedules and System in a terminal | [Terminal workbench](terminal-workbench.md) |
 | Run a task manually | [Read-only example](../skills/agent-integration/examples/read-only-task.md) |
 | Run a task on another machine and transfer selected files | [Remote delegation](remote-delegation.md) |
+| Connect this device to a trusted self-hosted Gateway | [Gateway connection](gateway-connect.md) |
 | Save recurring work, start its scheduler and inspect a result | [Scheduler walkthrough](getting-started.md#recurring-tasks) |
 | Find commands and operator settings | [CLI reference](cli-reference.md) |
 | Integrate JSON responses | [API index](api.md) |

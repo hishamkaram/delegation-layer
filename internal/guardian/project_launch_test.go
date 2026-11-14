@@ -14,6 +14,9 @@ import (
 
 func TestMain(m *testing.M) {
 	if len(os.Args) > 1 && os.Args[1] == LaunchGateMode {
+		if os.Getenv("DELEGATE_PROJECT_LAUNCH_OLD_DECODER") == "1" && !oldProjectLaunchDecoderAccepts(os.Args[2:]) {
+			os.Exit(31)
+		}
 		if err := RunLaunchGate(os.Args[2:], unix.Exec); err != nil {
 			os.Exit(31)
 		}
@@ -77,7 +80,8 @@ func projectLaunchDirectory(t *testing.T) *ProjectDirectory {
 	if err = unix.Fstat(int(file.Fd()), &identity); err != nil {
 		t.Fatal(err)
 	}
-	return &ProjectDirectory{File: file, Identity: task.DirectoryIdentity{Path: path, Device: uint64(identity.Dev), Inode: uint64(identity.Ino)}}
+	observed := task.DirectoryIdentity{Path: path, Device: uint64(identity.Dev), Inode: uint64(identity.Ino)}
+	return &ProjectDirectory{File: file, Context: task.ProjectLaunchContext{Binding: task.ConnectorContext{Project: observed}, Observed: observed}}
 }
 
 func TestProjectLaunchGatePinsDirectoryAndClosesChildCustody(t *testing.T) {
@@ -90,7 +94,7 @@ func TestProjectLaunchGateRefusesReplacementAfterAcknowledgment(t *testing.T) {
 
 func TestProjectLaunchFactoryRejectsWrongBindingWithoutClosingBorrow(t *testing.T) {
 	project := projectLaunchDirectory(t)
-	project.Identity.Inode++
+	project.Context.Observed.Inode++
 	executable, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)
@@ -160,10 +164,10 @@ func assertProjectLaunch(t *testing.T, replace bool) {
 	marker := filepath.Join(t.TempDir(), "provider.json")
 	process := startProjectLaunchProcess(t, project, marker)
 	if replace {
-		if err = os.Rename(project.Identity.Path, project.Identity.Path+"-moved"); err != nil {
+		if err = os.Rename(project.Context.Observed.Path, project.Context.Observed.Path+"-moved"); err != nil {
 			t.Fatal(err)
 		}
-		if err = os.Mkdir(project.Identity.Path, 0o700); err != nil {
+		if err = os.Mkdir(project.Context.Observed.Path, 0o700); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -179,7 +183,7 @@ func assertProjectLaunch(t *testing.T, replace bool) {
 	if err != nil || gotCwd != parentCwd {
 		t.Fatalf("child handoff changed parent cwd: %q, %v", gotCwd, err)
 	}
-	assertProjectLaunchProbe(t, project.Identity, marker, replace, waitErr)
+	assertProjectLaunchProbe(t, project.Context.Observed, marker, replace, waitErr)
 }
 
 func assertProjectLaunchProbe(t *testing.T, identity task.DirectoryIdentity, marker string, refused bool, waitErr error) {

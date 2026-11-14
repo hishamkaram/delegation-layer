@@ -31,30 +31,119 @@ enabled root with a missing or unsafe lock fails instead of recreating it.
 An older strict reader refuses the upgraded root on its next open. A process
 that already opened the old root still requires operator closure.
 
-Tokens identify the actual root/project directory, including physical identity.
-The CLI project token encodes a local canonical path. Keep raw CLI tokens local
+Dynamic workspace selection requires `workspace-constrained-connector-v1`.
+Canonical-path approvals additionally require `connector-path-project-v1`, which
+depends on the workspace and namespace features. Existing connector-enabled
+roots need an explicit offline cutover before using these capabilities:
+
+```sh
+delegate context enable-connector --root ABS --workspace-constrained \
+  --offline-cutover-confirmed --json
+```
+
+For an absent root, `delegate context initialize --root ABS
+--workspace-constrained --json` publishes the required features and durable
+namespace lock through a create-only operation. It starts no supervisor. An
+existing or concurrently created root fails with `root_exists`; it is never
+silently adopted or upgraded by initialization. Workspace inspection and the new
+Gateway client report `root_cutover_required` when the selected existing root
+lacks the feature needed by that operation.
+
+The root token identifies the actual Native root, including physical identity.
+Project tokens have two explicit representations. Legacy v1 binds canonical
+path/device/inode; `context inspect --cwd` retains that representation. New
+Gateway workspace approvals use v2, whose decoded JSON is
+`{"version":2,"project":{"path":"CANONICAL_PATH"}}`. V2 binds only the canonical
+path, accepts same-path replacement and requires the path feature on the root.
+Mixed or malformed representations fail; old v1 records are never reinterpreted.
+Keep raw CLI tokens local
 to the connector; do not put them in remote messages, logs or a registry. An
 external gateway can use `ctx1_` plus SHA256 of the local token as its wire
 identity, while its connector checks that hash and supplies the pinned actual
 CLI token locally. This encoding is an external connector policy, not another
 Delegate context identity. Replacing a root invalidates every control guard.
-Replacing or removing a project invalidates new admission and existing-task
-resume. Observation, result retrieval, cancellation and fencing retain the live
+For v1, replacing or removing a project invalidates new admission and existing-task
+resume. For v2, replacement or recloning at the same canonical path is allowed;
+a missing directory refuses the next acquisition. Observation, result retrieval,
+cancellation and fencing retain the live
 root guard and compare the exact saved project token when a request exists;
 they do not require its workspace to remain present. For an absent request,
 the echoed project token is validated input, not a verified project receipt.
-No directory is automatically rebound to a replacement.
+No binding changes its saved canonical path.
+
+Root guards remain physical and exact. A restart that changes the root's
+observed device/inode changes its guard and fails closed; it is not silently
+mapped to saved approvals or tasks. This contract does not promise survival
+across every filesystem's mount-identity changes. Operator reconciliation must
+preserve Native's task history and establish the intended root explicitly.
 
 Guarded execution retains the selected project directory through the existing
 runner lease. Preflight commands for that project and the provider
 child borrow it through the authenticated launch gate; after authorization the
-child checks the directory identity, changes directory through its descriptor
-and closes the inherited descriptor before provider execution. A detected
-parent-side mismatch remains a refusal even if the pathname is restored before
-sealing. A child gate refusal prevents provider execution and accepted output.
+child selects and checks its working directory, changes directory through its
+descriptor and closes the descriptor before provider execution. V1 retains its
+physical checks. V2 reacquires the current approved ancestor and selected path
+after gate authorization; physical observations only check that acquisition's
+consistency. A running command keeps its original cwd. Later path replacement
+or removal does not poison its result; root, process, capture and storage checks
+remain in force. A child gate refusal prevents provider execution and accepted output.
 These checks protect the initial working directory and observed mismatches;
 they do not make later third-party absolute path access atomic or provide an OS
 sandbox. Ordinary unguarded tasks retain their existing launch behavior.
+Because each command acquires the current path, a replacement between preflight
+and provider launch can select different directories for those commands.
+
+## Workspace-constrained selection
+
+A connector explicitly approves an existing ancestor using its ordinary opaque
+project token. It then asks Delegate to resolve an existing relative project:
+
+```sh
+delegate context inspect --root ABS --expected-workspace WORKSPACE_TOKEN \
+  --relative-project team/service --json
+```
+
+The returned `project_token` binds the same selected leaf used for workspace
+validation. `workspace_constraint` is `{"token":"WORKSPACE_TOKEN",
+"relative_project":"team/service"}`. V1 tokens retain physical identity; v2 tokens
+retain the approved canonical path. An ancestor and leaf must use the same
+representation. Changing files or creating another child does not change the
+approval. Tokens remain
+local data, not remote routing handles.
+
+Fresh guarded dispatch and explicit admission recovery must supply the complete
+constraint with `--expected-workspace` and `--relative-project`, in addition to
+the existing task guards. Delegate freezes it in the canonical request and
+receipt. Admission, recovery and the retained launch gate validate the approved
+ancestor and selected project. Traversal and escaping symlinks fail. V1 rejects
+ancestor replacement. V2 permits same-path replacement of ancestor and leaf,
+but refuses any change to the frozen canonical project path.
+These are validation and launch checks, not continuous filesystem ancestry
+enforcement or an OS sandbox.
+
+Passive observation, accepted result retrieval, cancellation and fencing compare
+frozen guards without requiring the live workspace directory. Supplying the
+workspace constraint requires an exact saved match. Legacy passive callers can
+omit that optional constraint while still matching root, project, origin and
+any supplied spec digest. Omission never authorizes a fresh dispatch or recovery
+of a workspace-constrained task.
+
+Native continuation inherits a path-bound predecessor's root, canonical project
+and workspace constraint before reserving the successor. Supplied constraints
+must match exactly. Local continuation does not copy Gateway-origin correlation
+and is not included in Gateway origin inventory. A fresh Gateway caller keeps
+its own origin; no continuation can strip or retarget the inherited constraint.
+Local continuation uses Native's frozen constraint. Removing an SDK workspace
+approval narrows Gateway routing; it does not revoke the local user's authority
+to continue through Native directly.
+
+Legacy JSON projections omit the additive workspace field even when history
+contains dynamic tasks. New consumers opt in with
+`--include-workspace-constraint`; supplying expected workspace flags also opts
+in. This affects only the output clone, never canonical validation. Origin
+inventory accepts smaller pages with `--limit 1` (valid range 1..200); callers
+must follow `next_cursor` until `complete`. Pagination bounds the emitted entry
+count, not the full canonical membership scan needed for completeness.
 
 ## Guarded task operations
 
@@ -143,6 +232,25 @@ before accepting stop evidence. Ordinary cancellation uses the common response
 fields; it does not supply a connector receipt itself.
 
 ## Execution closure and quota release
+
+For an opt-in diagnostic of the actual per-task lifetime backend, inspect the
+capability and then the task:
+
+```sh
+delegate context inspect --root ABS --include-execution-assurance --json
+delegate status TASK --root ABS --include-execution-assurance --json
+```
+
+Context reports `connector.execution_assurance_feature` as
+`task-lifetime-assurance-v1`. Task status adds `execution_assurance` only when
+requested. A published guardian registration reports `state: "registered"`,
+`backend: "cgroup-v2"` with `assurance: "exact"`, or `backend: "process-group"`
+with `assurance: "cooperative"`. `registration_sha256` identifies the canonical
+registration data. It is not an executable fingerprint. A clean missing
+registration reports `state: "unregistered"` without an inferred backend;
+malformed, foreign or unreadable evidence fails explicitly. Default JSON remains
+unchanged. This diagnostic uses the actual immutable guardian registration,
+not service defaults, and proves neither task termination nor execution closure.
 
 An accepted committed or rejected outcome proves publication, not complete
 execution lifetime closure. A worker can publish before its guardian records the

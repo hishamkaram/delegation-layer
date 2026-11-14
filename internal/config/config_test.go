@@ -4,6 +4,8 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -246,5 +248,119 @@ func checkCaseAliasOverlap(t *testing.T, base, workspace, alias string) {
 	}
 	if _, _, err := ValidateDirectories(sibling, alias); err != nil {
 		t.Fatalf("disjoint sibling rejected: %v", err)
+	}
+}
+
+func TestCanonicalAliasPreservesLexicalSelection(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		missingName string
+		wantMissing bool
+	}{
+		{name: "first matching alias"},
+		{name: "earlier metadata error", missingName: "a-missing", wantMissing: true},
+		{name: "later metadata error", missingName: "zz-missing"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			base, entries, info := canonicalAliasSnapshot(t, tc.missingName)
+			got, err := canonicalAlias(base, entries, info)
+			if tc.wantMissing {
+				if !errors.Is(err, os.ErrNotExist) {
+					t.Fatalf("alias lookup error = %v, want missing metadata", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if want := filepath.Join(base, "b-first"); got != want {
+				t.Fatalf("canonical alias = %q, want lexical first %q", got, want)
+			}
+		})
+	}
+}
+
+func canonicalAliasSnapshot(t *testing.T, missingName string) (string, []os.DirEntry, os.FileInfo) {
+	t.Helper()
+	base := t.TempDir()
+	target := filepath.Join(base, "z-last")
+	if err := os.WriteFile(target, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Link(target, filepath.Join(base, "b-first")); err != nil {
+		t.Fatal(err)
+	}
+	missing := filepath.Join(base, missingName)
+	if missingName != "" {
+		if err := os.WriteFile(missing, nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	info, err := os.Stat(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	entries, err := os.ReadDir(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if missingName != "" {
+		// DirEntry may cache metadata, so deletion cannot force Info to fail.
+		for index, entry := range entries {
+			if entry.Name() == missingName {
+				entries[index] = metadataErrorDirEntry{
+					DirEntry: entry,
+					err:      &os.PathError{Op: "lstat", Path: missing, Err: os.ErrNotExist},
+				}
+			}
+		}
+	}
+	// Reverse the sorted snapshot to require the same lexical winner and
+	// metadata error precedence from unordered native directory entries.
+	slices.Reverse(entries)
+	return base, entries, info
+}
+
+type metadataErrorDirEntry struct {
+	os.DirEntry
+	err error
+}
+
+func (entry metadataErrorDirEntry) Info() (os.FileInfo, error) {
+	return nil, entry.err
+}
+
+func TestCanonicalDirectoryReadRejectsNonDirectories(t *testing.T) {
+	base := t.TempDir()
+	regular := filepath.Join(base, "regular")
+	if err := os.WriteFile(regular, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	fifo := filepath.Join(base, "fifo")
+	if err := syscall.Mkfifo(fifo, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// Keep a nonblocking writer open so a missing O_DIRECTORY cannot hang the
+	// test. Requiring the open error still detects that flags regression.
+	fifoGuard, err := os.OpenFile(fifo, os.O_RDWR|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := fifoGuard.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	for _, path := range []string{regular, fifo} {
+		t.Run(filepath.Base(path), func(t *testing.T) {
+			entries, err := readCanonicalDirectoryEntries(path)
+			var pathErr *os.PathError
+			if !errors.Is(err, syscall.ENOTDIR) || !errors.As(err, &pathErr) || pathErr.Op != "open" {
+				t.Fatalf("directory read error = %v, want open ENOTDIR", err)
+			}
+			if entries != nil {
+				t.Fatalf("failed directory read returned partial entries: %v", entries)
+			}
+		})
 	}
 }

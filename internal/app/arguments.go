@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/hishamkaram/delegation-layer/internal/config"
+	"github.com/hishamkaram/delegation-layer/internal/gatewaycommand"
 	"github.com/hishamkaram/delegation-layer/internal/resourceadmission"
 	schedulercontract "github.com/hishamkaram/delegation-layer/internal/scheduler/contract"
 	"github.com/hishamkaram/delegation-layer/internal/supervisor/infrastructure"
@@ -20,6 +21,7 @@ import (
 
 // Arguments contains requested values only. Parsing grants no external authority.
 type Arguments struct {
+	Gateway                  gatewaycommand.Arguments
 	Connector                ConnectorArguments
 	LogStream                string
 	LogCursor                string
@@ -230,12 +232,19 @@ func registerResidentCommandFlags(fs *flag.FlagSet, a *Arguments) bool {
 }
 
 func (a *Arguments) validate(positional []string, watch string) error {
+	if err := a.validatePaths(); err != nil {
+		return err
+	}
+	return a.validateCommand(positional, watch)
+}
+
+func (a *Arguments) validatePaths() error {
 	for _, p := range []string{a.Root, a.PueueConfig, a.Runner} {
 		if p != "" && !filepath.IsAbs(p) {
 			return errors.New("root, pueue-config and runner must be absolute paths")
 		}
 	}
-	return a.validateCommand(positional, watch)
+	return nil
 }
 
 func (a *Arguments) validateCommand(positional []string, watch string) error {
@@ -324,6 +333,9 @@ func (a *Arguments) validateTaskInteraction(positional []string, watch string) e
 	}
 	if a.Connector.ExpectedRoot != "" && strings.HasPrefix(a.TaskID, "remote:") {
 		return errors.New("connector guards require a local task ID")
+	}
+	if a.Connector.IncludeExecutionAssurance && strings.HasPrefix(a.TaskID, "remote:") {
+		return errors.New("execution assurance diagnostic requires a local task ID")
 	}
 	if err := a.validateInteractionArguments(); err != nil {
 		return err

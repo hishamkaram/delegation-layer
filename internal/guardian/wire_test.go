@@ -6,6 +6,7 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -182,7 +183,7 @@ func TestLifetimeProjectStartUsesExistingWorkerProtocol(t *testing.T) {
 	factoryCalls := 0
 	factory := func(_ *exec.Cmd, received *ProjectDirectory) (LaunchGate, error) {
 		factoryCalls++
-		if received == nil || received.File != project.File || received.Identity != project.Identity {
+		if received == nil || received.File != project.File || !reflect.DeepEqual(received.Context, project.Context) {
 			return nil, task.ErrIdentityMismatch
 		}
 		return lifetimeWireNoopLaunchGate{}, nil
@@ -193,7 +194,7 @@ func TestLifetimeProjectStartUsesExistingWorkerProtocol(t *testing.T) {
 	}
 	closeClient := ownLifetimeWireClient(t, client)
 	command := exec.Command("unused-protocol-fixture")
-	if err = client.StartProjectCommand(command, project.File, project.Identity, func() error {
+	if err = client.StartProjectCommand(command, project.File, project.Context, func() error {
 		command.Process = &os.Process{Pid: 123}
 		return nil
 	}); err != nil {

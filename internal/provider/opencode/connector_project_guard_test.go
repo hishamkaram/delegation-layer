@@ -94,7 +94,7 @@ func (acpProjectWriterLifetime) StartCommand(_ *exec.Cmd, start func() error) er
 	return start()
 }
 
-func (acpProjectWriterLifetime) StartProjectCommand(_ *exec.Cmd, _ *os.File, _ task.DirectoryIdentity, start func() error) error {
+func (acpProjectWriterLifetime) StartProjectCommand(_ *exec.Cmd, _ *os.File, _ task.ProjectLaunchContext, start func() error) error {
 	return start()
 }
 func (acpProjectWriterLifetime) FinishCommand(context.Context, *exec.Cmd) error { return nil }

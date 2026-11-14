@@ -199,6 +199,7 @@ func controlRemote(ctx context.Context, request remote.Request, response remote.
 }
 
 func remoteCommandEnvelope(response remote.Response, result commandResult) remote.Response {
+	result.response = projectConnectorWorkspace(result.response, false)
 	var data bytes.Buffer
 	err := writeJSONResponse(&data, result.response.Command, &result.response, result.err)
 	if err != nil {

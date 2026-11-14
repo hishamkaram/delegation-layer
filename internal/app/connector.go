@@ -23,8 +23,9 @@ import (
 // ConnectorResponse is additive public control data. Existing task lifecycle
 // fields retain their independent authority; this envelope never replaces them.
 type ConnectorResponse struct {
-	ExecutionClosurePending taskdir.ConnectorClosurePendingReason `json:"execution_closure_pending,omitempty"`
-	ExecutionClosure        *taskdir.ConnectorExecutionClosure    `json:"execution_closure,omitempty"`
+	ExecutionAssuranceFeature string                                `json:"execution_assurance_feature,omitempty"`
+	ExecutionClosurePending   taskdir.ConnectorClosurePendingReason `json:"execution_closure_pending,omitempty"`
+	ExecutionClosure          *taskdir.ConnectorExecutionClosure    `json:"execution_closure,omitempty"`
 	taskdir.ConnectorContextObservation
 	OriginRegistered *bool                           `json:"origin_registered,omitempty"`
 	Resolution       string                          `json:"resolution,omitempty"`
@@ -187,6 +188,9 @@ func connectorFailure(response Response, err error) commandResult {
 	}
 	result := failed(response, err, code)
 	scrubConnectorFailure(&result)
+	if response.Command == "context" && errors.Is(err, taskdir.ErrConnectorDisabled) {
+		result.response.Failure = &DispatchFailureResponse{Code: "root_cutover_required", Stage: "context-inspect", NextAction: "run_explicit_offline_cutover"}
+	}
 	if errors.Is(err, context.DeadlineExceeded) && response.Command == "result" {
 		result.response.Failure = &DispatchFailureResponse{Code: "result_verification_timeout", Stage: "verify-result", NextAction: "stop_and_report"}
 		result.response.Error = "whole result verification exceeded its finite deadline; retrieve locally or explicitly configure compatible finite inner/client/HTTP deadlines"
@@ -214,6 +218,9 @@ func connectorCommandContext(ctx context.Context, a Arguments, deps Dependencies
 		return failed(response, err, 1)
 	}
 	a.Root = root
+	if a.Command == "context" && a.Connector.Action == "initialize" {
+		return initializeConnectorContext(ctx, a, deps)
+	}
 	if connectorMutationRequested(a) {
 		return connectorMutationContext(ctx, a, deps)
 	}
@@ -234,10 +241,19 @@ func connectorCommandContext(ctx context.Context, a Arguments, deps Dependencies
 }
 
 func connectorContextInspection(ctx context.Context, a Arguments, reader *taskdir.ReadOnlyStore, response Response) commandResult {
-	observation, err := reader.InspectConnectorContext(ctx, a.Cwd)
+	var observation taskdir.ConnectorContextObservation
+	var err error
+	if workspace := connectorWorkspace(a.Connector); workspace != nil {
+		observation, err = reader.InspectWorkspaceConnectorContext(ctx, workspace)
+	} else {
+		observation, err = reader.InspectConnectorContext(ctx, a.Cwd)
+	}
 	response.Connector = &ConnectorResponse{ConnectorContextObservation: observation}
 	if err != nil {
 		return connectorFailure(response, err)
+	}
+	if a.Connector.IncludeExecutionAssurance {
+		response.Connector.ExecutionAssuranceFeature = executionAssuranceFeature
 	}
 	if pending, readErr := pueue.PrivateRuntimeRestartPending(ctx, reader.Root()); readErr != nil {
 		return connectorFailure(response, publicSupervisorError("private runtime readiness is unavailable", readErr))
@@ -344,6 +360,10 @@ func resolveConnectorReaderContext(ctx context.Context, a Arguments, reader *tas
 	if facts.Inspection != nil {
 		response.Outcome = facts.Inspection.Outcome
 	}
+	response.ExecutionAssurance, err = optionalExecutionAssurance(a.Connector.IncludeExecutionAssurance, facts.Lifetime)
+	if err != nil {
+		return commandResult{response: response}, err
+	}
 	closure, closureErr := reader.ReadConnectorExecutionClosureContext(ctx, a.TaskID)
 	if closureErr != nil {
 		return commandResult{response: response}, closureErr
@@ -354,7 +374,7 @@ func resolveConnectorReaderContext(ctx context.Context, a Arguments, reader *tas
 }
 
 func matchConnectorReceipt(a Arguments, receipt taskdir.ConnectorReceipt) error {
-	if receipt.RootToken != a.Connector.ExpectedRoot || receipt.ProjectToken != a.Connector.ExpectedProject || a.Connector.origin == nil || receipt.Origin != *a.Connector.origin {
+	if receipt.RootToken != a.Connector.ExpectedRoot || receipt.ProjectToken != a.Connector.ExpectedProject || a.Connector.origin == nil || receipt.Origin != *a.Connector.origin || !connectorWorkspaceMatches(a, receipt.WorkspaceConstraint) {
 		return task.ErrRequestConflict
 	}
 	if a.Connector.ExpectedSpecSHA256 != "" && receipt.SpecSHA256 != a.Connector.ExpectedSpecSHA256 {
@@ -378,7 +398,7 @@ func connectorMutationContext(ctx context.Context, a Arguments, deps Dependencie
 	}
 	response.Connector.Features = features
 	if a.Command == "context" {
-		if err = store.EnableConnectorContext(ctx, a.Connector.OfflineCutoverConfirmed); err != nil {
+		if err = store.EnableWorkspaceConnectorContext(ctx, a.Connector.OfflineCutoverConfirmed, a.Connector.WorkspaceConstrained); err != nil {
 			return connectorFailure(response, err)
 		}
 		token, tokenErr := store.RootTokenContext(ctx)
@@ -420,7 +440,7 @@ func connectorMutationContext(ctx context.Context, a Arguments, deps Dependencie
 }
 
 func connectorResumeGuardedContext(ctx context.Context, a Arguments, deps Dependencies, store *taskdir.Store, response Response) (result commandResult) {
-	guard, err := store.RetainConnectorContext(ctx, a.Connector.ExpectedRoot, a.Connector.ExpectedProject)
+	guard, err := store.RetainWorkspaceConnectorContext(ctx, a.Connector.ExpectedRoot, a.Connector.ExpectedProject, connectorWorkspace(a.Connector))
 	if err != nil {
 		return connectorFailure(response, err)
 	}
@@ -465,7 +485,7 @@ func connectorResumeContext(ctx context.Context, a Arguments, deps Dependencies,
 	if err != nil {
 		return connectorFailure(response, errors.Join(err, td.Close()))
 	}
-	if request.Origin == nil || request.ConnectorContext == nil || *request.Origin != *a.Connector.origin || request.ConnectorContext.RootToken != a.Connector.ExpectedRoot || spec != a.Connector.ExpectedSpecSHA256 {
+	if request.Origin == nil || request.ConnectorContext == nil || *request.Origin != *a.Connector.origin || request.ConnectorContext.RootToken != a.Connector.ExpectedRoot || spec != a.Connector.ExpectedSpecSHA256 || !connectorWorkspaceMatches(a, request.ConnectorContext.WorkspaceConstraint) {
 		return connectorFailure(response, errors.Join(task.ErrRequestConflict, td.Close()))
 	}
 	project, err := taskdir.ProjectToken(request.ConnectorContext.Project)
@@ -537,7 +557,7 @@ func retainOpenedTaskGuardContext(ctx context.Context, a Arguments, store *taskd
 	if err != nil {
 		return nil, err
 	}
-	if *request.Origin != *a.Connector.origin || project != a.Connector.ExpectedProject || request.ConnectorContext.RootToken != a.Connector.ExpectedRoot {
+	if *request.Origin != *a.Connector.origin || project != a.Connector.ExpectedProject || request.ConnectorContext.RootToken != a.Connector.ExpectedRoot || !connectorWorkspaceMatches(a, request.ConnectorContext.WorkspaceConstraint) {
 		return nil, task.ErrRequestConflict
 	}
 	if a.Connector.ExpectedSpecSHA256 != "" && spec != a.Connector.ExpectedSpecSHA256 {
@@ -561,7 +581,7 @@ func prepareGuardedDispatchContext(ctx context.Context, a *Arguments, deps Depen
 	if err != nil {
 		return err
 	}
-	binding, readErr := reader.RequireConnectorContext(ctx, a.Connector.ExpectedRoot, a.Connector.ExpectedProject)
+	binding, readErr := reader.RequireWorkspaceConnectorContext(ctx, a.Connector.ExpectedRoot, a.Connector.ExpectedProject, connectorWorkspace(a.Connector))
 	if err = errors.Join(readErr, reader.Close()); err != nil {
 		return err
 	}
@@ -569,7 +589,7 @@ func prepareGuardedDispatchContext(ctx context.Context, a *Arguments, deps Depen
 	if projectErr != nil {
 		return projectErr
 	}
-	if binding.Project != requestedProject {
+	if !binding.Project.MatchesObservation(requestedProject) {
 		return task.ErrIdentityMismatch
 	}
 	a.Cwd = binding.Project.Path
@@ -672,6 +692,7 @@ func scrubConnectorFailure(result *commandResult) {
 	connector.Features = nil
 	connector.RootToken = ""
 	connector.ProjectToken = ""
+	connector.WorkspaceConstraint = nil
 	connector.ResultRange = nil
 	connector.ExecutionClosure = nil
 	connector.ExecutionClosurePending = ""
@@ -681,4 +702,36 @@ func scrubConnectorFailure(result *commandResult) {
 	if connector.Resolution == "permanently_refused" {
 		connector.Resolution = "unresolved"
 	}
+}
+
+func initializeConnectorContext(ctx context.Context, a Arguments, deps Dependencies) (result commandResult) {
+	response := newResponse("context")
+	store, err := taskdir.InitializeConnectorStoreContext(ctx, a.Root, deps.storeDependencies().registry(), a.Connector.WorkspaceConstrained)
+	if err != nil {
+		result = connectorFailure(response, err)
+		if errors.Is(err, os.ErrExist) {
+			result.response.Failure = &DispatchFailureResponse{Code: "root_exists", Stage: "context-initialize", NextAction: "inspect_existing_root"}
+		}
+		return result
+	}
+	defer func() { closeObservationStore(&result, store) }()
+	response.RootID = store.RootID
+	token, err := store.RootTokenContext(ctx)
+	if err != nil {
+		return connectorFailure(response, err)
+	}
+	features, err := store.ConnectorFeaturesContext(ctx)
+	if err != nil {
+		return connectorFailure(response, err)
+	}
+	response.Connector = &ConnectorResponse{ConnectorContextObservation: taskdir.ConnectorContextObservation{ContractVersion: 1, RootToken: token, Features: features}}
+	return commandResult{response: response}
+}
+
+func connectorWorkspaceMatches(a Arguments, frozen *task.WorkspaceConstraint) bool {
+	expected := connectorWorkspace(a.Connector)
+	if expected == nil && a.Command != "dispatch" && !a.Connector.ResumeAdmission {
+		return true
+	}
+	return reflect.DeepEqual(frozen, expected)
 }

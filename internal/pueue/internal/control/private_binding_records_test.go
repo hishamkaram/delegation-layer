@@ -3,8 +3,10 @@ package control
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -250,3 +252,132 @@ func releasePrivateStatusOnCleanup(t *testing.T, marker string) {
 		t.Errorf("release private status fixture: %v", err)
 	}
 }
+
+// privateStatusFixture owns release and command/bootstrap completion before its
+// earlier-registered directory cleanup may remove the fixture.
+type privateStatusFixture struct {
+	base            string
+	releasePath     string
+	retained        bool
+	clients         []*Client
+	resultErr       error
+	lateDiagnostics error
+	daemonMu        sync.Mutex
+	daemonWaits     []<-chan struct{}
+}
+
+func newPrivateStatusFixture(t *testing.T) *privateStatusFixture {
+	t.Helper()
+	fixture := &privateStatusFixture{retained: true}
+	fixture.base = canonicalTempWithRetention(t, &fixture.retained)
+	fixture.releasePath = filepath.Join(fixture.base, "status-release")
+	t.Cleanup(func() {
+		if err := fixture.finish(time.Now().Add(10 * time.Second)); err != nil {
+			t.Errorf("retained private status fixture %s: %v", fixture.base, err)
+		}
+		if fixture.lateDiagnostics != nil {
+			t.Logf("released private status command diagnostics: %v", fixture.lateDiagnostics)
+		}
+	})
+	return fixture
+}
+
+func (fixture *privateStatusFixture) capture(client *Client, err error) {
+	if client != nil && !slices.Contains(fixture.clients, client) {
+		fixture.clients = append(fixture.clients, client)
+	}
+	fixture.resultErr = errors.Join(fixture.resultErr, err)
+}
+
+// bind transfers client and daemon cleanup to this fixture. It deliberately
+// registers no later client cleanup that could run before marker release.
+func (fixture *privateStatusFixture) bind(t *testing.T, ctx context.Context, options Options) (privateSupervisorTestFixture, *Client) {
+	t.Helper()
+	supervisor := newPrivateSupervisorTestFixtureAtBase(t, fixture.base)
+	options.PrivateGenerationGuard = allowPrivateGenerationForTest{}
+	options.DaemonStartGuard = allowDaemonStartForTest{}
+	options.PrivateTerminalEventRunner = privateInstalledCallbackForTest(t, supervisor.stateRoot)
+	options.DaemonWaitOwner = fixture
+	client, err := BindPrivate(ctx, supervisor.clientPath, supervisor.daemonPath, supervisor.stateRoot, options)
+	fixture.capture(client, err)
+	if err != nil {
+		t.Fatalf("bind supervisor fixture before lease fault: %v", err)
+	}
+	return supervisor, client
+}
+
+func (fixture *privateStatusFixture) RegisterDaemonWait(_ string, _ int, done <-chan struct{}) error {
+	fixture.daemonMu.Lock()
+	defer fixture.daemonMu.Unlock()
+	fixture.daemonWaits = append(fixture.daemonWaits, done)
+	return nil
+}
+
+func (fixture *privateStatusFixture) finish(deadline time.Time) error {
+	if !fixture.retained {
+		return nil
+	}
+	releaseErr := os.WriteFile(fixture.releasePath, nil, 0o600)
+	if err := fixture.joinCommands(deadline); err != nil {
+		return errors.Join(releaseErr, err)
+	}
+	releaseErr = errors.Join(releaseErr, fixture.joinBootstrap(deadline))
+	for _, client := range fixture.clients {
+		releaseErr = errors.Join(releaseErr, client.Close())
+	}
+	// Client closure prevents further work before taking the registered Wait
+	// snapshot. Wait registration is synchronous with every daemon start.
+	fixture.daemonMu.Lock()
+	waits := slices.Clone(fixture.daemonWaits)
+	fixture.daemonMu.Unlock()
+	for _, done := range waits {
+		if !waitUntil(done, deadline) {
+			releaseErr = errors.Join(releaseErr, fmt.Errorf("private fixture daemon did not join: %w", context.DeadlineExceeded))
+		}
+	}
+	if releaseErr != nil {
+		return releaseErr
+	}
+	fixture.retained = false
+	return nil
+}
+
+func (fixture *privateStatusFixture) joinCommands(deadline time.Time) error {
+	results := newBootstrapPendingResults(pendingHandles(fixture.resultErr))
+	for {
+		results.collectSettled()
+		fixture.lateDiagnostics = results.err
+		if len(results.pending) == 0 {
+			break
+		}
+		if !waitUntil(results.pending[0].Done(), deadline) {
+			return fmt.Errorf("private status command did not join: %w", context.DeadlineExceeded)
+		}
+	}
+	return nil
+}
+
+func (fixture *privateStatusFixture) joinBootstrap(deadline time.Time) error {
+	var releaseErr error
+	var owner *BootstrapCleanupError
+	if errors.As(fixture.resultErr, &owner) {
+		if !waitUntil(owner.Done(), deadline) {
+			return fmt.Errorf("bootstrap cleanup did not join: %w", context.DeadlineExceeded)
+		}
+		if owner.CleanupPending() {
+			releaseErr = errors.Join(releaseErr, errors.New("bootstrap cleanup still owns its native lock"))
+		}
+		// Command failures are diagnostics after positive join. Only the
+		// bootstrap owner's release fault prevents native closure proof.
+		if cause := errors.Unwrap(owner); !errors.Is(cause, ErrInFlight) {
+			releaseErr = errors.Join(releaseErr, fmt.Errorf("bootstrap release failed: %w", cause))
+		}
+	}
+	return releaseErr
+}
+
+// The call scope joins the synchronous caller; the fixture's Client.Close owns
+// the maintenance command that may remain pending after the boolean return.
+type privateMaintenanceCallResult struct{ available bool }
+
+func (privateMaintenanceCallResult) pendingCommand() *Pending { return nil }

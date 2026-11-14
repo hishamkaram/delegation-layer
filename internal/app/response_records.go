@@ -29,6 +29,7 @@ var ErrJSONResponseTooLarge = fmt.Errorf("%w: JSON response exceeds maximum perm
 // rooted paths and availability. Answer bytes are streamed by a future typed
 // result API rather than copied into an unbounded control object.
 type Response struct {
+	ExecutionAssurance     *ExecutionAssuranceObservation `json:"execution_assurance,omitempty"`
 	Connector              *ConnectorResponse             `json:"connector,omitempty"`
 	LastProviderOutputAt   string                         `json:"last_provider_output_at,omitempty"`
 	ProviderOutputActivity *taskdir.OutputActivity        `json:"provider_output_activity,omitempty"`

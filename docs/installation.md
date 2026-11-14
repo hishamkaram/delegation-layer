@@ -201,8 +201,17 @@ Check installed help: prefer `scheduler serve` when available, or use the
 walkthrough's foreground `scheduler run` path for older builds. Use colocated
 `delegate`/`delegate-run` from the same build, without `--runner`, in the intended
 native user context with the selected provider CLI, login and saved workspace
-available. Delegate does not install or register an OS service. Advanced
+available. This scheduler workflow does not install or register an OS service. Advanced
 [legacy OS hosting](cli-reference.md#optional-legacy-os-hosting) remains optional.
+
+## Gateway connection
+
+To make this device available through a trusted self-hosted Gateway, follow
+[Gateway connection](gateway-connect.md). `delegate gateway connect` enrolls the
+device and installs/starts its per-user connector service by default;
+`--foreground` instead runs in the current terminal. This explicit Gateway
+feature does not install a scheduler service or change ordinary SSH/TUI use.
+Approve existing workspace roots separately before remote task admission.
 
 ## Updates
 

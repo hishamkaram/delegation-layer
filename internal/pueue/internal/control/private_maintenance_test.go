@@ -169,16 +169,14 @@ func assertPublishedPrivateSuccessorReplay(t *testing.T, current *Client, stoppe
 func TestPrivateMaintenanceRetainsPendingCommandLock(t *testing.T) {
 	for _, command := range []string{"status", "remove"} {
 		t.Run(command, func(t *testing.T) {
-			fixture := newPrivateSupervisorTestFixture(t)
-			client := bindPrivateForTest(t, fixture.stateRoot, fixture.clientPath, fixture.daemonPath)
+			owner := newPrivateStatusFixture(t)
+			fixture, client := owner.bind(t, context.Background(), Options{ObservationTimeout: DefaultObservationTimeout, SuccessfulCleanupAuthorizer: allowSuccessfulCleanupForTest})
 			row := statusTestJob(0, "finished", statusStreamTestDoneState("Success"))
 			data := statusTestPayload(t, map[string]any{"0": row}, map[string]any{"default": map[string]any{"status": "Running", "parallel_tasks": 0}})
 			if err := os.WriteFile(filepath.Join(fixture.stateRoot, privateSupervisorDirectory, "test-status.json"), data, 0o600); err != nil {
 				t.Fatal(err)
 			}
-			base := canonicalTemp(t)
-			started, release := filepath.Join(base, "started"), filepath.Join(base, "release")
-			defer releasePrivateStatusOnCleanup(t, release)
+			started, release := filepath.Join(owner.base, "started"), owner.releasePath
 			client.options.ObservationTimeout = time.Second
 			prefix := "PRIVATE_" + strings.ToUpper(command)
 			client.options.Environment = append(os.Environ(), prefix+"_STARTED="+started, prefix+"_RELEASE="+release)
@@ -186,6 +184,7 @@ func TestPrivateMaintenanceRetainsPendingCommandLock(t *testing.T) {
 				return PrivateQueueCleanupPlan{RemoveIDs: []int64{0}}, nil
 			}
 			cancel, err := configurePrivateTestParallelismAndMaintain(context.Background(), client)
+			owner.capture(nil, err)
 			if err != nil {
 				t.Fatal(err)
 			}

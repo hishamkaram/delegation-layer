@@ -9,6 +9,7 @@ import (
 	"slices"
 
 	"github.com/hishamkaram/delegation-layer/internal/app/infrastructurehost"
+	"github.com/hishamkaram/delegation-layer/internal/gatewaycommand"
 
 	"github.com/hishamkaram/delegation-layer/internal/supervisor/installation"
 
@@ -28,6 +29,7 @@ import (
 // hermetic acceptance harness. Production leaves hooks and profile selection at
 // their safe defaults; acceptance supplies a compiled finite profile directly.
 type Dependencies struct {
+	Gateway *gatewaycommand.Dependencies
 	// ReportDiagnostic is invocation-scoped; nil preserves CLI logging.
 	ReportDiagnostic func(error)
 	remoteRootPin    *taskdir.RootPin
@@ -182,6 +184,9 @@ func Run(args []string, stdout, stderr io.Writer, deps Dependencies) int {
 		}
 		return 0
 	}
+	if parsed.Command == "gateway" {
+		return runGatewayCLI(context.Background(), parsed, deps, stdout, stderr)
+	}
 	if isRemoteCommand(parsed) {
 		return runRemoteCLI(parsed, deps, stdout, stderr)
 	}
@@ -214,9 +219,8 @@ func Run(args []string, stdout, stderr io.Writer, deps Dependencies) int {
 	return presentCommandResult(parsed, result, stdout, stderr)
 }
 
-// RunContext supplies only the resident scheduler's admission/stop lifetime.
-// An already-owned task invocation settles independently before shutdown joins.
-// Ordinary finite commands keep Run's established lifetime and behavior.
+// RunContext supplies caller cancellation for scheduler hosting and Gateway
+// commands. Task invocations already owned by Delegate settle independently.
 func RunContext(ctx context.Context, args []string, stdout, stderr io.Writer, deps Dependencies) int {
 	parsed, err := ParseArguments(args)
 	if err != nil {
@@ -224,6 +228,9 @@ func RunContext(ctx context.Context, args []string, stdout, stderr io.Writer, de
 	}
 	if parsed.Command == "help" {
 		return presentHelp(parsed, stdout, stderr)
+	}
+	if parsed.Command == "gateway" {
+		return runGatewayCLI(ctx, parsed, deps.withCapturedEnvironmentContext(ctx), stdout, stderr)
 	}
 	if parsed.Command != "scheduler" {
 		return writeCLIError(stderr, errors.New("context execution requires a scheduler command"), 2)
@@ -251,6 +258,7 @@ func argumentUsageErrorFor(args []string, stderr io.Writer, err error) int {
 }
 
 func presentCommandResult(parsed Arguments, result commandResult, stdout, stderr io.Writer) int {
+	result.response = projectConnectorWorkspace(result.response, parsed.Connector.IncludeWorkspaceConstraint || connectorWorkspace(parsed.Connector) != nil)
 	if parsed.JSON {
 		if err := writeJSONResponse(stdout, parsed.Command, &result.response, result.err); err != nil {
 			return scheduleOutputFailure(stderr, result.response, err)

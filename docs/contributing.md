@@ -8,6 +8,9 @@ it on `PATH`, with `GOTOOLCHAIN` unset or `local`. Use Python 3.12, Node.js
 22.13+ on the 22.x line or Node.js 24+, and repository-local pinned tools. Node is
 for installer, plugin and lint compatibility checks; Python is for repository
 tooling and black-box tests, not the Go CLI runtime.
+Linux desktop-portal protocol tests require an installed `dbus-daemon`. They run
+an owned private bus and simulated portal through Native's command owner;
+they do not connect to the user's desktop bus or prove real browser activation.
 Run `make tools` to install the project's tools under ignored `bin/`; it does
 not install Go. For platform checks, `make tools-go tools-node` installs the core
 Go tools and locked JavaScript lint dependencies. Then run `make build`, which

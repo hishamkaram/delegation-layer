@@ -730,6 +730,21 @@ func testPrivateMaintenanceProbe(t *testing.T, acquire func(context.Context, str
 func newMaintenanceProbeFixture(t *testing.T) (privateSupervisorTestFixture, *Client) {
 	t.Helper()
 	fixture, client := supervisorLeaseTestBind(t)
+	seedMaintenanceProbeFixture(t, client)
+	return fixture, client
+}
+
+func newMaintenanceProbeFixtureAtBase(t *testing.T, owner *privateStatusFixture) (privateSupervisorTestFixture, *Client) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	fixture, client := owner.bind(t, ctx, Options{ObservationTimeout: 10 * time.Second})
+	seedMaintenanceProbeFixture(t, client)
+	return fixture, client
+}
+
+func seedMaintenanceProbeFixture(t *testing.T, client *Client) {
+	t.Helper()
 	base := filepath.Dir(client.Binding().ConfigPath)
 	row := statusTestJob(0, "finished", statusStreamTestDoneState("Success"))
 	data := statusTestPayload(t, map[string]any{"0": row}, map[string]any{"default": map[string]any{"status": "Running", "parallel_tasks": 0}})
@@ -739,7 +754,6 @@ func newMaintenanceProbeFixture(t *testing.T) (privateSupervisorTestFixture, *Cl
 	if err := os.WriteFile(filepath.Join(base, "test-record-kill"), nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	return fixture, client
 }
 
 func assertMaintenanceProbeAuthorization(t *testing.T, wantRoot string, wantBinding task.SupervisorRef, ctxErr error, root string, binding task.SupervisorRef, jobs []Job) {

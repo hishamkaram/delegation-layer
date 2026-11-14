@@ -221,14 +221,16 @@ func TestRecoveredPrivateClientCanStopTaskWithOriginalSupervisorReference(t *tes
 }
 
 func TestRecoverPrivateBoundsHungBootstrapAndRetainsLock(t *testing.T) {
-	base := canonicalTemp(t)
+	fixture := newPrivateStatusFixture(t)
+	base := fixture.base
 	stateRoot := filepath.Join(base, "state")
 	writePrivateStateRootRecord(t, stateRoot)
 	clientPath := filepath.Join(base, "pueue")
 	daemonPath := filepath.Join(base, "pueued")
 	writeExecutable(t, clientPath, privateClientFixture)
 	writeExecutable(t, daemonPath, privateDaemonFixture)
-	first, err := BindPrivate(context.Background(), clientPath, daemonPath, stateRoot, Options{PrivateGenerationGuard: allowPrivateGenerationForTest{}, DaemonStartGuard: allowDaemonStartForTest{}, ObservationTimeout: privateTestObservationTimeout})
+	first, err := BindPrivate(context.Background(), clientPath, daemonPath, stateRoot, Options{PrivateGenerationGuard: allowPrivateGenerationForTest{}, DaemonStartGuard: allowDaemonStartForTest{}, ObservationTimeout: privateTestObservationTimeout, DaemonWaitOwner: fixture})
+	fixture.capture(first, err)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -238,22 +240,23 @@ func TestRecoverPrivateBoundsHungBootstrapAndRetainsLock(t *testing.T) {
 	removePrivateTestPID(t, stateRoot)
 
 	startedMarker := filepath.Join(base, "status-started")
-	releaseMarker := filepath.Join(base, "status-release")
+	releaseMarker := fixture.releasePath
 	options := Options{
 		PrivateGenerationGuard: allowPrivateGenerationForTest{},
 		DaemonStartGuard:       allowDaemonStartForTest{},
 		// Leave enough time for recovery's version preflight to finish
 		// before the deliberately blocked status command consumes the budget.
 		ObservationTimeout: time.Second,
+		DaemonWaitOwner:    fixture,
 		Environment: append(
 			os.Environ(),
 			"PRIVATE_STATUS_STARTED="+startedMarker,
 			"PRIVATE_STATUS_RELEASE="+releaseMarker,
 		),
 	}
-	defer releasePrivateStatusOnCleanup(t, releaseMarker)
 	started := time.Now()
 	recovery, err := AttemptPrivateRecovery(context.Background(), stateRoot, first.Binding(), clientPath, daemonPath, options)
+	fixture.capture(recovery.Client(), err)
 	assertPrivateRecoveryHasNoResult(t, recovery)
 	if err == nil {
 		t.Fatalf("hung private bootstrap lost its operational error: result=%+v err=%v", recovery, err)

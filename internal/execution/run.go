@@ -15,9 +15,12 @@ import (
 )
 
 type invocation struct {
-	interaction         *interactiveInvocation
-	td                  *taskdir.TaskDir
-	cmd                 *exec.Cmd
+	interaction *interactiveInvocation
+	td          *taskdir.TaskDir
+	cmd         *exec.Cmd
+	// Only the native Start callback writes this disposition. Custody and
+	// control errors returned afterward cannot revoke its Wait ownership.
+	commandStarted      bool
 	stdin               *os.File
 	stdout              *capture
 	stderr              *capture
@@ -152,13 +155,14 @@ func prepareLaunchPlan(i *invocation, request *task.TaskRecord, plan Plan, opts 
 
 func finishInvocation(i *invocation, plan Plan, startErr error, opts Options) (result Result) {
 	parentErr := i.closeParents(startErr, opts)
-	if startErr == nil {
+	if i.commandStarted {
 		result.ReceiptError = recordStart(i.td, i, plan, opts)
+		result.Error = startErr
 	}
 	if i.interaction != nil {
 		i.interaction.start(i.budget, opts.clock(), startErr)
 	}
-	result.Error = errors.Join(parentErr, i.finishCaptures(startErr, opts))
+	result.Error = errors.Join(result.Error, parentErr, i.finishCaptures(opts))
 	if i.interaction == nil {
 		i.budget.complete(opts)
 	}
@@ -351,22 +355,27 @@ func (i *invocation) prepareLaunchFiles(plan Plan) ([]string, error) {
 }
 
 func (i *invocation) start(opts Options) error {
-	start := func() error { return opts.start(i.cmd) }
+	nativeStart := func() error {
+		err := opts.start(i.cmd)
+		i.commandStarted = err == nil
+		return err
+	}
+	start := nativeStart
 	if opts.project != nil {
 		start = func() error {
-			return opts.project.WithProjectDirectory(i.budget.workContext, func(directory *os.File, expected task.DirectoryIdentity) error {
+			return opts.project.WithProjectDirectory(i.budget.workContext, func(directory *os.File, launch task.ProjectLaunchContext) error {
 				lifetime, supported := opts.Lifetime.(ProjectLifetime)
 				if !supported {
 					return task.ErrInvalidPermit
 				}
-				return lifetime.StartProjectCommand(i.cmd, directory, expected, func() error { return opts.start(i.cmd) })
+				return lifetime.StartProjectCommand(i.cmd, directory, launch, nativeStart)
 			})
 		}
 	} else if opts.Lifetime != nil {
-		start = func() error { return opts.Lifetime.StartCommand(i.cmd, func() error { return opts.start(i.cmd) }) }
+		start = func() error { return opts.Lifetime.StartCommand(i.cmd, nativeStart) }
 	}
 	err := i.budget.authorizeAndStart(opts, start)
-	if err == nil {
+	if i.commandStarted {
 		i.budget.providerStarted()
 		opts.emit("started")
 		go func() {
@@ -377,6 +386,9 @@ func (i *invocation) start(opts Options) error {
 		}()
 	} else {
 		opts.emit("start-failed")
+		if err == nil {
+			err = task.ErrEvidenceFault
+		}
 	}
 	return err
 }
@@ -400,13 +412,13 @@ func (i *invocation) closeParents(startErr error, opts Options) error {
 	return errors.Join(diagnosticErr, parentErr)
 }
 
-func (i *invocation) finishCaptures(startErr error, opts Options) error {
+func (i *invocation) finishCaptures(opts Options) error {
 	var waitErr error
-	if startErr == nil {
+	if i.commandStarted {
 		waitErr = <-i.wait
 	}
 	var lifetimeErr error
-	if startErr == nil && opts.Lifetime != nil {
+	if i.commandStarted && opts.Lifetime != nil {
 		lifetimeErr = opts.Lifetime.FinishCommand(context.Background(), i.cmd)
 	}
 	stdoutErr, stderrErr := <-i.stdout.done, <-i.stderr.done

@@ -411,7 +411,8 @@ func TestRestorePrivateSupervisorBindingHonorsCanceledContext(t *testing.T) {
 }
 
 func TestBindPrivateBoundsSlowReadinessBeforeReturning(t *testing.T) {
-	base := canonicalTemp(t)
+	fixture := newPrivateStatusFixture(t)
+	base := fixture.base
 	stateRoot := filepath.Join(base, "state")
 	writePrivateStateRootRecord(t, stateRoot)
 	privateBase := filepath.Join(stateRoot, privateSupervisorDirectory)
@@ -427,8 +428,7 @@ func TestBindPrivateBoundsSlowReadinessBeforeReturning(t *testing.T) {
 	writeExecutable(t, daemonPath, privateDaemonFixture)
 	seedPrivateDaemonIdentity(t, privateBase, clientPath, daemonPath)
 	startedMarker := filepath.Join(base, "status-started")
-	releaseMarker := filepath.Join(base, "status-release")
-	defer releasePrivateStatusOnCleanup(t, releaseMarker)
+	releaseMarker := fixture.releasePath
 	options := Options{
 		PrivateGenerationGuard: allowPrivateGenerationForTest{},
 		DaemonStartGuard:       allowDaemonStartForTest{},
@@ -436,6 +436,7 @@ func TestBindPrivateBoundsSlowReadinessBeforeReturning(t *testing.T) {
 		// executable probe a normal process-start window so scheduler load cannot
 		// turn this into a version-probe test.
 		ObservationTimeout: time.Second,
+		DaemonWaitOwner:    fixture,
 		Environment: append(
 			os.Environ(),
 			"PRIVATE_STATUS_STARTED="+startedMarker,
@@ -456,6 +457,7 @@ func TestBindPrivateBoundsSlowReadinessBeforeReturning(t *testing.T) {
 		t.Fatalf("private bootstrap deadline = %s, want seven observation windows in [%s, %s]", deadline, deadlineLowerBound, deadlineUpperBound)
 	}
 	client, err := BindPrivate(context.Background(), clientPath, daemonPath, stateRoot, options)
+	fixture.capture(client, err)
 	if err == nil || client != nil {
 		t.Fatalf("slow readiness unexpectedly completed: client_present=%t err=%v", client != nil, err)
 	}

@@ -98,10 +98,23 @@ def _state_root_identity(state: Path, label: str) -> tuple[str, tuple[datetime, 
     root = _read_control_record(state / "root.json", label)
     _exact_keys(root, {"schema_version", "root_id", "created_at"}, {"required_features"}, label=label)
     features = root.get("required_features", [])
-    require(isinstance(features, list) and all(
-        isinstance(feature, str) and feature in ("namespace-admission-v1", "namespace-mutation-lease-v1")
+    if not isinstance(features, list):
+        raise AcceptanceFailure(f"{label} has unsupported required features")
+    require(all(
+        isinstance(feature, str) and feature in (
+            "namespace-admission-v1", "namespace-mutation-lease-v1",
+            "workspace-constrained-connector-v1",
+            "connector-path-project-v1",
+        )
         for feature in features
     ), f"{label} has unsupported required features")
+    require("workspace-constrained-connector-v1" not in features or (
+        "namespace-admission-v1" in features and "namespace-mutation-lease-v1" in features
+    ), f"{label} workspace constraint requires connector namespace features")
+    require("connector-path-project-v1" not in features or (
+        "namespace-admission-v1" in features and "namespace-mutation-lease-v1" in features
+        and "workspace-constrained-connector-v1" in features
+    ), f"{label} path project requires connector namespace and workspace features")
     require(type(root.get("schema_version")) is int and root["schema_version"] == 1,
             f"{label} schema mismatch")
     created_at = _canonical_timestamp(root.get("created_at"), f"{label} created_at")

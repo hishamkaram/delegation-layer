@@ -78,11 +78,12 @@ type Lifetime interface {
 }
 
 // ProjectLifetime starts through the same native guardian while borrowing the
-// physical directory retained by the task's start permit. The caller keeps
-// ownership of directory and of the command's sole Wait.
+// start permit's directory observation and immutable binding. The caller keeps
+// ownership of directory and of the command's sole Wait; a path-bound child
+// selects its current directory after guardian authorization.
 type ProjectLifetime interface {
 	Lifetime
-	StartProjectCommand(*exec.Cmd, *os.File, task.DirectoryIdentity, func() error) error
+	StartProjectCommand(*exec.Cmd, *os.File, task.ProjectLaunchContext, func() error) error
 }
 
 type budgetRequestContextKey struct{}

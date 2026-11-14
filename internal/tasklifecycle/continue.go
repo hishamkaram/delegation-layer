@@ -63,6 +63,8 @@ func ContinueContext(ctx context.Context, request DispatchRequest, options Conti
 	if err != nil {
 		return continuationFailure(result, ContinueValidation, "validate-continuation", err)
 	}
+	successorRecord.Origin = successor.Origin.Clone()
+	successorRecord.ConnectorContext = successor.ConnectorContext.Clone()
 	if _, err = admissioncore.ValidateContinuation(options.Dispatch.staticAdmission(), root, *predecessor, *meta, prior, successorRecord); err != nil {
 		return continuationFailure(result, ContinueValidation, "validate-continuation", err)
 	}

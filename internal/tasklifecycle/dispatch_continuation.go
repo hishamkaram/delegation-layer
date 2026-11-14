@@ -43,6 +43,11 @@ func prepareDispatchContinuationContext(ctx context.Context, store *taskdir.Stor
 	if err != nil {
 		return options, nil, err
 	}
+	binding, err := admissioncore.ContinuationConnectorContext(predecessor.ConnectorContext, request.ConnectorContext)
+	if err != nil {
+		return options, nil, withContinuationFailure(ContinuationValidationFailed, err)
+	}
+	request.ConnectorContext = binding
 	if request.RequestedConfig.OutputSilenceTimeout == "" {
 		request.RequestedConfig.OutputSilenceTimeout = predecessor.RequestedConfig.OutputSilenceTimeout
 	}

@@ -258,11 +258,13 @@ func probeScopeTestPublishedBinding(t *testing.T, stateRoot string, want task.Su
 }
 
 func TestProbePrivateGateRetainsLeaseForPendingStatus(t *testing.T) {
-	fixture, _ := supervisorLeaseTestBind(t)
-	base := canonicalTemp(t)
-	started, release := filepath.Join(base, "started"), filepath.Join(base, "release")
-	defer releasePrivateStatusOnCleanup(t, release)
-	client, ready, err := ProbePrivateWithGate(t.Context(), fixture.clientPath, fixture.daemonPath, fixture.stateRoot, Options{PrivateGenerationGuard: allowPrivateGenerationForTest{}, DaemonStartGuard: allowDaemonStartForTest{}, ObservationTimeout: 10 * time.Second}, func(ctx context.Context, current *Client, _ QueueSnapshot) (bool, error) {
+	owner := newPrivateStatusFixture(t)
+	ctx, cancelBind := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancelBind()
+	fixture, _ := owner.bind(t, ctx, Options{ObservationTimeout: 10 * time.Second})
+	started, release := filepath.Join(owner.base, "started"), owner.releasePath
+	client, ready, err := ProbePrivateWithGate(t.Context(), fixture.clientPath, fixture.daemonPath, fixture.stateRoot, Options{PrivateGenerationGuard: allowPrivateGenerationForTest{}, DaemonStartGuard: allowDaemonStartForTest{}, ObservationTimeout: 10 * time.Second, DaemonWaitOwner: owner}, func(ctx context.Context, current *Client, _ QueueSnapshot) (bool, error) {
+		owner.capture(current, nil)
 		faultContext, cancel := context.WithCancel(ctx)
 		defer cancel()
 		current.options.Environment = append(os.Environ(), "PRIVATE_STATUS_STARTED="+started, "PRIVATE_STATUS_RELEASE="+release)
@@ -274,6 +276,7 @@ func TestProbePrivateGateRetainsLeaseForPendingStatus(t *testing.T) {
 		_, statusErr := current.Snapshot(faultContext)
 		return statusErr == nil, statusErr
 	})
+	owner.capture(client, err)
 	pending := pendingFrom(err)
 	if client != nil || ready || pending == nil {
 		t.Fatalf("gate lost its pending status command: client=%v ready=%t err=%v", client, ready, err)

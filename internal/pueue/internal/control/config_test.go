@@ -149,11 +149,20 @@ func privateConfig(t *testing.T, base string) []byte {
 
 func canonicalTemp(t *testing.T) string {
 	t.Helper()
+	return canonicalTempWithRetention(t, nil)
+}
+
+func canonicalTempWithRetention(t *testing.T, retained *bool) string {
+	t.Helper()
 	dir, err := os.MkdirTemp("/tmp", "py-")
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
+		if retained != nil && *retained {
+			t.Logf("retained private supervisor fixture after unresolved closure: %s", dir)
+			return
+		}
 		if cleanupErr := os.RemoveAll(dir); cleanupErr != nil {
 			t.Error(cleanupErr)
 		}

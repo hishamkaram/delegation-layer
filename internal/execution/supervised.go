@@ -66,15 +66,15 @@ func (s PreflightScope) StartCommand(cmd *exec.Cmd, start func() error) error {
 	}
 	if s.project != nil {
 		return s.Start(func() error {
-			return s.project.WithProjectDirectory(s.ctx, func(directory *os.File, identity task.DirectoryIdentity) error {
-				if cmd.Dir != identity.Path {
+			return s.project.WithProjectDirectory(s.ctx, func(directory *os.File, launch task.ProjectLaunchContext) error {
+				if cmd.Dir != launch.Binding.Project.Path {
 					return s.lifetime.StartCommand(cmd, start)
 				}
 				lifetime, supported := s.lifetime.(ProjectLifetime)
 				if !supported {
 					return task.ErrInvalidPermit
 				}
-				return lifetime.StartProjectCommand(cmd, directory, identity, start)
+				return lifetime.StartProjectCommand(cmd, directory, launch, start)
 			})
 		})
 	}
