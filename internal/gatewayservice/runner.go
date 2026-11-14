@@ -37,6 +37,8 @@ func (r NativeRunner) Run(ctx context.Context, executable string, args []string)
 		return Result{}, errors.Join(ErrConfiguration, err)
 	}
 	command := exec.Command(executable, slices.Clone(args)...)
+	// OS controls use explicit arguments and a stable absolute directory.
+	command.Dir = "/"
 	command.Env = slices.Clone(r.environment)
 	stdout := &boundedOutput{}
 	command.Stdout = stdout
