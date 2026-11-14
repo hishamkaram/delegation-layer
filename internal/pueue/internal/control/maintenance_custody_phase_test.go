@@ -265,23 +265,25 @@ func replacePrivateRowLabel(t *testing.T, root string) error {
 // unattempted and the generation lease held until its exact Wait. The owner
 // then resumes the same generation to completion.
 func TestScheduledPrivateMaintenancePendingRemovalRetainsLeaseAfterCustody(t *testing.T) {
-	fixture, client := newMaintenanceProbeFixture(t)
+	owner := newPrivateStatusFixture(t)
+	fixture, client := newMaintenanceProbeFixtureAtBase(t, owner)
 	client.options.SuccessfulCleanupAuthorizer = privateTerminalTriggerCleanupAuthorizer
 	var custodyCalls atomic.Int32
 	client.options.PrivateTerminalCustodyReleaser = func(context.Context, string, task.SupervisorRef, PrivateTerminalCustodyScope) error {
 		custodyCalls.Add(1)
 		return nil
 	}
-	gate := canonicalTemp(t)
-	started, release := filepath.Join(gate, "remove-started"), filepath.Join(gate, "remove-release")
-	defer releasePrivateStatusOnCleanup(t, release)
+	started, release := filepath.Join(owner.base, "remove-started"), owner.releasePath
 	client.options.ObservationTimeout = 100 * time.Millisecond
 	client.options.Environment = append(os.Environ(), "PRIVATE_REMOVE_STARTED="+started, "PRIVATE_REMOVE_RELEASE="+release)
 	if _, err := requestPrivateQueueMaintenance(t.Context(), fixture.stateRoot); err != nil {
 		t.Fatal(err)
 	}
-	done := make(chan bool, 1)
-	go func() { done <- client.RunRequestedPrivateQueueMaintenance(t.Context()) }()
+	scope := newTestCallScope(t, client.options)
+	scope.onRelease(func() { releasePrivateStatusOnCleanup(t, release) })
+	call := startTestCall(scope, func() privateMaintenanceCallResult {
+		return privateMaintenanceCallResult{available: client.RunRequestedPrivateQueueMaintenance(t.Context())}
+	})
 	waitForPrivateFixtureMarker(t, started)
 	time.Sleep(3 * client.options.ObservationTimeout)
 	supervisorLeaseTestBlocked(t, fixture.stateRoot, WithBootstrapLock)
@@ -290,8 +292,8 @@ func TestScheduledPrivateMaintenancePendingRemovalRetainsLeaseAfterCustody(t *te
 	}
 	releasePrivateStatus(t, release)
 	select {
-	case ran := <-done:
-		if !ran {
+	case <-call.done:
+		if !call.result.available {
 			t.Fatal("private maintenance was not run")
 		}
 	case <-time.After(20 * time.Second):

@@ -22,7 +22,14 @@ func legacyDaemonExecutable(t *testing.T, path string) string {
 
 func newPrivateSupervisorTestFixture(t *testing.T) privateSupervisorTestFixture {
 	t.Helper()
-	base, stateRoot := newPrivateSupervisorTestRoots(t)
+	return newPrivateSupervisorTestFixtureAtBase(t, canonicalTemp(t))
+}
+
+// The caller owns base and must join its clients and daemon waits before removal.
+func newPrivateSupervisorTestFixtureAtBase(t *testing.T, base string) privateSupervisorTestFixture {
+	t.Helper()
+	stateRoot := filepath.Join(base, "state")
+	writePrivateStateRootRecord(t, stateRoot)
 	fixture := privateSupervisorTestFixture{
 		stateRoot:  stateRoot,
 		clientPath: filepath.Join(base, "pueue"),

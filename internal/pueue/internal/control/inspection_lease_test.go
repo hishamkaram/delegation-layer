@@ -6,13 +6,15 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestReconcileInspectionRetainsLeaseForPendingStatus(t *testing.T) {
-	fixture, client := supervisorLeaseTestBind(t)
-	base := canonicalTemp(t)
-	started, release := filepath.Join(base, "started"), filepath.Join(base, "release")
-	defer releasePrivateStatusOnCleanup(t, release)
+	owner := newPrivateStatusFixture(t)
+	ctx, cancelBind := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancelBind()
+	fixture, client := owner.bind(t, ctx, Options{ObservationTimeout: 10 * time.Second})
+	started, release := filepath.Join(owner.base, "started"), owner.releasePath
 
 	faultContext, cancel := context.WithCancel(t.Context())
 	defer cancel()
@@ -24,6 +26,7 @@ func TestReconcileInspectionRetainsLeaseForPendingStatus(t *testing.T) {
 	}
 	identity := InspectionIdentity{RootID: strings.Repeat("a", 32), TaskID: strings.Repeat("b", 32)}
 	observation, err := client.ReconcileInspection(faultContext, identity)
+	owner.capture(nil, err)
 	pending := pendingFrom(err)
 	if pending == nil || observation.Pending != pending {
 		t.Fatalf("reconciliation lost its pending status command: observation=%+v err=%v", observation, err)
