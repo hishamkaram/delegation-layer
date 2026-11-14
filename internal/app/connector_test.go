@@ -456,11 +456,11 @@ func TestConnectorPublicRejectedCollectDiagnosticKeepsHealthyResolve(t *testing.
 	f := newConnectorFixture(t)
 	diagnostic := task.ProviderAuthenticationFailureDiagnostic()
 	spec, meta := sealConnectorRejectedDiagnostic(t, f, diagnostic)
-	collected, code := f.public(t, "collect", f.request.TaskID, "--expected-spec-sha256", spec)
+	collected, code := f.public(t, "collect", f.request.TaskID, "--expected-spec-sha256", spec, "--watch", "0s")
 	requireConnectorRejectedCollection(t, f, collected, code, spec, meta, diagnostic)
 	// A second public collection needs the first call's collection and context
 	// leases released. This fixture has no provider session or guardian closure.
-	replayed, code := f.public(t, "collect", f.request.TaskID, "--expected-spec-sha256", spec)
+	replayed, code := f.public(t, "collect", f.request.TaskID, "--expected-spec-sha256", spec, "--watch", "0s")
 	if code != 4 || replayed.Error != collected.Error || replayed.Publication != collected.Publication || !reflect.DeepEqual(replayed.Outcome, collected.Outcome) || !reflect.DeepEqual(replayed.Failure, collected.Failure) || !reflect.DeepEqual(replayed.Payload, collected.Payload) || !slices.Equal(replayed.Diagnostics, collected.Diagnostics) {
 		t.Fatalf("same-task rejected collection changed its immutable winner or diagnostic: code=%d response=%+v", code, replayed)
 	}
