@@ -111,7 +111,9 @@ func supervisorStatus(root string, deps Dependencies, response Response) (result
 		return supervisorUpgradeStatus(controlContext, store, deps, options, response, observed)
 	}
 	result = supervisorStatusFromStore(controlContext, root, deps, options, response, store)
-	applyMaintenanceGuidance(result.response.SupervisorControl)
+	if result.code == 0 && result.err == nil {
+		applyMaintenanceGuidance(result.response.SupervisorControl)
+	}
 	return result
 }
 
@@ -190,11 +192,14 @@ func supervisorStatusWithoutInspectionGroup(ctx context.Context, root string, de
 	current := currentOwner.Client()
 	logicalDrift, err := pueue.PrivateSupervisorLogicalDrift(root, current.Binding())
 	if err != nil {
-		return failedSupervisor(response, "private supervisor identity could not be inspected", 1)
+		return failedSupervisorCause(response, "private supervisor identity could not be inspected", err, 1)
 	}
 	ready, readyErr := current.Reachable(ctx)
 	cleanupCause = readyErr
-	if readyErr == nil && !ready {
+	if readyErr != nil {
+		return privateStatusUnavailable(response, logicalDrift, false, readyErr)
+	}
+	if !ready {
 		saved, found, savedErr := pueue.ReadPrivateSupervisorBinding(root)
 		if savedErr != nil {
 			return failedSupervisorCause(response, "private supervisor identity could not be inspected", savedErr, 1)
@@ -204,18 +209,20 @@ func supervisorStatusWithoutInspectionGroup(ctx context.Context, root string, de
 			response.SupervisorControl.NextAction = "run_supervisor_migrate"
 			return legacySupervisorWorkStatus(ctx, root, options, response, saved, current.Binding().ClientExecutable)
 		}
-	}
-	if readyErr != nil || !ready {
-		return privateStatusUnavailable(response, logicalDrift, false, readyErr)
+		return privateStatusUnavailable(response, logicalDrift, false, nil)
 	}
 	response.SupervisorControl.State = supervisorStatusState(logicalDrift, true)
 	response.SupervisorControl.LegacyReachability = "ready"
 	snapshot, snapshotErr := current.Snapshot(ctx)
 	if snapshotErr != nil {
 		cleanupCause = snapshotErr
-		return failedSupervisor(response, "private supervisor status could not be read", 1)
+		return failedSupervisorCause(response, "private supervisor status could not be read", snapshotErr, 1)
 	}
-	if err := observeSupervisorMaintenance(ctx, store, current.Binding(), snapshot.Jobs, response.SupervisorControl); err != nil {
+	maintenanceBinding, bindingErr := supervisorMaintenanceBinding(root, current.Binding())
+	if bindingErr != nil {
+		return failedSupervisorCause(response, "private supervisor identity could not be inspected", bindingErr, 1)
+	}
+	if err := observeSupervisorMaintenance(ctx, store, maintenanceBinding, snapshot.Jobs, response.SupervisorControl); err != nil {
 		return failedSupervisorCause(response, "private supervisor maintenance could not be inspected", err, 1)
 	}
 	if !logicalDrift {
@@ -504,6 +511,19 @@ func currentPrivateSupervisor(ctx context.Context, root string, deps Dependencie
 		return nil, err
 	}
 	return pueue.Bind(ctx, clientExecutable, pueue.PrivateConfigPath(root), options)
+}
+
+// Canonical generation metadata owns maintenance attribution. A generic
+// transport may observe the same logical endpoint without every recorded role.
+func supervisorMaintenanceBinding(root string, observed task.SupervisorRef) (task.SupervisorRef, error) {
+	published, found, err := pueue.ReadPrivateSupervisorBinding(root)
+	if err != nil {
+		return task.SupervisorRef{}, err
+	}
+	if found && task.SameSupervisorIdentity(published, observed) {
+		return published, nil
+	}
+	return observed, nil
 }
 
 func prepareCurrentPrivateSupervisor(ctx context.Context, root string, lookup installation.ExecutableLookup, options pueue.Options) (*pueue.Client, error) {
