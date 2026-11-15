@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	schedulercontract "github.com/hishamkaram/delegation-layer/internal/scheduler/contract"
+	"github.com/hishamkaram/delegation-layer/internal/supervisor"
 	"github.com/hishamkaram/delegation-layer/internal/tasklifecycle"
 
 	"github.com/hishamkaram/delegation-layer/internal/task"
@@ -143,14 +144,18 @@ type SupervisorResponse = tasklifecycle.SupervisorObservation
 // SupervisorControlResponse describes Delegate-owned supervisor recovery
 // without exposing executable paths, socket paths, or process diagnostics.
 type SupervisorControlResponse struct {
-	Action             string                            `json:"action"`
-	State              string                            `json:"state"`
-	LegacyReachability string                            `json:"legacy_reachability"`
-	ActiveWork         string                            `json:"active_work"`
-	MigrationPhase     string                            `json:"migration_phase,omitempty"`
-	NextAction         string                            `json:"next_action"`
-	ReasonCode         string                            `json:"reason_code,omitempty"`
-	RuntimeRestart     *SupervisorRuntimeRestartResponse `json:"runtime_restart,omitempty"`
+	MigrationReadiness   string                            `json:"migration_readiness,omitempty"`
+	FirstBlocker         *supervisor.MaintenanceBlocker    `json:"first_blocker,omitempty"`
+	ObservedAt           string                            `json:"observed_at,omitempty"`
+	DiagnosticSnapshotAt string                            `json:"diagnostic_snapshot_at,omitempty"`
+	Action               string                            `json:"action"`
+	State                string                            `json:"state"`
+	LegacyReachability   string                            `json:"legacy_reachability"`
+	ActiveWork           string                            `json:"active_work"`
+	MigrationPhase       string                            `json:"migration_phase,omitempty"`
+	NextAction           string                            `json:"next_action"`
+	ReasonCode           string                            `json:"reason_code,omitempty"`
+	RuntimeRestart       *SupervisorRuntimeRestartResponse `json:"runtime_restart,omitempty"`
 }
 
 type StopResponse struct {

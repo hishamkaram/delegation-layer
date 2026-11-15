@@ -33,8 +33,8 @@ func TestLegacyActiveWorkIncludesUnsafeJobStates(t *testing.T) {
 	if got := legacyActiveWork(pueue.QueueSnapshot{Jobs: []pueue.Job{{Group: "default", State: pueue.StateRunning}}}); got != "present" {
 		t.Fatalf("running ordinary work was not reported: %q", got)
 	}
-	if got := legacyActiveWork(pueue.QueueSnapshot{Jobs: []pueue.Job{{Group: "default", State: pueue.StateUnknown}}}); got != "present" {
-		t.Fatalf("unknown legacy work was treated as safe: %q", got)
+	if got := legacyActiveWork(pueue.QueueSnapshot{Jobs: []pueue.Job{{Group: "default", State: pueue.StateUnknown}}}); got != "unknown" {
+		t.Fatalf("unknown legacy work was reported as observed activity: %q", got)
 	}
 	if got := legacyActiveWork(pueue.QueueSnapshot{Jobs: []pueue.Job{{Group: "default", State: pueue.StateEnded}}}); got != "none" {
 		t.Fatalf("ended work was reported as active: %q", got)

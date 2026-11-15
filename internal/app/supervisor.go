@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/hishamkaram/delegation-layer/internal/supervisor/infrastructure"
@@ -34,77 +33,16 @@ func authorizePrivateMigrationQueue(ctx context.Context, stateRoot string, legac
 	if ctx == nil {
 		return context.Canceled
 	}
-	if err := ctx.Err(); err != nil {
-		return err
-	}
 	var store *taskdir.Store
-	defer func() {
-		if store != nil {
-			resultErr = errors.Join(resultErr, store.Close())
-		}
-	}()
-	if err := rejectAmbiguousPrivateMigrationLabels(ctx, stateRoot, &store, supervisorcore.PrivateQueueLabelCounts(jobs)); err != nil {
+	if err := openPrivateMigrationStore(ctx, stateRoot, &store); err != nil {
 		return err
 	}
-	for _, job := range jobs {
-		if err := authorizePrivateMigrationJob(ctx, stateRoot, legacy, &store, job); err != nil {
-			return err
-		}
+	defer func() { resultErr = errors.Join(resultErr, store.Close()) }()
+	_, err := privateCleanupOwner().InspectMigrationQueue(ctx, store, supervisorcore.InspectionGroup(store.RootID, legacy), jobs)
+	if err != nil && !supervisorcore.MaintenanceBusy(err) {
+		return errors.Join(pueue.ErrPrivateSupervisorMigrationRequired, err)
 	}
-	return nil
-}
-
-func rejectAmbiguousPrivateMigrationLabels(ctx context.Context, stateRoot string, store **taskdir.Store, counts map[string]int) error {
-	for label, count := range counts {
-		if count <= 1 || (!strings.HasPrefix(label, "delegate:") && !strings.HasPrefix(label, "delegation-inspection-")) {
-			continue
-		}
-		if err := openPrivateMigrationStore(ctx, stateRoot, store); err != nil {
-			return err
-		}
-		_, managed, _, labelErr := supervisorcore.LegacyJobTaskID(label, (*store).RootID)
-		if labelErr != nil || managed {
-			return fmt.Errorf("%w: duplicate Delegate supervisor label", pueue.ErrPrivateSupervisorMigrationRequired)
-		}
-	}
-	return nil
-}
-
-func authorizePrivateMigrationJob(ctx context.Context, stateRoot string, legacy task.SupervisorRef, store **taskdir.Store, job pueue.Job) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	if privateMigrationJobActive(job) {
-		return pueue.ErrPrivateSupervisorMigrationBusy
-	}
-	if job.State != pueue.StateEnded {
-		return nil
-	}
-	return authorizeEndedPrivateMigrationJob(ctx, stateRoot, legacy, store, job)
-}
-
-func privateMigrationJobActive(job pueue.Job) bool {
-	switch job.State {
-	case pueue.StateQueued, pueue.StateStashed, pueue.StateRunning, pueue.StateUnknown:
-		return true
-	case pueue.StateEnded:
-		return false
-	default:
-		return false
-	}
-}
-
-func authorizeEndedPrivateMigrationJob(ctx context.Context, stateRoot string, legacy task.SupervisorRef, store **taskdir.Store, job pueue.Job) error {
-	if job.Label == nil || (!strings.HasPrefix(*job.Label, "delegate:") && !strings.HasPrefix(*job.Label, "delegation-inspection-")) {
-		return nil
-	}
-	if err := openPrivateMigrationStore(ctx, stateRoot, store); err != nil {
-		return err
-	}
-	if err := inspectLegacyEndedJob(ctx, *store, supervisorcore.InspectionGroup((*store).RootID, legacy), job); err != nil {
-		return fmt.Errorf("%w: %w", pueue.ErrPrivateSupervisorMigrationRequired, err)
-	}
-	return nil
+	return err
 }
 
 func openPrivateMigrationStore(ctx context.Context, stateRoot string, store **taskdir.Store) error {
@@ -166,7 +104,9 @@ func supervisorStatus(root string, deps Dependencies, response Response) (result
 	}
 	defer func() { mergeCommandClose(&result, store.Close) }()
 	response.RootID = store.RootID
-	return supervisorStatusFromStore(controlContext, root, deps, options, response, store)
+	result = supervisorStatusFromStore(controlContext, root, deps, options, response, store)
+	applyMaintenanceGuidance(result.response.SupervisorControl)
+	return result
 }
 
 func supervisorStatusFromStore(ctx context.Context, root string, deps Dependencies, options pueue.Options, response Response, store *taskdir.Store) commandResult {
@@ -245,11 +185,6 @@ func supervisorStatusWithoutInspectionGroup(ctx context.Context, root string, de
 	if readyErr != nil || !ready {
 		return privateStatusUnavailable(response, logicalDrift, false, readyErr)
 	}
-	if !logicalDrift {
-		if result, done := supervisorAdmissionStatus(ctx, store, deps, options, response, false); done {
-			return result
-		}
-	}
 	response.SupervisorControl.State = supervisorStatusState(logicalDrift, true)
 	response.SupervisorControl.LegacyReachability = "ready"
 	snapshot, snapshotErr := current.Snapshot(ctx)
@@ -257,7 +192,14 @@ func supervisorStatusWithoutInspectionGroup(ctx context.Context, root string, de
 		cleanupCause = snapshotErr
 		return failedSupervisor(response, "private supervisor status could not be read", 1)
 	}
-	response.SupervisorControl.ActiveWork = legacyActiveWork(snapshot)
+	if err := observeSupervisorMaintenance(ctx, store, current.Binding(), snapshot.Jobs, response.SupervisorControl); err != nil {
+		return failedSupervisorCause(response, "private supervisor maintenance could not be inspected", err, 1)
+	}
+	if !logicalDrift {
+		if result, done := supervisorAdmissionStatus(ctx, store, deps, options, response, false); done {
+			return result
+		}
+	}
 	response.SupervisorControl.NextAction = readySupervisorNextAction(logicalDrift, response.SupervisorControl.ActiveWork)
 	return commandResult{response: response, code: 0}
 }
@@ -351,9 +293,9 @@ func supervisorLegacyStatus(ctx context.Context, root string, deps Dependencies,
 			cleanupCause = snapshotErr
 			return failedSupervisor(response, "private supervisor status could not be read", 1)
 		}
-		response.SupervisorControl.ActiveWork = legacyActiveWork(snapshot)
-	}
-	if currentMatches && currentReady {
+		if err := observeSupervisorMaintenance(ctx, store, legacy.Supervisor, snapshot.Jobs, response.SupervisorControl); err != nil {
+			return failedSupervisorCause(response, "private supervisor maintenance could not be inspected", err, 1)
+		}
 		if result, done := supervisorAdmissionStatus(ctx, store, deps, options, response, migrated); done {
 			return result
 		}
@@ -492,7 +434,9 @@ func legacySupervisorWorkStatus(ctx context.Context, root string, options pueue.
 		cleanupCause = snapshotErr
 		return failedSupervisor(response, "legacy supervisor status could not be read", 1)
 	}
-	response.SupervisorControl.ActiveWork = legacyActiveWork(snapshot)
+	if err := observeSupervisorMaintenanceAtRoot(ctx, root, legacy, snapshot.Jobs, response.SupervisorControl); err != nil {
+		return failedSupervisorCause(response, "legacy supervisor maintenance could not be inspected", err, 1)
+	}
 	if response.SupervisorControl.ActiveWork == "none" {
 		response.SupervisorControl.NextAction = "run_supervisor_migrate"
 	} else {
@@ -577,13 +521,72 @@ func supervisorMigrate(root string, deps Dependencies, response Response) (resul
 	}
 	runtime := supervisorcore.ControlRuntime{Options: options, Lookup: deps.supervisorLookup(), Routing: deps.infrastructureRouting()}
 	_, report, err := runtime.MigrateOwn(controlContext, store)
-	return finishRoutedSupervisorMigration(response, report, err)
+	result = finishRoutedSupervisorMigration(response, report, err)
+	if err != nil {
+		diagnostic := supervisorMaintenanceDiagnostic(controlContext, store, deps, options)
+		result = finishSupervisorDiagnostic(result, diagnostic, err)
+	}
+	return result
+}
+
+// This later snapshot observes only the saved queue and maintenance evidence.
+// Admission readiness and installation preparation are independent contracts.
+func supervisorMaintenanceDiagnostic(ctx context.Context, store *taskdir.Store, deps Dependencies, options pueue.Options) (result commandResult) {
+	response := newSupervisorCommandResponse("status")
+	control := response.SupervisorControl
+	defer func() { control.ObservedAt = time.Now().UTC().Format(time.RFC3339Nano) }()
+	binding, found, err := pueue.ReadPrivateSupervisorBinding(store.Root)
+	if err != nil {
+		return failedSupervisorCause(response, "saved supervisor binding could not be inspected", err, 1)
+	}
+	if !found {
+		return failedSupervisorCause(response, "saved supervisor binding is absent", pueue.ErrPrivateSupervisorNotInitialized, 1)
+	}
+	clientExecutable, _, err := installation.ResolvePrivateSupervisorExecutables(deps.supervisorLookup())
+	if err != nil {
+		return failedSupervisorCause(response, "installed supervisor transport could not be inspected", err, 1)
+	}
+	owner, err := supervisorcore.AcquireClient(pueue.BindSavedForMigrationWithClient(ctx, binding, clientExecutable, options))
+	cleanupCause := err
+	defer func() {
+		if closeErr := owner.CloseAfterPending(cleanupCause); closeErr != nil {
+			result.err = publicSupervisorError("supervisor diagnostic cleanup failed", errors.Join(result.err, closeErr))
+			result.code = 1
+			control.MigrationReadiness = "unknown"
+			control.FirstBlocker = &supervisorcore.MaintenanceBlocker{Kind: "observation", ReasonCode: "observation_failed", NextAction: "stop_and_report"}
+		}
+	}()
+	if err != nil {
+		return failedSupervisorCause(response, "saved supervisor transport could not be inspected", err, 1)
+	}
+	snapshot, err := owner.Client().Snapshot(ctx)
+	cleanupCause = err
+	if err != nil {
+		return failedSupervisorCause(response, "saved supervisor queue could not be inspected", err, 1)
+	}
+	if err = observeSupervisorMaintenance(ctx, store, binding, snapshot.Jobs, control); err != nil {
+		return failedSupervisorCause(response, "saved supervisor maintenance could not be inspected", err, 1)
+	}
+	return commandResult{response: response}
+}
+
+func finishSupervisorDiagnostic(result, diagnostic commandResult, original error) commandResult {
+	control := result.response.SupervisorControl
+	attachSupervisorDiagnostic(control, diagnostic.response.SupervisorControl)
+	if diagnostic.err != nil {
+		result.err = publicSupervisorError("Supervisor migration and its later diagnostic could not be completed.", errors.Join(result.err, diagnostic.err))
+		control.NextAction = "stop_and_report"
+	} else if supervisorcore.MaintenanceBusy(original) {
+		applyMaintenanceGuidance(control)
+	}
+	return result
 }
 
 func notInitializedSupervisor(response Response) commandResult {
 	response.SupervisorControl.State = "not_initialized"
 	response.SupervisorControl.LegacyReachability = "not_present"
 	response.SupervisorControl.ActiveWork = "none"
+	response.SupervisorControl.MigrationReadiness = "clear"
 	response.SupervisorControl.NextAction = "none"
 	return commandResult{response: response, code: 0}
 }
@@ -737,16 +740,69 @@ func finishSupervisorMigration(response Response, state supervisorMigrationState
 }
 
 func supervisorMigrationFailure(response Response, err error) commandResult {
-	response.SupervisorControl.ReasonCode = supervisorcore.FailureReason(err)
-	if errors.Is(err, inspection.ErrGroupMigrationBusy) || errors.Is(err, pueue.ErrPrivateSupervisorMigrationBusy) {
-		response.SupervisorControl.State = "blocked"
-		response.SupervisorControl.ActiveWork = "present"
-		response.SupervisorControl.NextAction = "wait_for_legacy_work"
-		return commandResult{response: response, code: 1, err: publicSupervisorError("Legacy supervisor has active work.", err)}
+	control := response.SupervisorControl
+	control.ReasonCode = supervisorcore.FailureReason(err)
+	control.MigrationReadiness = "unknown"
+	control.ActiveWork = "unknown"
+	var diagnostic *supervisorcore.MaintenanceError
+	if errors.As(err, &diagnostic) {
+		applyMaintenanceAssessment(control, diagnostic.Assessment)
+		control.ObservedAt = time.Now().UTC().Format(time.RFC3339Nano)
 	}
-	response.SupervisorControl.State = "unavailable"
-	response.SupervisorControl.NextAction = "stop_and_report"
+	if supervisorcore.MaintenanceBusy(err) && diagnostic != nil {
+		control.State = "blocked"
+		control.NextAction = "wait_for_legacy_work"
+		applyMaintenanceGuidance(control)
+		return commandResult{response: response, code: 1, err: publicSupervisorError("Supervisor maintenance is blocked.", err)}
+	}
+	control.State = "unavailable"
+	control.MigrationReadiness = "unknown"
+	control.FirstBlocker = &supervisorcore.MaintenanceBlocker{Kind: "evidence", ReasonCode: "maintenance_evidence_fault", NextAction: "stop_and_report"}
+	control.NextAction = "stop_and_report"
 	return commandResult{response: response, code: 1, err: publicSupervisorError("Delegate could not safely migrate the legacy supervisor.", err)}
+}
+
+func applyMaintenanceAssessment(control *SupervisorControlResponse, assessment supervisorcore.MaintenanceAssessment) {
+	control.ActiveWork = assessment.ActiveWork
+	control.MigrationReadiness = assessment.Readiness
+	control.FirstBlocker = assessment.FirstBlocker
+}
+
+func applyMaintenanceGuidance(control *SupervisorControlResponse) {
+	if control != nil && control.FirstBlocker != nil && control.MigrationReadiness != "clear" {
+		control.NextAction = control.FirstBlocker.NextAction
+	}
+}
+
+func observeSupervisorMaintenance(ctx context.Context, store *taskdir.Store, binding task.SupervisorRef, jobs []pueue.Job, control *SupervisorControlResponse) error {
+	assessment, err := privateCleanupOwner().InspectMigrationQueue(ctx, store, supervisorcore.InspectionGroup(store.RootID, binding), jobs)
+	applyMaintenanceAssessment(control, assessment)
+	control.ObservedAt = time.Now().UTC().Format(time.RFC3339Nano)
+	if supervisorcore.MaintenanceBusy(err) {
+		return nil
+	}
+	return err
+}
+
+func observeSupervisorMaintenanceAtRoot(ctx context.Context, root string, binding task.SupervisorRef, jobs []pueue.Job, control *SupervisorControlResponse) (resultErr error) {
+	var store *taskdir.Store
+	if err := openPrivateMigrationStore(ctx, root, &store); err != nil {
+		return err
+	}
+	defer func() { resultErr = errors.Join(resultErr, store.Close()) }()
+	return observeSupervisorMaintenance(ctx, store, binding, jobs, control)
+}
+
+// A diagnostic after an RPC failure is a later observation, not a reconstruction
+// of the resident's original cause. Preserve that cause and its result code.
+func attachSupervisorDiagnostic(control, diagnostic *SupervisorControlResponse) {
+	if diagnostic == nil || diagnostic.ObservedAt == "" {
+		return
+	}
+	control.ActiveWork = diagnostic.ActiveWork
+	control.MigrationReadiness = diagnostic.MigrationReadiness
+	control.FirstBlocker = diagnostic.FirstBlocker
+	control.DiagnosticSnapshotAt = diagnostic.ObservedAt
 }
 
 func supervisorMigrateWithoutInspectionGroupLocked(ctx context.Context, root string, lookup installation.ExecutableLookup, options pueue.Options) (*pueue.Client, error) {
@@ -790,12 +846,7 @@ func failedSupervisorCause(response Response, message string, cause error, code 
 }
 
 func legacyActiveWork(snapshot pueue.QueueSnapshot) string {
-	for _, job := range snapshot.Jobs {
-		if job.State == pueue.StateQueued || job.State == pueue.StateStashed || job.State == pueue.StateRunning || job.State == pueue.StateUnknown {
-			return "present"
-		}
-	}
-	return "none"
+	return supervisorcore.QueueActivity(snapshot.Jobs)
 }
 
 func supervisorEnsureOwner(a Arguments, deps Dependencies) (result commandResult) {

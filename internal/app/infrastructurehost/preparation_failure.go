@@ -5,6 +5,7 @@ import (
 	"errors"
 	"reflect"
 
+	"github.com/hishamkaram/delegation-layer/internal/guardian"
 	"github.com/hishamkaram/delegation-layer/internal/inspection"
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
 	"github.com/hishamkaram/delegation-layer/internal/supervisor"
@@ -51,6 +52,12 @@ func exactInfrastructurePreparationCause(err error) infrastructure.PreparationCa
 	value := reflect.ValueOf(err)
 	if !value.IsValid() || !value.Comparable() {
 		return 0
+	}
+	// Encoder-only alias: a v4 inspection-busy bit must not manufacture
+	// guardian proof observations when decoded by the canonical mapping table.
+	proofPending := reflect.ValueOf(guardian.ErrProofPending)
+	if value.Type() == proofPending.Type() && value.Equal(proofPending) {
+		return infrastructure.PreparationCauseInspectionMigrationBusy
 	}
 	for _, mapping := range infrastructurePreparationMappings() {
 		// Exact sentinel identity is required; Is also accepts overlapping aliases.

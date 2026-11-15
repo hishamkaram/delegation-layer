@@ -61,10 +61,22 @@ func writeHumanSupervisor(output *strings.Builder, control *SupervisorControlRes
 		return
 	}
 	fmt.Fprintf(output, "supervisor action=%s state=%s legacy_reachability=%s active_work=%s next_action=%s", control.Action, control.State, control.LegacyReachability, control.ActiveWork, control.NextAction)
+	if control.MigrationReadiness != "" {
+		fmt.Fprintf(output, " migration_readiness=%s", control.MigrationReadiness)
+	}
+	if control.ObservedAt != "" {
+		fmt.Fprintf(output, " observed_at=%s", control.ObservedAt)
+	}
+	if control.DiagnosticSnapshotAt != "" {
+		fmt.Fprintf(output, " diagnostic_snapshot_at=%s", control.DiagnosticSnapshotAt)
+	}
 	if control.MigrationPhase != "" {
 		fmt.Fprintf(output, " migration_phase=%s", control.MigrationPhase)
 	}
 	output.WriteByte('\n')
+	if blocker := control.FirstBlocker; blocker != nil {
+		fmt.Fprintf(output, "first_blocker kind=%s task_id=%s queue_state=%s reason_code=%s next_action=%s\n", blocker.Kind, blocker.TaskID, blocker.QueueState, blocker.ReasonCode, blocker.NextAction)
+	}
 	if restart := control.RuntimeRestart; restart != nil {
 		fmt.Fprintf(output, "runtime_restart from_startup=%s", restart.FromStartup)
 		if restart.Phase != "" {

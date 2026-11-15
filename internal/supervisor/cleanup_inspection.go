@@ -76,7 +76,7 @@ func inspectLegacyEndedTask(ctx context.Context, store *taskdir.Store, legacy in
 		if requirement == endedTaskClosedForMigration && result.Publication == task.PublicationUnknown && !result.SealExists && !result.OutcomeExists {
 			return inspectClosedUnpublishedTask(ctx, td)
 		}
-		return fmt.Errorf("%w: ended Delegate task %s is awaiting publication", inspection.ErrGroupMigrationBusy, taskID)
+		return taskMaintenancePending(taskID, "publication_pending", fmt.Errorf("%w: ended Delegate task %s is awaiting publication", inspection.ErrGroupMigrationBusy, taskID))
 	}
 	return nil
 }
@@ -85,8 +85,8 @@ func inspectLegacyEndedTask(ctx context.Context, store *taskdir.Store, legacy in
 // after canonical native closure without manufacturing a publication outcome.
 func inspectClosedUnpublishedTask(ctx context.Context, td *taskdir.TaskDir) error {
 	if _, err := guardian.ReadClosureProof(ctx, td); err != nil {
-		if errors.Is(err, guardian.ErrProofPending) {
-			return fmt.Errorf("%w: ended Delegate task %s awaits lifetime closure", inspection.ErrGroupMigrationBusy, td.TaskID)
+		if task.AllErrorCauses(err, func(cause error) bool { return errors.Is(cause, guardian.ErrProofPending) }) {
+			return taskMaintenancePending(td.TaskID, "lifetime_closure_unproven", fmt.Errorf("%w: ended Delegate task %s awaits lifetime closure: %w", inspection.ErrGroupMigrationBusy, td.TaskID, err))
 		}
 		return fmt.Errorf("%w: ended Delegate task %s closure could not be verified: %w", inspection.ErrGroupMigrationRequired, td.TaskID, err)
 	}
@@ -95,7 +95,7 @@ func inspectClosedUnpublishedTask(ctx context.Context, td *taskdir.TaskDir) erro
 		return fmt.Errorf("%w: ended Delegate task %s runner lease could not be verified: %w", inspection.ErrGroupMigrationRequired, td.TaskID, err)
 	}
 	if !released {
-		return fmt.Errorf("%w: ended Delegate task %s runner remains owned", inspection.ErrGroupMigrationBusy, td.TaskID)
+		return taskMaintenancePending(td.TaskID, "runner_owned", fmt.Errorf("%w: ended Delegate task %s runner remains owned", inspection.ErrGroupMigrationBusy, td.TaskID))
 	}
 	return nil
 }

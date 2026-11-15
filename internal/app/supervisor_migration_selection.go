@@ -12,7 +12,7 @@ func newSupervisorCommandResponse(action string) Response {
 	response := newResponse("supervisor")
 	response.SupervisorControl = &SupervisorControlResponse{
 		Action: action, State: "unknown", LegacyReachability: "unknown",
-		ActiveWork: "unknown", NextAction: "stop_and_report",
+		ActiveWork: "unknown", NextAction: "stop_and_report", MigrationReadiness: "unknown",
 	}
 	return response
 }
