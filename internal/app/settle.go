@@ -94,7 +94,7 @@ func observeSettlementQueue(ctx context.Context, store *taskdir.Store, td *taskd
 	if client == nil {
 		return queue, fmt.Errorf("%w: the exact private supervisor is not observable", pueue.ErrUnknown)
 	}
-	defer func() { resultErr = errors.Join(resultErr, client.Close()) }()
+	defer func() { resultErr = errors.Join(resultErr, client.CloseAfterPending(resultErr)) }()
 	observed, err := client.Reconcile(ctx, tasklifecycle.TaskIdentity(req, meta, spec, metaHash, receipt))
 	if err != nil {
 		return queue, err
