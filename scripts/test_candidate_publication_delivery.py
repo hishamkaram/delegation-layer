@@ -12,6 +12,7 @@ from unittest.mock import patch
 from scripts import publish_development_candidate as cli
 from scripts.release_verification import candidate_publication_delivery as delivery
 from scripts.release_verification.candidate_manifest import MANIFEST_PATH
+from scripts.release_verification.candidate_publication_preflight import MAX_REPLY_BYTES
 from scripts.acceptance.evidence.source import VerificationError
 from scripts.release_verification.published_ports import default_ports
 from scripts.test_candidate_artifact_support import (
@@ -42,8 +43,8 @@ class PublicationTests(CandidateArtifactCase):
         routes = json.loads(self.routes_path.read_text())
         routes.update({
             ci_fixture.jobs_endpoint(): {"json": {"total_count": len(ci_fixture.jobs()), "jobs": ci_fixture.jobs()}},
-            f"repos/{REPOSITORY}/commits/{COMMIT}": {
-                "json": {"sha": COMMIT, "commit": {"tree": {"sha": TREE}}}},
+            f"repos/{REPOSITORY}/git/commits/{COMMIT}": {
+                "json": {"sha": COMMIT, "tree": {"sha": TREE}}},
             f"repos/{REPOSITORY}/branches/main": {"json": {"commit": {"sha": COMMIT}}},
         })
         self.routes_path.write_text(json.dumps(routes))
@@ -88,7 +89,7 @@ class PublicationTests(CandidateArtifactCase):
 
     def assert_only_publication_reads(self):
         allowed = {*ENDPOINTS.values(), DOWNLOAD, ci_fixture.jobs_endpoint(),
-                   f"repos/{REPOSITORY}/commits/{COMMIT}", f"repos/{REPOSITORY}/branches/main"}
+                   f"repos/{REPOSITORY}/git/commits/{COMMIT}", f"repos/{REPOSITORY}/branches/main"}
         calls = [json.loads(line) for line in self.log_path.read_text().splitlines()]
         self.assertTrue(calls)
         for call in calls:
@@ -161,6 +162,18 @@ class PublicationTests(CandidateArtifactCase):
         self.assertFalse(receipt["publication"]["first_mutation_started"])
         self.assertEqual(receipt["failure"]["code"], "distribution_ci_not_successful")
         self.assertTrue((request.output_dir / delivery.WORKSPACE_NAME).is_dir())
+
+    def test_oversized_commit_metadata_refuses_before_any_destination_mutation(self):
+        routes = json.loads(self.routes_path.read_text())
+        endpoint = f"repos/{REPOSITORY}/git/commits/{COMMIT}"
+        routes[endpoint]["json"]["message"] = "x" * (MAX_REPLY_BYTES + 1)
+        self.routes_path.write_text(json.dumps(routes))
+        code, receipt, _request = self.publish()
+        self.assertEqual((code, self.events), (1, []))
+        self.assertFalse(receipt["publication"]["first_mutation_started"])
+        self.assertEqual(receipt["failure"]["code"], "command_output_exceeded")
+        self.assertIn(endpoint, self.requested())
+        self.assert_only_publication_reads()
 
     def test_changing_run_titles_preserve_exact_artifact_delivery(self):
         titles = ("Initial CI title", "Renamed CI title", "Latest CI title")

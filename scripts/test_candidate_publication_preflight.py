@@ -7,7 +7,7 @@ import unittest
 from unittest.mock import patch
 
 from scripts.release_verification import candidate_publication_preflight as preflight
-from scripts.acceptance.evidence.source import VerificationError
+from scripts.acceptance.evidence.source import MAX_OUTPUT, VerificationError
 from scripts.test_candidate_artifact_support import COMMIT, ENDPOINTS, REPOSITORY, RUN_ID, TREE, CandidateArtifactCase
 from scripts.test_release_github_transport import ObservedGitHubClient
 
@@ -55,8 +55,8 @@ class PreflightTests(CandidateArtifactCase):
         self.routes = json.loads(self.routes_path.read_text())
         self.routes.update({
             jobs_endpoint(): {"json": {"total_count": len(jobs()), "jobs": jobs()}},
-            f"repos/{REPOSITORY}/commits/{COMMIT}": {
-                "json": {"sha": COMMIT, "commit": {"tree": {"sha": TREE}}}},
+            f"repos/{REPOSITORY}/git/commits/{COMMIT}": {
+                "json": {"sha": COMMIT, "tree": {"sha": TREE}}},
             f"repos/{REPOSITORY}/branches/main": {"json": {"commit": {"sha": COMMIT}}},
         })
         self.log_path.unlink()
@@ -282,17 +282,78 @@ class PreflightTests(CandidateArtifactCase):
         self.routes[ENDPOINTS["repository"]]["json"]["private"] = True
         self.refuse("publication_repository_not_public")
         self.routes[ENDPOINTS["repository"]]["json"]["private"] = False
-        self.routes[f"repos/{REPOSITORY}/commits/{COMMIT}"]["json"]["commit"]["tree"]["sha"] = "f" * 40
-        self.refuse("distribution_source_mismatch")
+        endpoint = f"repos/{REPOSITORY}/git/commits/{COMMIT}"
+        for record, code in (
+                ({"sha": "f" * 40, "tree": {"sha": TREE}}, "distribution_source_mismatch"),
+                ({"sha": COMMIT, "tree": {"sha": "f" * 40}}, "distribution_source_mismatch"),
+                ({"sha": COMMIT}, "github_object_invalid"),
+                ({"sha": COMMIT, "commit": {"tree": {"sha": TREE}}}, "github_object_invalid"),
+                ({"sha": COMMIT, "tree": []}, "github_object_invalid"),
+                ({"sha": COMMIT, "tree": {}}, "distribution_source_mismatch")):
+            with self.subTest(record=record):
+                self.routes[endpoint]["json"] = record
+                self.refuse(code)
+
+    def test_commit_identity_read_does_not_fetch_oversized_file_patches(self):
+        full = f"repos/{REPOSITORY}/commits/{COMMIT}"
+        metadata = f"repos/{REPOSITORY}/git/commits/{COMMIT}"
+        self.routes[full] = {"json": {"sha": COMMIT, "commit": {"tree": {"sha": TREE}},
+                                      "files": [{"filename": "large-change.txt", "patch": "x" * (MAX_OUTPUT + 1)}]}}
+        self.run_preflight()
+        self.assertIn(metadata, self.requested())
+        self.assertNotIn(full, self.requested())
+        calls = [json.loads(line) for line in self.log_path.read_text().splitlines()]
+        self.assertTrue(calls)
+        self.assertTrue(all(call["argv"][:3] == ["api", "--method", "GET"] for call in calls))
+
+    def test_preflight_metadata_can_exceed_the_generic_control_output_budget(self):
+        newer = "f" * 40
+        extra = "x" * (MAX_OUTPUT + 1)
+        self.routes[ENDPOINTS["repository"]]["json"]["extra_metadata"] = extra
+        self.routes[f"repos/{REPOSITORY}/git/commits/{COMMIT}"]["json"].update(
+            message=extra, commit={"tree": {"sha": "e" * 40}})
+        branch = self.routes[f"repos/{REPOSITORY}/branches/main"]["json"]
+        branch.update(extra_metadata=extra, commit={"sha": newer})
+        endpoint = f"repos/{REPOSITORY}/compare/{newer}...{COMMIT}"
+        self.routes[endpoint] = {"json": {"status": "behind", "ahead_by": 0, "total_commits": 0,
+                                         "merge_base_commit": {"sha": COMMIT}, "extra_metadata": extra}}
+        self.run_preflight()
+        self.assertIn(endpoint, self.requested())
+        self.assertNotIn(f"repos/{REPOSITORY}/compare/{COMMIT}...{newer}", self.requested())
 
     def test_source_can_be_an_ancestor_of_current_main_but_never_divergent(self):
         newer = "f" * 40
         self.routes[f"repos/{REPOSITORY}/branches/main"]["json"]["commit"]["sha"] = newer
-        endpoint = f"repos/{REPOSITORY}/compare/{COMMIT}...{newer}"
-        self.routes[endpoint] = {"json": {"status": "ahead", "merge_base_commit": {"sha": COMMIT}}}
+        endpoint = f"repos/{REPOSITORY}/compare/{newer}...{COMMIT}"
+        record = {"status": "behind", "ahead_by": 0, "total_commits": 0, "merge_base_commit": {"sha": COMMIT}}
+        for behind in (1, 7):
+            with self.subTest(behind=behind):
+                self.routes[endpoint] = {"json": {**record, "behind_by": behind}}
+                self.run_preflight()
+        self.assertIn(endpoint, self.requested())
+        self.assertNotIn(f"repos/{REPOSITORY}/compare/{COMMIT}...{newer}", self.requested())
+        for change in ({"status": "ahead"}, {"status": "diverged"}, {"status": "identical"},
+                       {"merge_base_commit": {"sha": "e" * 40}}):
+            with self.subTest(change=change):
+                self.routes[endpoint] = {"json": {**record, **change}}
+                self.refuse("distribution_source_not_on_main")
+        for counter in ("ahead_by", "total_commits"):
+            for value in (None, False, 0.0, "0", 1):
+                with self.subTest(counter=counter, value=value):
+                    malformed = {**record, counter: value}
+                    if value is None:
+                        del malformed[counter]
+                    self.routes[endpoint] = {"json": malformed}
+                    self.refuse("distribution_source_not_on_main")
+        for merge_base in (None, [], {}):
+            with self.subTest(merge_base=merge_base):
+                self.routes[endpoint] = {"json": {**record, "merge_base_commit": merge_base}}
+                self.refuse("github_object_invalid" if merge_base is None or isinstance(merge_base, list)
+                            else "distribution_source_not_on_main")
+
+    def test_equal_main_head_does_not_request_a_comparison(self):
         self.run_preflight()
-        self.routes[endpoint]["json"]["status"] = "diverged"
-        self.refuse("distribution_source_not_on_main")
+        self.assertFalse(any("/compare/" in endpoint for endpoint in self.requested()))
 
     def test_unrelated_repository_metadata_does_not_change_the_validated_run(self):
         real = ObservedGitHubClient.json

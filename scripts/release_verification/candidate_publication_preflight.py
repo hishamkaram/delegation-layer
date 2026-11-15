@@ -171,7 +171,7 @@ def _execution_attempt(rows: list[dict[str, object]], name: str) -> int:
 def require_publishable(client: GitHubClient, artifact: CandidateArtifact) -> None:
     """Check the actual source/run, all required jobs and the artifact's producer chain."""
     locator = artifact.locator
-    identity = object_value(client.json(f"repos/{locator.repository}"), STAGE)
+    identity = object_value(client.json(f"repos/{locator.repository}", limit=MAX_REPLY_BYTES), STAGE)
     if (identity.get("id") != artifact.repository_id or identity.get("full_name") != locator.repository
             or identity.get("private") is not False):
         raise _refuse("publication_repository_not_public")
@@ -185,17 +185,21 @@ def require_publishable(client: GitHubClient, artifact: CandidateArtifact) -> No
     if any(_execution_attempt(rows, name) < producer for name in INSTALL_JOBS):
         raise _refuse("distribution_install_predates_producer")
     commit = object_value(client.json(
-        f"repos/{locator.repository}/commits/{artifact.manifest.source.commit}"), STAGE)
-    tree = object_value(object_value(commit.get("commit"), STAGE).get("tree"), STAGE)
+        f"repos/{locator.repository}/git/commits/{artifact.manifest.source.commit}", limit=MAX_REPLY_BYTES), STAGE)
+    tree = object_value(commit.get("tree"), STAGE)
     if commit.get("sha") != artifact.manifest.source.commit or tree.get("sha") != artifact.manifest.source.tree:
         raise _refuse("distribution_source_mismatch")
-    main = object_value(client.json(f"repos/{locator.repository}/branches/main"), STAGE)
+    main = object_value(client.json(f"repos/{locator.repository}/branches/main", limit=MAX_REPLY_BYTES), STAGE)
     head = object_value(main.get("commit"), STAGE).get("sha")
     if head != artifact.manifest.source.commit:
         comparison = object_value(client.json(
-            f"repos/{locator.repository}/compare/{artifact.manifest.source.commit}...{head}"), STAGE)
+            # An ancestor compares behind main with no source-only commits;
+            # this direction avoids fetching the intervening changes' patches.
+            f"repos/{locator.repository}/compare/{head}...{artifact.manifest.source.commit}", limit=MAX_REPLY_BYTES), STAGE)
         ancestor = object_value(comparison.get("merge_base_commit"), STAGE)
-        if comparison.get("status") != "ahead" or ancestor.get("sha") != artifact.manifest.source.commit:
+        ahead, total = comparison.get("ahead_by"), comparison.get("total_commits")
+        if (comparison.get("status") != "behind" or type(ahead) is not int or ahead != 0
+                or type(total) is not int or total != 0 or ancestor.get("sha") != artifact.manifest.source.commit):
             raise _refuse("distribution_source_not_on_main")
     if _run(client, artifact) != run:
         raise _refuse("distribution_ci_changed")
