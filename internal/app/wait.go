@@ -91,14 +91,13 @@ func watchWaitTasks(ctx context.Context, a Arguments, reader tasklifecycle.Passi
 		if fault != nil {
 			return waitRoundFailure(readCtx, a.Watch, response, fault)
 		}
-		if waitAdministrativelySettled(watch) {
-			response.Failure = &DispatchFailureResponse{Code: "administrative_settlement", Stage: "wait", NextAction: "stop_and_report"}
-			return commandResult{response: response, code: 1}
-		}
-
 		watch.Satisfied = ready > 0 && (!a.WaitAll || ready == len(a.WaitTaskIDs))
 		if watch.Satisfied {
 			return commandResult{response: response}
+		}
+		if waitAdministrativelySettled(watch) {
+			response.Failure = &DispatchFailureResponse{Code: "administrative_settlement", Stage: "wait", NextAction: "stop_and_report"}
+			return commandResult{response: response, code: 1}
 		}
 		remaining := time.Until(deadline)
 		if remaining <= 0 {

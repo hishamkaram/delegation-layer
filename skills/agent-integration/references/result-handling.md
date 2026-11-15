@@ -185,10 +185,15 @@ for operator details.
 An exact human-confirmed maintenance permission is separate from native closure
 and publication. `status` can report `administratively_settled` with a separate
 `settlement` object; exit `0` means the observation completed. Native execution
-remains unknown and no accepted answer is implied. `collect` and `wait` stop
-with exit `1`, `failure.code: administrative_settlement` and
+remains unknown and no accepted answer is implied. `collect` stops with exit `1`;
+`wait` does so only when genuine readiness has not already satisfied its any/all
+condition. Both stops report `failure.code: administrative_settlement` and
 `failure.next_action: stop_and_report`. Do not keep watching, continue, retry a
 provider, release claims or create replacement work on that basis.
+
+For mixed tasks, `wait --any` can return `0` because another task is genuinely
+ready; the settled task stays nonready and retains its own summary. `--all`
+cannot be satisfied by an administratively settled member.
 
 A genuine committed/rejected outcome or native terminal evidence takes
 precedence. Keep the immutable permission even after that later evidence; it is

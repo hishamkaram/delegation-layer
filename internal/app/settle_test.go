@@ -325,3 +325,70 @@ func assertNoSettlementControlMutation(t *testing.T, commands [][]string) {
 		}
 	}
 }
+
+func TestSettlementMixedCommittedWaitPreservesAnyAllContract(t *testing.T) {
+	store, settled := settledObservationFixture(t)
+	committed, _ := newAppTaskInStore(t, store, waitFirstID, true, nil)
+	winner, cleanupErr, collectErr := committed.Collect(task.FixturePredicateRef())
+	requireSettlementTest(t, errors.Join(cleanupErr, collectErr))
+	if winner == nil || winner.Verdict != task.VerdictCommitted {
+		t.Fatal("fixture did not publish a genuine committed outcome")
+	}
+	for _, test := range []struct {
+		name      string
+		ids       []string
+		all       bool
+		code      int
+		satisfied bool
+	}{
+		{"any settled first", []string{settled.TaskID, committed.TaskID}, false, 0, true},
+		{"any committed first", []string{committed.TaskID, settled.TaskID}, false, 0, true},
+		{"all settled first", []string{settled.TaskID, committed.TaskID}, true, 1, false},
+		{"all committed first", []string{committed.TaskID, settled.TaskID}, true, 1, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			result := waitTasks(Arguments{Root: store.Root, WaitTaskIDs: test.ids, WaitAll: test.all}, storeDependencies{})
+			if result.code != test.code || result.response.Wait == nil || result.response.Wait.Satisfied != test.satisfied {
+				t.Fatalf("mixed wait changed mode semantics: %+v", result)
+			}
+			assertMixedSettlementWaitSummaries(t, result.response.Wait, test.ids, settled.TaskID)
+			if test.satisfied {
+				if result.response.Failure != nil {
+					t.Fatalf("satisfied any-of inherited an unrelated task failure: %+v", result.response.Failure)
+				}
+			} else if result.response.Failure == nil || result.response.Failure.Code != "administrative_settlement" || result.response.Failure.NextAction != "stop_and_report" {
+				t.Fatalf("unmet all-of lost settlement stop guidance: %+v", result.response.Failure)
+			}
+		})
+	}
+}
+
+func assertMixedSettlementWaitSummaries(t *testing.T, watch *WaitResponse, ids []string, settledID string) {
+	t.Helper()
+	if len(watch.Tasks) != len(ids) {
+		t.Fatalf("mixed wait dropped task summaries: %+v", watch.Tasks)
+	}
+	for index, id := range ids {
+		item := watch.Tasks[index]
+		if item.TaskID != id {
+			t.Fatalf("mixed wait changed requested task order: %+v", watch.Tasks)
+		}
+		assertMixedSettlementWaitTask(t, item, id == settledID)
+	}
+}
+
+func assertMixedSettlementWaitTask(t *testing.T, item WaitTask, settled bool) {
+	t.Helper()
+	if settled {
+		if item.Ready || item.Settlement == nil || item.Publication != "unknown" {
+			t.Fatalf("settled task became genuine result readiness: %+v", item)
+		}
+		if item.Failure == nil || item.Failure.Code != "administrative_settlement" {
+			t.Fatalf("settled task lost its own administrative summary: %+v", item)
+		}
+		return
+	}
+	if !item.Ready || item.Settlement != nil || item.Publication != "committed" {
+		t.Fatalf("genuine committed task lost readiness: %+v", item)
+	}
+}

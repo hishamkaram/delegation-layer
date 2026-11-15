@@ -526,10 +526,14 @@ refuse. Repeating the same confirmed challenge returns the immutable winner.
 This records `allow_supervisor_maintenance` only. Native execution remains
 unknown; it creates no accepted result, success, termination or continuation
 permission. Scheduler, resource, session, workspace, custody and deletion claims
-remain held. Status presents the administrative decision separately; collect and
-wait stop with exit `1`, never successful result readiness. A genuine later
+remain held. Status presents the administrative decision separately; collect
+stops with exit `1`. Wait stops with exit `1` when its any/all condition remains
+unmet; another genuinely ready task can satisfy `--any`. Settlement itself never
+sets result readiness. A genuine later
 outcome takes precedence. Connected completed migration history lets the same
 permission remain usable for later maintenance without reconfirming it.
+For a scheduled task, an unresolved occurrence can still prevent further runs;
+maintenance permission does not free that reservation.
 
 Return to the blocked maintenance command after confirmation. Settlement does
 not execute that command. An unproven task on an external supervisor can still
