@@ -1,6 +1,8 @@
 """Private CLI installation boundary."""
 
+from collections.abc import Callable
 import os
+import re
 from pathlib import Path
 import sys
 
@@ -43,8 +45,10 @@ def _install_command(arguments: list[str], *, cwd: Path, phase: InstallationPhas
         raise InstallationFailure(phase, result.exit_code)
 
 
-def build_candidate_pair(source_root: Path, destination: Path) -> None:
+def build_candidate_pair(source_root: Path, destination: Path, *, version: str = "dev") -> None:
     """Build directly into an owned installation; never read installed program contents."""
+    if version != "dev" and re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+(?:-[A-Za-z0-9.-]+)?", version) is None:
+        raise ValueError("unsupported owned candidate version")
     source = require_source_root(source_root)
     for name in ("delegate", "delegate-run"):
         target = destination / name
@@ -52,7 +56,7 @@ def build_candidate_pair(source_root: Path, destination: Path) -> None:
             raise RuntimeError("candidate installation destination is occupied: " + str(target))
     for name in ("delegate", "delegate-run"):
         _install_command(
-            ["go", "build", "-buildvcs=false", "-ldflags", "-X main.version=dev",
+            ["go", "build", "-buildvcs=false", "-ldflags", "-X main.version=" + version,
              "-o", str(destination / name), "./cmd/" + name], cwd=source,
             phase=InstallationPhase.BUILD_DELEGATE if name == "delegate" else InstallationPhase.BUILD_DELEGATE_RUN,
         )
@@ -77,7 +81,9 @@ def package_layout(root, symlinked):
     return root / "bin", cellar / "bin", cellar / "libexec"
 
 
-def install_package_layout(owner, source_root, root, symlinked):
+def install_package_layout(owner, source_root, root, symlinked, *,
+                           pair_installer: Callable[[Path], None] | None = None,
+                           version: str = "dev"):
     if not symlinked:
         install = owner.create("package install", root / "install", root).directory
         canonical_bin = install
@@ -85,11 +91,17 @@ def install_package_layout(owner, source_root, root, symlinked):
     else:
         cellar = owner.create("package Cellar", root / "Cellar", root).directory
         product = owner.create("package product", cellar / "delegation-layer", cellar).directory
-        version = owner.create("package version", product / "0.1.0", product).directory
-        canonical_bin = owner.create("package bin", version / "bin", version).directory
-        libexec = owner.create("package libexec", version / "libexec", version).directory
+        version_directory = owner.create("package version", product / "0.1.0", product).directory
+        canonical_bin = owner.create("package bin", version_directory / "bin", version_directory).directory
+        libexec = owner.create("package libexec", version_directory / "libexec", version_directory).directory
         install = owner.create("package install links", root / "bin", root).directory
-    build_candidate_pair(source_root, canonical_bin)
+    if pair_installer is None:
+        if version == "dev":
+            build_candidate_pair(source_root, canonical_bin)
+        else:
+            build_candidate_pair(source_root, canonical_bin, version=version)
+    else:
+        pair_installer(canonical_bin)
     if not symlinked:
         return install, install, libexec
     for name in ("delegate", "delegate-run"):

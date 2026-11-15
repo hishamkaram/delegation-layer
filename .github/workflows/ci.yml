@@ -96,7 +96,7 @@ jobs:
     needs: changes
     if: ${{ always() }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    timeout-minutes: 90
     steps:
       - name: Require a valid check selection
         env:
@@ -214,6 +214,27 @@ jobs:
       - name: Prove private supervisor upgrade recovery through delegate CLI
         if: ${{ needs.changes.outputs.full == 'true' }}
         run: make acceptance-supervisor-upgrade-recovery
+
+      - name: Prove released scheduler upgrades through delegate CLI
+        id: scheduler_upgrade
+        if: ${{ needs.changes.outputs.full == 'true' }}
+        env:
+          DELEGATE_TEST_PUEUE: ${{ github.workspace }}/bin/test-supervisor/pueue
+          DELEGATE_TEST_PUEUED: ${{ github.workspace }}/bin/test-supervisor/pueued
+          DELEGATE_TOOL_DOWNLOAD_TOKEN: ${{ github.token }}
+        run: make acceptance-scheduler-upgrade
+
+      - name: Retain released scheduler upgrade evidence
+        if: >-
+          always() && (steps.scheduler_upgrade.outcome == 'success' ||
+          steps.scheduler_upgrade.outcome == 'failure' ||
+          steps.scheduler_upgrade.outcome == 'cancelled')
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: scheduler-upgrade-${{ runner.os }}-${{ github.run_attempt }}
+          path: bin/scheduler-upgrade.*/results/
+          retention-days: 7
+          if-no-files-found: error
 
       - name: Prove default user and budget stops through delegate CLI
         if: ${{ needs.changes.outputs.full == 'true' }}
@@ -377,6 +398,26 @@ jobs:
 
       - name: Prove private supervisor upgrade recovery through delegate CLI
         run: make acceptance-supervisor-upgrade-recovery
+
+      - name: Prove released scheduler upgrades through delegate CLI
+        id: scheduler_upgrade
+        env:
+          DELEGATE_TEST_PUEUE: ${{ github.workspace }}/bin/test-supervisor/pueue
+          DELEGATE_TEST_PUEUED: ${{ github.workspace }}/bin/test-supervisor/pueued
+          DELEGATE_TOOL_DOWNLOAD_TOKEN: ${{ github.token }}
+        run: make acceptance-scheduler-upgrade
+
+      - name: Retain released scheduler upgrade evidence
+        if: >-
+          always() && (steps.scheduler_upgrade.outcome == 'success' ||
+          steps.scheduler_upgrade.outcome == 'failure' ||
+          steps.scheduler_upgrade.outcome == 'cancelled')
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: scheduler-upgrade-${{ runner.os }}-${{ github.run_attempt }}
+          path: bin/scheduler-upgrade.*/results/
+          retention-days: 7
+          if-no-files-found: error
 
       - name: Prove default user and budget stops through delegate CLI
         env:

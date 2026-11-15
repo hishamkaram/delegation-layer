@@ -46,8 +46,10 @@ def prepare_fixture(args, lease_nonce, legacy_mode, lifetime, response_directory
     lifetime.private_config = state_parent / "state" / ".supervisor" / "pueue.yml"
     lifetime.gate = lifetime.base / "blocker-gate"
     old_root = lifetime.old_layout_ownership.create("old package root", lifetime.base / "old", lifetime.base).directory
+    baseline_installer = getattr(args, "baseline_pair_installer", None)
+    baseline_options = {} if baseline_installer is None else {"pair_installer": baseline_installer}
     lifetime.old_install, old_bin, lifetime.old_libexec = install_package_layout(
-        lifetime.old_layout_ownership, source, old_root, not legacy_mode
+        lifetime.old_layout_ownership, source, old_root, not legacy_mode, **baseline_options
     )
     lifetime.delegate = lifetime.old_install / "delegate"
     lifetime.old_layout_owned = lifetime.old_layout_ownership.transfer()
@@ -66,8 +68,10 @@ def prepare_fixture(args, lease_nonce, legacy_mode, lifetime, response_directory
     ).directory
     if args.scenario not in (EXTERNAL_INSPECTION_HANDOFF_SCENARIO, EXTERNAL_NOEXEC_STATE_SCENARIO):
         lifetime.managed_state_roots.append((state, lifetime.attempted_task_ids))
+    candidate_version = getattr(args, "candidate_version", "dev")
+    candidate_options = {} if candidate_version == "dev" else {"version": candidate_version}
     upgraded_install, upgraded_bin, lifetime.upgraded_libexec = install_package_layout(
-        lifetime.ownership, upgraded_source, upgraded_root, True
+        lifetime.ownership, upgraded_source, upgraded_root, True, **candidate_options
     )
     lifetime.delegate = upgraded_install / "delegate"
     response_directory.mkdir(mode=0o700)
