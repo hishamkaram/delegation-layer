@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hishamkaram/delegation-layer/internal/lifetime"
 	"github.com/hishamkaram/delegation-layer/internal/remote"
 	"github.com/hishamkaram/delegation-layer/internal/remotedata"
 	"github.com/hishamkaram/delegation-layer/internal/task"
@@ -383,5 +384,66 @@ func assertRetiredOutputDownload(t *testing.T, store *taskdir.Store, req *task.T
 	response := Download(t.Context(), reader, remote.Request{Operation: remote.Download, Root: store.Root, TaskID: req.TaskID, IntentSHA256: req.Remote.IntentSHA256, Expected: &remote.Identity{RootID: store.RootID}, Transfer: &remote.TransferRequest{Selector: "output:result.txt"}}, remote.Response{})
 	if response.Failure != nil || response.Transfer == nil || response.Transfer.Availability != "retired" {
 		t.Fatalf("retired download=%+v", response)
+	}
+}
+
+func TestOperatorDispositionDoesNotAuthorizeRemotePayloadRetirement(t *testing.T) {
+	store, seed, original := lifecyclefixture.NewAppTestTask(t, false)
+	_, meta, err := seed.PreparedRecords()
+	requireDispositionRetirementTest(t, err)
+	request := *original
+	request.TaskID = strings.Repeat("f", 32)
+	request.Remote = &task.RemoteBinding{StorageLayout: task.RemoteDataOrganized, OriginRootID: strings.Repeat("b", 32), IntentSHA256: strings.Repeat("c", 64), OutputPaths: []string{"result.txt"}}
+	meta.TaskID = request.TaskID
+	meta.SpecSHA256 = ""
+	td, err := store.CreateTask(request.TaskID, &request, []byte("brief"), meta)
+	requireDispositionRetirementTest(t, err)
+	t.Cleanup(func() {
+		if closeErr := td.Close(); closeErr != nil {
+			t.Error(closeErr)
+		}
+	})
+	lifecyclefixture.PrepareAppBudgetRecords(t, td)
+	boot, err := lifetime.BootID()
+	requireDispositionRetirementTest(t, err)
+	self, err := lifetime.ObserveProcess(os.Getpid())
+	requireDispositionRetirementTest(t, err)
+	owner, err := td.AcquireLifetimeOwner(t.Context())
+	requireDispositionRetirementTest(t, err)
+	t.Cleanup(func() {
+		if closeErr := owner.Release(); closeErr != nil {
+			t.Error(closeErr)
+		}
+	})
+	deadline := time.Now().Add(time.Hour)
+	_, err = td.RecordLifetimeIntentContext(t.Context(), taskdir.LifetimeIntentFacts{ScopeKind: task.LifetimeScopeProcessGroup, Assurance: task.LifetimeAssuranceCooperative, ScopePlan: "retire-settlement", BootID: boot, Deadline: deadline})
+	requireDispositionRetirementTest(t, err)
+	_, err = td.RecordLifetimeRegistrationContext(t.Context(), taskdir.LifetimeRegistrationFacts{ScopeKind: task.LifetimeScopeProcessGroup, Assurance: task.LifetimeAssuranceCooperative, ScopeID: "retire-settlement", BootID: boot, Deadline: deadline})
+	requireDispositionRetirementTest(t, err)
+	_, err = td.RecordLifetimeWorkerContext(t.Context(), taskdir.LifetimeWorkerFacts{PID: 1 << 30, ProcessStart: self.StartToken(), BootID: boot})
+	requireDispositionRetirementTest(t, err)
+	if err = owner.Release(); err != nil {
+		t.Fatal(err)
+	}
+	receipt, err := td.ReadSupervisorReceipt()
+	requireDispositionRetirementTest(t, err)
+	queue := task.OperatorDispositionQueue{NumericTaskID: receipt.NumericTaskID, Label: receipt.Label, Ended: true}
+	_, challenge, err := td.PrepareOperatorDispositionContext(t.Context(), queue, lifetime.NativeObservation{})
+	requireDispositionRetirementTest(t, err)
+	_, err = td.ConfirmOperatorDispositionContext(t.Context(), queue, challenge, lifetime.NativeObservation{})
+	requireDispositionRetirementTest(t, err)
+	report, err := Retire(t.Context(), store, td.TaskID, remotedata.Destination, true)
+	if !errors.Is(err, ErrRetirementBlocked) || report.Applied {
+		t.Fatalf("maintenance permission retired payloads: %+v %v", report, err)
+	}
+	if _, err = os.Stat(filepath.Join(td.Dir, "operator-disposition.json")); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func requireDispositionRetirementTest(t *testing.T, err error) {
+	t.Helper()
+	if err != nil {
+		t.Fatal(err)
 	}
 }

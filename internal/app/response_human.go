@@ -15,6 +15,9 @@ func writeHumanResponse(w io.Writer, response Response) error {
 		writeHumanSummary(&output, response)
 	}
 	writeHumanWait(&output, response.Wait)
+	if settled := response.Settlement; settled != nil {
+		fmt.Fprintf(&output, "settlement administrative_state=%s native_execution=%s permission=%s challenge=%s confirmed_at=%s held_claims=%s\n", settled.AdministrativeState, settled.NativeExecution, settled.Permission, settled.Challenge, settled.ConfirmedAt, strings.Join(settled.HeldClaims, ","))
+	}
 	writeHumanScheduleReliability(&output, response)
 	if response.LastProviderOutputAt != "" {
 		fmt.Fprintf(&output, "last_provider_output_at=%s source=capture_metadata\n", response.LastProviderOutputAt)

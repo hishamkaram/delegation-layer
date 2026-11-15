@@ -18,6 +18,7 @@ const (
 // It carries no authorization or mutable runtime owner. Each workflow keeps
 // its transient observation locally; durable records remain authoritative.
 type Observation struct {
+	OperatorDisposition *task.OperatorDispositionRecord
 	// Deferral describes this attempt only. A later attempt gets its own
 	// preparation; this output never grants or suppresses its mutations.
 	MaintenanceDeferred bool

@@ -12,23 +12,43 @@ import (
 // observation. A missing task is represented by Exists=false. On error, callers
 // may retain independently validated occurrence facts, not infer task absence.
 type TaskEvidence struct {
-	TaskID        string
-	Exists        bool
-	Inspection    *TaskInspection
-	Submission    *task.SubmitRecord
-	Receipt       *task.SupervisorReceipt
-	Started       *task.ProviderStartedRecord
-	Seal          *task.ProviderExitRecord
-	Lifetime      task.LifetimeEvidence
-	Stops         []StopRecord
-	Logs          []LogDescriptor
-	OutcomeSHA256 string
+	OperatorDisposition *task.OperatorDispositionRecord
+	TaskID              string
+	Exists              bool
+	Inspection          *TaskInspection
+	Submission          *task.SubmitRecord
+	Receipt             *task.SupervisorReceipt
+	Started             *task.ProviderStartedRecord
+	Seal                *task.ProviderExitRecord
+	Lifetime            task.LifetimeEvidence
+	Stops               []StopRecord
+	Logs                []LogDescriptor
+	OutcomeSHA256       string
 }
 
 // ReadTaskEvidence uses the existing rooted validators without opening task
 // locks or granting a TaskDir handle to the consumer. Records can advance while
 // reading; missing dependencies are faults, never a new absence witness.
 func (r *ReadOnlyStore) ReadTaskEvidence(ctx context.Context, id string) (TaskEvidence, error) {
+	if ctx == nil {
+		return TaskEvidence{TaskID: id}, context.Canceled
+	}
+	pin, err := r.store.PinRootContext(ctx)
+	if err != nil {
+		return TaskEvidence{TaskID: id}, err
+	}
+	evidence, err := r.readTaskEvidenceWithPin(ctx, id, pin)
+	if err != nil {
+		return evidence, err
+	}
+	after, err := r.store.PinRootContext(ctx)
+	if err == nil && !after.Equal(pin) {
+		err = task.ErrIdentityMismatch
+	}
+	return evidence, err
+}
+
+func (r *ReadOnlyStore) readTaskEvidenceWithPin(ctx context.Context, id string, pin RootPin) (TaskEvidence, error) {
 	r.store.mu.Lock()
 	defer r.store.mu.Unlock()
 	evidence := TaskEvidence{TaskID: id}
@@ -54,6 +74,21 @@ func (r *ReadOnlyStore) ReadTaskEvidence(ctx context.Context, id string) (TaskEv
 	}
 	if err = readTaskEvidenceRecords(ctx, td, &evidence); err != nil {
 		return evidence, err
+	}
+	// Publication and collectible native evidence retain precedence. An
+	// unrelated malformed administrative record cannot hide a real outcome.
+	closure, closureErr := task.ResolveLifetimeClosure(evidence.Lifetime)
+	if closureErr != nil {
+		return evidence, closureErr
+	}
+	if !evidence.Inspection.Terminal() && !evidence.Inspection.SealExists && !closure.Closed() {
+		evidence.OperatorDisposition, err = td.readOperatorDispositionWithPinContext(ctx, pin)
+		if task.RecordAbsent(err) {
+			err = nil
+		}
+		if err != nil {
+			return evidence, err
+		}
 	}
 	evidence.Stops, err = td.ReadStopRecords()
 	if err != nil {

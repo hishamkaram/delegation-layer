@@ -39,6 +39,58 @@ func ProbeSavedPrivateUpgradeControl(ctx context.Context, stateRoot string, save
 	return probeSavedPrivateForPurpose(ctx, stateRoot, saved, options, selectPair, privateGenerationUpgradeControl)
 }
 
+// ProbeSavedPrivateMaintenanceWithLock reuses the exact saved-generation
+// observation policy while the caller retains an existing bootstrap EX.
+// It never reacquires SH, provisions locks, repairs or grants task admission.
+func ProbeSavedPrivateMaintenanceWithLock(ctx context.Context, stateRoot string, saved task.SupervisorRef, options Options, selectPair CompatiblePairSelector) (*Client, error) {
+	if err := requireRuntimeRestartBootstrapEX(ctx, stateRoot); err != nil {
+		return nil, err
+	}
+	probeContext, cancel, options, err := prepareSavedPrivateProbeOptions(ctx, stateRoot, saved, options)
+	if err != nil {
+		return nil, err
+	}
+	defer cancel()
+	client, ready, observation, err := probeSavedPrivateCompatibleWithLock(probeContext, stateRoot, saved, options, selectPair, privateGenerationUpgradeControl)
+	if err != nil {
+		return finishSavedPrivateProbe(saved, nil, false, failPrivateTransitionClient(client, observation, err))
+	}
+	return finishSavedPrivateProbe(saved, client, ready, nil)
+}
+
+// PrivateSupervisorMaintenanceGenerationMatchesWithLock validates the mapped
+// current predecessor through the canonical resolver. Historical membership
+// alone is insufficient. The caller retains an actual root bootstrap SH/EX.
+func PrivateSupervisorMaintenanceGenerationMatchesWithLock(ctx context.Context, root string, saved, current task.SupervisorRef) (bool, error) {
+	if err := requirePrivateMaintenanceLease(ctx, root); err != nil {
+		return false, err
+	}
+	mapped, found, err := resolvePrivateSupervisorSuccessorWithLock(ctx, root, saved, privateGenerationUpgradeControl)
+	return err == nil && found && mapped == current, err
+}
+
+func requirePrivateMaintenanceLease(ctx context.Context, root string) error {
+	if ctx == nil {
+		return context.Canceled
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	for _, lock := range controlLeaseContextFrom(ctx).locks {
+		lock.mu.Lock()
+		live := !lock.closed && !lock.retired && lock.file != nil && lock.file.Name() == filepath.Join(root, privateSupervisorDirectory, "bootstrap.lock")
+		var err error
+		if live {
+			_, err = checkedBootstrapIdentity(root, lock.file)
+		}
+		lock.mu.Unlock()
+		if live {
+			return errors.Join(err, ctx.Err())
+		}
+	}
+	return ErrBinding
+}
+
 func probeSavedPrivateForPurpose(ctx context.Context, stateRoot string, saved task.SupervisorRef, options Options, selectPair CompatiblePairSelector, purpose privateGenerationPurpose) (*Client, error) {
 	probeContext, cancel, options, err := prepareSavedPrivateProbeOptions(ctx, stateRoot, saved, options)
 	if err != nil {

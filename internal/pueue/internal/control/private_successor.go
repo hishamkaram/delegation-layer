@@ -50,7 +50,8 @@ func ResolvePrivateSupervisorSuccessorWithLock(ctx context.Context, stateRoot st
 }
 
 // resolvePrivateSupervisorSuccessorWithLock is the one successor decision;
-// purpose selects only the alias match of the same-generation phase.
+// UpgradeControl may observe an exact draining predecessor through completed
+// history. General and TaskRead retain their completed-generation policies.
 func resolvePrivateSupervisorSuccessorWithLock(ctx context.Context, stateRoot string, saved task.SupervisorRef, purpose privateGenerationPurpose) (task.SupervisorRef, bool, error) {
 	if ctx == nil {
 		return task.SupervisorRef{}, false, context.Canceled
@@ -73,14 +74,10 @@ func resolvePrivateSupervisorSuccessorWithLock(ctx context.Context, stateRoot st
 	}
 	current := facts.published
 	if task.SameSupervisorIdentity(saved, current) {
-		phase, phaseErr := facts.phaseFor(current, purpose)
-		if phaseErr != nil {
-			return task.SupervisorRef{}, false, phaseErr
-		}
-		if phase < privateGenerationObservable {
-			return task.SupervisorRef{}, false, ErrPrivateSupervisorMigrationRequired
-		}
-		return current, true, ctx.Err()
+		return resolveObservablePrivateGeneration(ctx, current, facts, purpose)
+	}
+	if purpose == privateGenerationUpgradeControl && facts.drain != nil {
+		return resolveUpgradePredecessorHistory(ctx, stateRoot, saved, current, facts)
 	}
 	complete, err := facts.complete(current, false)
 	if err != nil {
@@ -249,4 +246,27 @@ func privateCompletedSuccessorHistoryContains(ctx context.Context, stateRoot str
 		}
 	}
 	return false, ctx.Err()
+}
+
+func resolveUpgradePredecessorHistory(ctx context.Context, root string, saved, current task.SupervisorRef, facts privateGenerationFacts) (task.SupervisorRef, bool, error) {
+	phase, err := facts.upgradePredecessorPhase(current, privateGenerationUpgradeControl)
+	if err != nil || phase < privateGenerationObservable {
+		return task.SupervisorRef{}, false, err
+	}
+	connected, err := privateSupervisorSuccessorConnected(ctx, root, saved, current)
+	if err != nil || !connected {
+		return task.SupervisorRef{}, false, err
+	}
+	return current, true, ctx.Err()
+}
+
+func resolveObservablePrivateGeneration(ctx context.Context, current task.SupervisorRef, facts privateGenerationFacts, purpose privateGenerationPurpose) (task.SupervisorRef, bool, error) {
+	phase, phaseErr := facts.phaseFor(current, purpose)
+	if phaseErr != nil {
+		return task.SupervisorRef{}, false, phaseErr
+	}
+	if phase < privateGenerationObservable {
+		return task.SupervisorRef{}, false, ErrPrivateSupervisorMigrationRequired
+	}
+	return current, true, ctx.Err()
 }

@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hishamkaram/delegation-layer/internal/lifetime"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 )
 
@@ -328,4 +329,18 @@ func requireHandoffReleaseBytes(t *testing.T, td *TaskDir, want []byte) {
 	if got := readTestFile(t, handoffReleasePath(td)); !bytes.Equal(got, want) {
 		t.Fatalf("release bytes changed:\n got %s\nwant %s", got, want)
 	}
+}
+
+func TestOperatorDispositionDoesNotReleaseSessionOrPermitContinuation(t *testing.T) {
+	s, td, queue := operatorDispositionFixture(t)
+	must(t, td.ClaimSession(handoffProvider, handoffConversation))
+	_, challenge, err := td.PrepareOperatorDispositionContext(t.Context(), queue, lifetime.NativeObservation{})
+	must(t, err)
+	_, err = td.ConfirmOperatorDispositionContext(t.Context(), queue, challenge, lifetime.NativeObservation{})
+	must(t, err)
+	if err = td.ReleaseSessionAfterLifetimeClosure(handoffProvider, handoffConversation); !errors.Is(err, task.ErrSessionBusy) {
+		t.Fatalf("maintenance permission released session: %v", err)
+	}
+	testAbsent(t, handoffReleasePath(td))
+	requireHandoffSuccessorRefused(t, s)
 }

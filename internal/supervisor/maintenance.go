@@ -6,6 +6,7 @@ import (
 
 	"github.com/hishamkaram/delegation-layer/internal/guardian"
 	"github.com/hishamkaram/delegation-layer/internal/inspection"
+	"github.com/hishamkaram/delegation-layer/internal/lifetime"
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
@@ -267,4 +268,31 @@ func MaintenanceBusy(err error) bool {
 func taskMaintenancePending(id, reason string, cause error) error {
 	assessment := MaintenanceAssessment{Readiness: "blocked", ActiveWork: "none", FirstBlocker: &MaintenanceBlocker{Kind: "task", TaskID: id, ReasonCode: reason, NextAction: "human_review_task"}}
 	return &MaintenanceError{Assessment: assessment, Cause: cause}
+}
+
+// inspectTaskMaintenancePermission is an explicit maintenance consumer. It
+// never changes successful-cleanup, deletion or generic native-closure policy.
+func inspectTaskMaintenancePermission(ctx context.Context, store *taskdir.Store, td *taskdir.TaskDir, current task.SupervisorRef, job pueue.Job) (allowed bool, resultErr error) {
+	record, err := td.ReadOperatorDispositionContext(ctx)
+	if task.RecordAbsent(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if job.Label == nil || job.State != pueue.StateEnded {
+		return false, task.ErrIdentityMismatch
+	}
+	resultErr = withMaintenanceLease(ctx, store, func(locked context.Context) error {
+		matched, matchErr := pueue.PrivateSupervisorMaintenanceGenerationMatchesWithLock(locked, store.Root, record.Subject.Receipt.SupervisorRef(), current)
+		if matchErr != nil {
+			return matchErr
+		}
+		if !matched {
+			return task.ErrIdentityMismatch
+		}
+		allowed, matchErr = td.ReadSupervisorMaintenancePermissionContext(locked, task.OperatorDispositionQueue{NumericTaskID: job.ID, Label: *job.Label, Ended: true}, lifetime.NativeObservation{})
+		return matchErr
+	})
+	return allowed, resultErr
 }

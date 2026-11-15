@@ -126,7 +126,7 @@ func checkRuntimeQuiescence(ctx context.Context, store *taskdir.Store, binding t
 	if err = validateRuntimeRows(store.RootID, jobs, candidates); err != nil {
 		return err
 	}
-	if err = inspectRuntimeCandidates(ctx, store, candidates, fenced); err != nil {
+	if err = inspectRuntimeCandidates(ctx, store, candidates, fenced, binding, jobs); err != nil {
 		return err
 	}
 	after, err := store.PinRootContext(ctx)
@@ -209,9 +209,9 @@ func candidateSets(candidates runtimeCandidates) (map[string]bool, map[string]bo
 	return tasks, auxiliary
 }
 
-func inspectRuntimeCandidates(ctx context.Context, store *taskdir.Store, candidates runtimeCandidates, fenced bool) error {
+func inspectRuntimeCandidates(ctx context.Context, store *taskdir.Store, candidates runtimeCandidates, fenced bool, binding task.SupervisorRef, jobs []pueue.Job) error {
 	for _, id := range candidates.tasks {
-		if err := inspectRuntimeTask(ctx, store, id, fenced); err != nil {
+		if err := inspectRuntimeTask(ctx, store, id, fenced, binding, jobs); err != nil {
 			return &RuntimeMaintenanceError{Kind: "task", ID: id, Cause: runtimeQuiescenceError(err)}
 		}
 	}
@@ -231,13 +231,27 @@ func inspectRuntimeCandidates(ctx context.Context, store *taskdir.Store, candida
 	return nil
 }
 
-func inspectRuntimeTask(ctx context.Context, store *taskdir.Store, id string, fenced bool) error {
+func inspectRuntimeTask(ctx context.Context, store *taskdir.Store, id string, fenced bool, binding task.SupervisorRef, jobs []pueue.Job) error {
 	observation, err := store.ReadTaskExecutionClosureContext(ctx, id)
 	if err != nil {
 		return err
 	}
 	if observation.Proof != nil {
 		return nil
+	}
+	for _, job := range jobs {
+		if job.Label == nil || *job.Label != "delegate:"+store.RootID+":"+id || job.State != pueue.StateEnded {
+			continue
+		}
+		td, openErr := store.OpenTask(id)
+		if openErr != nil {
+			return errors.Join(task.ErrEvidenceFault, openErr)
+		}
+		allowed, dispositionErr := inspectTaskMaintenancePermission(ctx, store, td, binding, job)
+		dispositionErr = errors.Join(dispositionErr, td.Close())
+		if allowed || dispositionErr != nil {
+			return dispositionErr
+		}
 	}
 	if fenced {
 		preparationOnly, readErr := store.ReadTaskPreparationOnlyContext(ctx, id)

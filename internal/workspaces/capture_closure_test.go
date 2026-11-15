@@ -3,8 +3,13 @@ package workspaces
 import (
 	"context"
 	"errors"
+	"os"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/hishamkaram/delegation-layer/internal/lifetime"
+	lifecyclefixture "github.com/hishamkaram/delegation-layer/internal/tasklifecycle/testsupport"
 
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
@@ -187,5 +192,64 @@ func seedPreviousBootCaptureGap(t *testing.T, fixture *workspacefixture.Recovery
 		if err := errors.Join(absenceErr, owner.Release()); err != nil {
 			t.Fatal(err)
 		}
+	}
+}
+
+func TestOperatorDispositionDoesNotAuthorizeWorkspaceCapture(t *testing.T) {
+	store, td, request := lifecyclefixture.NewAppTestTask(t, false)
+	lifecyclefixture.PrepareAppBudgetRecords(t, td)
+	boot, err := lifetime.BootID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	self, err := lifetime.ObserveProcess(os.Getpid())
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner, err := td.AcquireLifetimeOwner(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if closeErr := owner.Release(); closeErr != nil {
+			t.Error(closeErr)
+		}
+	})
+	deadline := time.Now().Add(time.Hour)
+	_, err = td.RecordLifetimeIntentContext(t.Context(), taskdir.LifetimeIntentFacts{ScopeKind: task.LifetimeScopeProcessGroup, Assurance: task.LifetimeAssuranceCooperative, ScopePlan: "capture-settlement", BootID: boot, Deadline: deadline})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = td.RecordLifetimeRegistrationContext(t.Context(), taskdir.LifetimeRegistrationFacts{ScopeKind: task.LifetimeScopeProcessGroup, Assurance: task.LifetimeAssuranceCooperative, ScopeID: "capture-settlement", BootID: boot, Deadline: deadline})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = td.RecordLifetimeWorkerContext(t.Context(), taskdir.LifetimeWorkerFacts{PID: 1 << 30, ProcessStart: self.StartToken(), BootID: boot})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = owner.Release(); err != nil {
+		t.Fatal(err)
+	}
+	receipt, err := td.ReadSupervisorReceipt()
+	if err != nil {
+		t.Fatal(err)
+	}
+	queue := task.OperatorDispositionQueue{NumericTaskID: receipt.NumericTaskID, Label: receipt.Label, Ended: true}
+	_, challenge, err := td.PrepareOperatorDispositionContext(t.Context(), queue, lifetime.NativeObservation{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = td.ConfirmOperatorDispositionContext(t.Context(), queue, challenge, lifetime.NativeObservation{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	subject, err := TaskSubject(*request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	obligation := workspace.CaptureObligation{Predecessor: &subject}
+	if err = workspaceCapturePredecessorClosed(t.Context(), store, nil, workspace.Reservation{}, obligation, OperationOptions{}); !errors.Is(err, workspace.ErrPending) {
+		t.Fatalf("administrative permission authorized capture: %v", err)
 	}
 }

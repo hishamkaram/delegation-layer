@@ -362,3 +362,26 @@ func requireRunnerLeaseHeldOffer(t *testing.T, result commandResult, reported bo
 		t.Fatalf("%s continuation %+v, want the held runner lease reported", result.response.Command, offer)
 	}
 }
+
+func TestOperatorDispositionDoesNotReleaseCustody(t *testing.T) {
+	store, td, _ := newAppTestTask(t, false)
+	prepareSettlementAdmission(t, td)
+	placement := newCustodyTestPlacement(t)
+	recordSettlementLifetime(t, td, placement)
+	registration, err := td.ReadLifetimeRegistrationContext(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	bindCustodyTestView(t, registration)
+	confirmSettlementForTest(t, td)
+	if err = releaseLifetimeCustody(t.Context(), td, func(error) {}); err != nil {
+		t.Fatal(err)
+	}
+	if !custodyTestPending(t, registration) {
+		t.Fatal("maintenance permission released executable custody")
+	}
+	closed, err := store.ReadTaskExecutionClosureContext(t.Context(), td.TaskID)
+	if err != nil || closed.Proof != nil {
+		t.Fatalf("resource closure became available: %+v %v", closed, err)
+	}
+}

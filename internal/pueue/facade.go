@@ -28,6 +28,14 @@ func ProbeSavedPrivateTaskObservation(ctx context.Context, stateRoot string, sav
 	return control.ProbeSavedPrivateTaskObservation(ctx, stateRoot, saved, options, selectPair)
 }
 
+func ProbeSavedPrivateMaintenanceWithLock(ctx context.Context, stateRoot string, saved task.SupervisorRef, options Options, selectPair CompatiblePairSelector) (*Client, error) {
+	return control.ProbeSavedPrivateMaintenanceWithLock(ctx, stateRoot, saved, options, selectPair)
+}
+
+func PrivateSupervisorMaintenanceGenerationMatchesWithLock(ctx context.Context, root string, saved, current task.SupervisorRef) (bool, error) {
+	return control.PrivateSupervisorMaintenanceGenerationMatchesWithLock(ctx, root, saved, current)
+}
+
 func ProbeSavedPrivateUpgradeControl(ctx context.Context, stateRoot string, saved task.SupervisorRef, options Options, selectPair CompatiblePairSelector) (*Client, error) {
 	return control.ProbeSavedPrivateUpgradeControl(ctx, stateRoot, saved, options, selectPair)
 }

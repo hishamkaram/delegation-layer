@@ -272,3 +272,15 @@ func TestSchedulerObservationRejectsChangedRootIdentity(t *testing.T) {
 		t.Fatalf("scheduler accepted another state root: %+v, %v", state, err)
 	}
 }
+
+func TestOperatorDispositionDoesNotReleaseSchedulerOccurrence(t *testing.T) {
+	store, td := settledObservationFixture(t)
+	tasks := schedulerObservationFixture(store)
+	state, err := tasks.Observe(td.TaskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Release != nil || state.Observation.Publication.Terminal() || state.Observation.Liveness == task.LivenessEnded {
+		t.Fatalf("administrative permission released occurrence: %+v", state)
+	}
+}

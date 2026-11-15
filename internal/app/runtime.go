@@ -310,8 +310,8 @@ func runLegacyCommand(a Arguments, deps Dependencies) commandResult {
 		return interactionCommand(a, deps.storeDependencies())
 	case "logs":
 		return logs(a, deps.storeDependencies())
-	case "supervisor":
-		return supervisorCommand(a, deps)
+	case "supervisor", "settle":
+		return supervisorMaintenanceCommand(a, deps)
 	case "workspace":
 		return workspaceCommand(a, deps)
 	case "checkpoint":

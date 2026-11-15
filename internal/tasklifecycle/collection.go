@@ -41,6 +41,10 @@ func collectPrepared(ctx context.Context, root string, td *taskdir.TaskDir, req 
 		if outcome != nil {
 			return finishCollection(ctx, observed, root, td, req, meta, options, outcome, collectErr)
 		}
+		if handled, settlementErr := observeCollectionSettlement(ctx, td, &observed, collectErr); handled {
+			return observed, settlementErr
+		}
+
 		var supervisorErr error
 		nextSupervisorReconcile, supervisorErr = reconcileCollectionTimeoutIfActive(ctx, deadline, nextSupervisorReconcile, root, td, req, meta, options, &observed.Observation)
 		inspection, inspectErr := td.InspectContext(ctx)
@@ -61,10 +65,7 @@ func collectPrepared(ctx context.Context, root string, td *taskdir.TaskDir, req 
 		if offerErr := refreshContinuation(ctx, &observed.Observation, root, td, req, meta, options.Catalog); offerErr != nil {
 			return observed, errors.Join(passErr, offerErr)
 		}
-		if inspectErr == nil && inspection.Terminal() {
-			return observed, nil
-		}
-		if collectionAttemptEnded(&observed) {
+		if collectionAttemptEnded(&observed, inspection, inspectErr) {
 			return observed, nil
 		}
 		if CollectionWatchExpired(options.Watch, deadline) || !waitForCollectionContext(ctx, deadline) {
@@ -92,9 +93,12 @@ func refreshContinuation(ctx context.Context, observed *Observation, root string
 	return nil
 }
 
-// collectionAttemptEnded classifies a non-terminal observation that ends this
-// collection attempt before its watch deadline.
-func collectionAttemptEnded(observed *CollectionResult) bool {
+// collectionAttemptEnded classifies the observations that end this attempt
+// before its watch deadline. It never changes publication or native closure.
+func collectionAttemptEnded(observed *CollectionResult, inspection *taskdir.TaskInspection, inspectErr error) bool {
+	if inspectErr == nil && inspection.Terminal() {
+		return true
+	}
 	if observed.Pending == PendingLifetimeFinalization {
 		observed.Waiting = true
 		return true
@@ -137,4 +141,25 @@ func CollectAttempt(td *taskdir.TaskDir, predicate task.PredicateRef) (*task.Out
 func CollectAttemptContext(ctx context.Context, td *taskdir.TaskDir, predicate task.PredicateRef) (*task.OutcomeRecord, error) {
 	outcome, cleanupErr, collectErr := td.CollectContext(ctx, predicate)
 	return outcome, errors.Join(cleanupErr, collectErr)
+}
+
+func observeCollectionSettlement(ctx context.Context, td *taskdir.TaskDir, observed *CollectionResult, collectErr error) (bool, error) {
+	if collectErr != nil && !IsPureCollectionPendingError(collectErr) {
+		return false, nil
+	}
+	inspection, err := td.InspectContext(ctx)
+	if err != nil {
+		return true, err
+	}
+	observed.OperatorDisposition, err = ObserveAdministrativeSettlement(ctx, td, inspection)
+	if err != nil {
+		return true, err
+	}
+	if observed.OperatorDisposition == nil {
+		return false, nil
+	}
+	observed.Inspection = inspection
+	observed.Admission, observed.AdmissionObserved = task.AdmissionAdmitted, true
+	observed.Liveness, observed.LivenessObserved = task.LivenessUndetermined, true
+	return true, nil
 }

@@ -122,6 +122,9 @@ func collectContext(ctx context.Context, a Arguments, deps storeDependencies) (r
 	if err != nil {
 		return failed(response, err, 1)
 	}
+	if observed.OperatorDisposition != nil {
+		return failed(response, errors.New("task has a maintenance-only administrative settlement; native execution remains unknown"), 1)
+	}
 	if observed.Interrupted() {
 		return failed(response, errTaskInterrupted, 1)
 	}
