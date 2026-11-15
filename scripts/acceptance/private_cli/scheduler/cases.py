@@ -53,12 +53,23 @@ class SchedulerCase:
     command_count: int = 0
     previous_services: list[SchedulerService | SchedulerHost] = field(default_factory=list)
     default_root: bool = False
+    upgraded: bool = False
+    upgrade_definitions: list[str] = field(default_factory=list)
 
     @property
     def delegate(self) -> Path:
+        if self.upgraded:
+            return self.fixture.upgraded_install / "delegate"
         if self.lifetime.old_install is None:
             raise RuntimeError("scheduler case lost its installed CLI")
         return self.lifetime.old_install / "delegate"
+
+    @property
+    def supervisor_directory(self) -> Path:
+        directory = self.lifetime.upgraded_libexec if self.upgraded else self.lifetime.old_libexec
+        if directory is None:
+            raise RuntimeError("scheduler case lost its selected supervisor")
+        return directory
 
     def command(self, name: str, arguments: list[str], expected: tuple[int, ...] = (0,), *,
                 deadline: float | None = None) -> dict[str, object]:
@@ -237,9 +248,9 @@ class SchedulerCase:
         response = wait_until(ready, timeout=self.remaining(), description="scheduled task admission")
         # Status owns the validated admission verdict for these exact IDs;
         # task_record belongs to dispatch and is absent from Status responses.
-        require(self.lifetime.old_libexec is not None, "scheduler lost its bundled supervisor")
-        assert_state_supervisor_pair(self.fixture.state, self.lifetime.old_libexec)
-        require(self.fixture.old_daemon_marker.is_file(), "scheduler never started its cold private daemon")
+        assert_state_supervisor_pair(self.fixture.state, self.supervisor_directory)
+        marker = self.fixture.upgraded_daemon_marker if self.upgraded else self.fixture.old_daemon_marker
+        require(marker.is_file(), "scheduler never started its selected private daemon")
         return response
 
     def collect(self, row: Occurrence) -> None:

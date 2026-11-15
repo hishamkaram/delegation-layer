@@ -346,6 +346,7 @@ real account; a cross-build or a different kernel is not native runtime proof.
 | `make acceptance-private-cli` | Current CLI/private-supervisor bootstrap, dispatch/status/collect and 200-running-task capacity with finite provider fixtures. |
 | `make acceptance-private-cli-default-stop` | User, wall-budget and opt-in output-silence stops through the real guardian. |
 | `make acceptance-scheduler` | Native ticks and stop isolation with finite fixtures. The driver defaults to `--hosting managed-host` for foreground `scheduler serve`, without an OS service manager. Optional `--hosting service` retains the legacy `scheduler run` service path. |
+| `make acceptance-scheduler-upgrade` | Verified v0.4.2/schema-v1 and v0.5.1/schema-v2 release archives upgraded to the current source candidate. Checks explicit migration, saved state and task evidence, future ticks, pause/resume, host restart and duplicate prevention with finite provider fixtures. |
 | `make acceptance-supervisor-handoff` | Inspection handoff while existing external work continues. |
 | `make acceptance-supervisor-upgrade-recovery` | Private-supervisor upgrade recovery, including removal of the old install while a task and daemon remain live. |
 | `make acceptance-workspaces` | Managed workspace lifecycle, lineage and checkpoint fixtures. |
@@ -407,6 +408,20 @@ python3 scripts/acceptance/private_cli/scheduler/cli.py \
 
 Use `python3 scripts/acceptance/private_cli/scheduler/cli.py --help` for the current driver's
 scenario, source-root and supervisor-path options.
+
+`make acceptance-scheduler-upgrade` downloads pinned official v0.4.2 and
+v0.5.1 archives and builds the current checkout as the upgrade candidate.
+It runs both release-to-candidate paths with real minute ticks and the finite
+provider fixture; it makes no AI requests. It checks passive doctor observations
+before and after migration, plus saved hook, quota policy and result state.
+The v0.4.2 case migrates schema 1
+to 2; the v0.5.1 case preserves the existing schema 2. Each case requires its
+completed scenario and cleanup receipt before the command succeeds. Linux and
+macOS CI retain these receipts under `scheduler-upgrade-*` artifacts.
+The historical archives supply `delegate` and `delegate-run`; both generations
+use the pinned test Pueue pair. Old tasks close before the swap, leaving an
+unobserved scheduler reservation for the candidate to reconcile. Coverage
+excludes live-task handoff and supervisor version changes.
 
 For scheduler hosting changes, run the actual candidate CLI/runner on Linux and
 macOS with a user-started `scheduler serve` in an independent terminal or tmux

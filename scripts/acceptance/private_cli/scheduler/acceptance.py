@@ -148,12 +148,12 @@ def finish_case(*, args: SchedulerArguments, case: SchedulerCase | None, lifetim
         raise RuntimeError("scheduler hosting or occurrence discovery remains uncertain; fixture retained") from cleanup_error
     if failure is None and case is not None:
         try:
-            if lifetime.private_config is None or lifetime.old_libexec is None:
+            if lifetime.private_config is None:
                 raise RuntimeError("scheduler fixture lost its private supervisor cleanup binding")
             receipt.phase("canonical_cleanup")
             shutdown_terminal_private_supervisor(
                 case.delegate,
-                lifetime.old_libexec / "pueue", lifetime.private_config, lifetime.env,
+                case.supervisor_directory / "pueue", lifetime.private_config, lifetime.env,
                 state=case.fixture.state, task_ids=tuple(lifetime.attempted_task_ids), capture_root=lifetime.capture_token,
                 supervisor_cleanups=lifetime.supervisor_cleanups, disposal=lifetime.disposal, closed_roots=lifetime.closed_roots,
             )
