@@ -26,6 +26,15 @@ type SubmissionAuthorization struct {
 type SubmissionGate func(context.Context, task.SupervisorRef) (SubmissionAuthorization, error)
 
 func (c *Client) checkSubmissionGate(ctx context.Context, gate SubmissionGate) (SubmissionAuthorization, error) {
+	if root, private := privateStateRoot(c.runtimeBinding.ConfigPath); private {
+		record, _, err := readPrivateBootstrapRecord(root)
+		if err != nil {
+			return SubmissionAuthorization{}, err
+		}
+		if record.DrainV1 != nil {
+			return SubmissionAuthorization{}, ErrPrivateUpgradePending
+		}
+	}
 	if gate == nil {
 		return SubmissionAuthorization{}, nil
 	}

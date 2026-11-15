@@ -18,11 +18,8 @@ func (c *Client) MigratePrivateSupervisorWithLock(ctx context.Context, stateRoot
 	if err := validatePrivateMigrationClient(c, stateRoot); err != nil {
 		return err
 	}
-	if err := refusePendingPrivateRestart(stateRoot); err != nil {
+	if err := c.validatePrivateMigrationPurpose(ctx, stateRoot); err != nil {
 		return err
-	}
-	if _, err := recoverPrivateIdentityPublication(stateRoot); err != nil {
-		return fmt.Errorf("%w: recover private identity publication: %w", ErrPrivateSupervisorMigrationRequired, err)
 	}
 	base := filepath.Dir(c.binding.ConfigPath)
 	identity, found, pending, err := privateMigrationState(base)
@@ -58,6 +55,37 @@ func (c *Client) MigratePrivateSupervisorWithLock(ctx context.Context, stateRoot
 		return c.resumePrivateMigration(ctx, stateRoot, base, persistedBinding, bindingFound, identity, found, current, currentMigrationIdentity, *pending)
 	}
 	return c.reconcilePrivateSupervisor(ctx, stateRoot, persistedBinding, identity, current, currentMigrationIdentity)
+}
+
+func (c *Client) validatePrivateMigrationPurpose(ctx context.Context, stateRoot string) error {
+	bootstrap, _, bootstrapErr := readPrivateBootstrapRecord(stateRoot)
+	if bootstrapErr != nil {
+		return bootstrapErr
+	}
+	if bootstrap.DrainV1 != nil {
+		pin, err := readControlRootPin(ctx, stateRoot)
+		if err != nil {
+			return err
+		}
+		pending, found, err := loadPrivateMigrationRecord(filepath.Join(stateRoot, privateSupervisorDirectory))
+		if err != nil || !found {
+			return errors.Join(ErrPrivateUpgradePending, err)
+		}
+		if err = validatePrivateUpgradeMigration(ctx, pin, pending); err != nil {
+			return err
+		}
+		if pending.UpgradeGeneration.Target != c.binding {
+			return ErrBinding
+		}
+	} else if err := refusePendingPrivateRestart(stateRoot); err != nil {
+		return err
+	}
+	if bootstrap.DrainV1 == nil {
+		if _, err := recoverPrivateIdentityPublication(stateRoot); err != nil {
+			return fmt.Errorf("%w: recover private identity publication: %w", ErrPrivateSupervisorMigrationRequired, err)
+		}
+	}
+	return nil
 }
 
 func validatePrivateMigrationClient(c *Client, stateRoot string) error {
@@ -164,6 +192,9 @@ func privateMigrationState(base string) (identity privateDaemonIdentity, found b
 }
 
 func (c *Client) resumePrivateMigration(ctx context.Context, stateRoot, base string, legacyBinding task.SupervisorRef, bindingFound bool, identity privateDaemonIdentity, found bool, current privateDaemonIdentity, currentBinding privateDaemonIdentity, pending privateMigrationRecord) error {
+	if pending.UpgradeGeneration.OperationID != "" && pending.UpgradeGeneration.Target != c.binding {
+		return ErrBinding
+	}
 	if privateMigrationPrepared(pending) {
 		if !privateMigrationIdentityMatchesCurrent(pending.Successor, current, currentBinding) {
 			if !bindingFound || !found ||
@@ -200,7 +231,7 @@ func (c *Client) resumeValidatedPreparedPrivateMigration(ctx context.Context, st
 	if err := validatePendingPrivateMigration(pending, legacyBinding, bindingFound, c.binding, current, currentBinding); err != nil {
 		return err
 	}
-	if found && bindingFound && privateMigrationIdentityMatchesCurrent(identity, current, currentBinding) && task.SameSupervisorIdentity(legacyBinding, c.binding) {
+	if pending.UpgradeGeneration.OperationID == "" && found && bindingFound && privateMigrationIdentityMatchesCurrent(identity, current, currentBinding) && task.SameSupervisorIdentity(legacyBinding, c.binding) {
 		return c.completePendingPrivateMigration(ctx, stateRoot, base, pending)
 	}
 	if !found || !privateDaemonIdentityMatchesBinding(pending.Legacy, legacyBinding) || !privateDaemonIdentityMatchesBinding(identity, legacyBinding) {
@@ -273,7 +304,7 @@ func observeDispatchedPrivateMigrationShutdown(ctx context.Context, base string,
 			return stopped, retryErr
 		}
 	}
-	if err := observer.waitUnavailableWithProcess(ctx, process); err != nil {
+	if err := observer.waitPrivateMigrationClosed(ctx, base, pending); err != nil {
 		return pending, fmt.Errorf("%w: wait for dispatched predecessor shutdown: %w", ErrPrivateSupervisorMigrationRequired, err)
 	}
 	stopped := pending
@@ -282,6 +313,22 @@ func observeDispatchedPrivateMigrationShutdown(ctx context.Context, base string,
 		return pending, fmt.Errorf("%w: record dispatched predecessor shutdown: %w", ErrPrivateSupervisorMigrationRequired, err)
 	}
 	return stopped, nil
+}
+
+func (c *Client) waitPrivateMigrationClosed(ctx context.Context, base string, pending privateMigrationRecord) error {
+	if pending.UpgradeGeneration.OperationID != "" {
+		if err := c.requirePrivateUpgradePredecessorClosed(ctx, base, pending); err != nil {
+			return err
+		}
+	}
+	process, err := privateMigrationProcess(pending)
+	if err != nil {
+		return err
+	}
+	if err = c.waitUnavailableWithProcess(ctx, process); err != nil {
+		return err
+	}
+	return nil
 }
 
 func privateMigrationPIDObserver(binding task.SupervisorRef, identity privateDaemonIdentity, options Options) *Client {
@@ -325,6 +372,9 @@ func privateMigrationPredecessorMatches(pending privateMigrationRecord, binding 
 }
 
 func (c *Client) completePendingPrivateMigration(ctx context.Context, stateRoot, base string, pending privateMigrationRecord) error {
+	if pending.UpgradeGeneration.OperationID != "" {
+		return c.completePrivateUpgradeMigration(ctx, stateRoot, base, pending)
+	}
 	observation, err := c.availableForTransition(ctx, true)
 	if err != nil {
 		return fmt.Errorf("%w: verify successor before clearing private supervisor recovery: %w", ErrPrivateSupervisorMigrationRequired, err)
@@ -353,7 +403,7 @@ func (c *Client) migratePrivateSupervisor(ctx context.Context, stateRoot string,
 	if err := c.validatePrivateGenerationLaunch(stateRoot); err != nil {
 		return err
 	}
-	historical := legacy.ExecutableIdentity != task.ExecutableIdentityInstalledPathV1
+	historical := migration.UpgradeGeneration.OperationID == "" && legacy.ExecutableIdentity != task.ExecutableIdentityInstalledPathV1
 	var (
 		oldSupervisor *Client
 		recoveryOwned bool
@@ -376,9 +426,9 @@ func (c *Client) migratePrivateSupervisor(ctx context.Context, stateRoot string,
 		return errors.Join(prepareErr, oldSupervisor.CloseAfterPending(prepareErr))
 	}
 	if !historical {
-		oldSupervisor, recoveryOwned, err = RecoverSavedWithPair(ctx, stateRoot, legacy, c.runtimeBinding.ClientExecutable, c.runtimeBinding.DaemonExecutable, c.options)
+		oldSupervisor, recoveryOwned, err = c.openPreparedMigrationPredecessor(ctx, stateRoot, legacy, migration)
 		if err != nil {
-			return fmt.Errorf("%w: recover previous private supervisor: %w", ErrPrivateSupervisorMigrationRequired, err)
+			return err
 		}
 	}
 	preserveLegacy := true
@@ -400,6 +450,22 @@ func (c *Client) migratePrivateSupervisor(ctx context.Context, stateRoot string,
 	}
 	preserveLegacy = false
 	return nil
+}
+
+func (c *Client) openPreparedMigrationPredecessor(ctx context.Context, stateRoot string, legacy task.SupervisorRef, record privateMigrationRecord) (*Client, bool, error) {
+	if record.UpgradeGeneration.OperationID == "" {
+		return RecoverSavedWithPair(ctx, stateRoot, legacy, c.runtimeBinding.ClientExecutable, c.runtimeBinding.DaemonExecutable, c.options)
+	}
+	pin, err := readControlRootPin(ctx, stateRoot)
+	if err != nil {
+		return nil, false, err
+	}
+	drain, found, err := readPrivateUpgrade(pin, record.UpgradeGeneration.OperationID)
+	if err != nil || !found {
+		return nil, false, errors.Join(ErrBinding, err)
+	}
+	client, err := preparePrivateUpgradePredecessor(ctx, pin, drain, c.options)
+	return client, false, err
 }
 
 func (c *Client) runPrivateMigration(ctx context.Context, stateRoot, base string, oldSupervisor *Client, migration *privateMigrationRecord) (shutdownOwned, shutdownComplete, queueSafe bool, resultErr error) {
@@ -463,7 +529,7 @@ func dispatchPrivateMigrationShutdown(ctx context.Context, base string, legacy *
 			return pending, dispatched, err
 		}
 	}
-	if err := legacy.waitUnavailableWithProcess(ctx, process); err != nil {
+	if err := legacy.waitPrivateMigrationClosed(ctx, base, pending); err != nil {
 		return pending, pending.LegacyShutdownDispatched, fmt.Errorf("%w: wait for previous private supervisor: %w", ErrPrivateSupervisorMigrationRequired, err)
 	}
 	stopped := pending
@@ -552,6 +618,9 @@ func (c *Client) authorizePrivateMigrationJobs(ctx context.Context, stateRoot st
 }
 
 func (c *Client) commitPrivateMigrationCompletion(ctx context.Context, root, base string, pending privateMigrationRecord) error {
+	if pending.UpgradeGeneration.OperationID != "" {
+		return commitPrivateUpgradeCompletion(ctx, root, pending, c.options)
+	}
 	completed, err := privateMigrationCompletionRecorded(root, base, c.Binding(), pending)
 	if err != nil {
 		return err

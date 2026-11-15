@@ -44,17 +44,49 @@ func publishPrivateMigrationStateContext(ctx context.Context, base string, recor
 	if err != nil {
 		return err
 	}
-	if found && current == record {
+	if found && current == record && record.UpgradeGeneration.OperationID == "" {
 		return publishPrivateMigrationState(base, record)
 	}
 	return guardPrivateGeneration(ctx, filepath.Dir(base), guard, func() error {
-		return publishPrivateMigrationState(base, record)
+		if record.UpgradeGeneration.OperationID != "" {
+			pin, err := readControlRootPin(ctx, filepath.Dir(base))
+			if err != nil {
+				return err
+			}
+			if err = validatePrivateUpgradeMigration(ctx, pin, record); err != nil {
+				return err
+			}
+		}
+		writeErr := publishPrivateMigrationState(base, record)
+		if record.UpgradeGeneration.OperationID != "" {
+			return settlePrivateUpgradeMigrationWrite(base, privateMigrationRecord{}, record, writeErr)
+		}
+		return writeErr
 	})
 }
 
 func replacePrivateMigrationRecordContext(ctx context.Context, base string, expected, replacement privateMigrationRecord, guard PrivateGenerationGuard) error {
 	return guardPrivateGeneration(ctx, filepath.Dir(base), guard, func() error {
-		return replacePrivateMigrationRecord(base, expected, replacement)
+		if expected.UpgradeGeneration.OperationID != "" || replacement.UpgradeGeneration.OperationID != "" {
+			pin, err := readControlRootPin(ctx, filepath.Dir(base))
+			if err != nil {
+				return err
+			}
+			if err = validatePrivateUpgradeMigration(ctx, pin, expected); err != nil {
+				return err
+			}
+			if err = validatePrivateUpgradeMigration(ctx, pin, replacement); err != nil {
+				return err
+			}
+			if err = validatePrivateUpgradeProgress(expected, replacement); err != nil {
+				return err
+			}
+		}
+		writeErr := replacePrivateMigrationRecord(base, expected, replacement)
+		if expected.UpgradeGeneration.OperationID != "" {
+			return settlePrivateUpgradeMigrationWrite(base, expected, replacement, writeErr)
+		}
+		return writeErr
 	})
 }
 
@@ -67,6 +99,9 @@ func replaceReconciledPrivateBindingContext(ctx context.Context, root string, be
 // The completed edge and exact published successor jointly authorize replay;
 // a pending identity body by itself does not encode migration completion.
 func privateMigrationCompletionRecorded(root, base string, binding task.SupervisorRef, pending privateMigrationRecord) (bool, error) {
+	if pending.UpgradeGeneration.OperationID != "" && !pending.UpgradeGeneration.Completed {
+		return false, nil
+	}
 	history, _, err := loadPrivateMigrationHistory(base)
 	if err != nil {
 		return false, err

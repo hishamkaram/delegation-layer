@@ -32,6 +32,13 @@ func ProbeSavedPrivateTaskObservation(ctx context.Context, stateRoot string, sav
 	return probeSavedPrivateForPurpose(ctx, stateRoot, saved, options, selectPair, privateGenerationTaskRead)
 }
 
+// ProbeSavedPrivateUpgradeControl lends exact saved-row observation and Stop
+// during a drain. It creates/repairs nothing; all admission and cleanup gates
+// remain fenced. Stop retains its existing permit and numeric identity leases.
+func ProbeSavedPrivateUpgradeControl(ctx context.Context, stateRoot string, saved task.SupervisorRef, options Options, selectPair CompatiblePairSelector) (*Client, error) {
+	return probeSavedPrivateForPurpose(ctx, stateRoot, saved, options, selectPair, privateGenerationUpgradeControl)
+}
+
 func probeSavedPrivateForPurpose(ctx context.Context, stateRoot string, saved task.SupervisorRef, options Options, selectPair CompatiblePairSelector, purpose privateGenerationPurpose) (*Client, error) {
 	probeContext, cancel, options, err := prepareSavedPrivateProbeOptions(ctx, stateRoot, saved, options)
 	if err != nil {
@@ -83,7 +90,7 @@ func probeSavedPrivateCompatibleWithLock(ctx context.Context, root string, saved
 		}
 	}
 	if IsLegacyStateSupervisorClient(root, published) {
-		client, ready, probeErr := probeCompatibleSavedPair(ctx, root, saved, published, options, selectPair)
+		client, ready, probeErr := probeCompatibleSavedPair(ctx, root, saved, published, options, selectPair, purpose)
 		return client, ready, PrivateEndpointObservation{}, probeErr
 	}
 	exact, verification, observation, err := probeExactPrivatePair(ctx, published, resolution, options)
@@ -100,7 +107,7 @@ func probeSavedPrivateCompatibleWithLock(ctx context.Context, root string, saved
 		ready, verifyErr := verifyExactSavedPrivateObservation(ctx, root, saved, exact, observation, purpose)
 		return exact, ready, observation, verifyErr
 	}
-	client, ready, err := probeCompatibleSavedPair(ctx, root, saved, published, options, selectPair)
+	client, ready, err := probeCompatibleSavedPair(ctx, root, saved, published, options, selectPair, purpose)
 	return client, ready, PrivateEndpointObservation{}, err
 }
 
@@ -153,15 +160,15 @@ func probeSavedPrivateRecoveryAlias(ctx context.Context, root string, saved, pub
 	return client, err == nil, observation, err
 }
 
-func probeCompatibleSavedPair(ctx context.Context, root string, saved, published task.SupervisorRef, options Options, selectPair CompatiblePairSelector) (*Client, bool, error) {
-	current, complete, err := completePrivateProbeBinding(root, privateGenerationComplete)
+func probeCompatibleSavedPair(ctx context.Context, root string, saved, published task.SupervisorRef, options Options, selectPair CompatiblePairSelector, purpose privateGenerationPurpose) (*Client, bool, error) {
+	current, complete, err := compatiblePrivateProbeBinding(root, purpose)
 	if err != nil || !complete {
 		return nil, false, err
 	}
 	if current != published {
 		return nil, false, ErrBinding
 	}
-	mapped, connected, err := ResolvePrivateSupervisorSuccessorWithLock(ctx, root, saved)
+	mapped, connected, err := resolvePrivateSupervisorSuccessorWithLock(ctx, root, saved, purpose)
 	if err != nil || !connected {
 		return nil, false, err
 	}
@@ -182,11 +189,22 @@ func probeCompatibleSavedPair(ctx context.Context, root string, saved, published
 	if err != nil || !ready {
 		return client, ready, err
 	}
-	current, complete, err = completePrivateProbeBinding(root, privateGenerationComplete)
+	current, complete, err = compatiblePrivateProbeBinding(root, purpose)
 	if err != nil || !complete || current != published {
 		return client, false, errors.Join(ErrBinding, err)
 	}
 	return client, true, ctx.Err()
+}
+
+func compatiblePrivateProbeBinding(root string, purpose privateGenerationPurpose) (task.SupervisorRef, bool, error) {
+	facts, err := loadPrivateGenerationFacts(root)
+	if err != nil {
+		return task.SupervisorRef{}, false, err
+	}
+	if facts.drain != nil && (purpose == privateGenerationTaskRead || purpose == privateGenerationUpgradeControl) {
+		return facts.probeBinding(privateGenerationObservable, purpose)
+	}
+	return facts.probeBinding(privateGenerationComplete, purpose)
 }
 
 func compatiblePairUnavailable(cause error) bool {

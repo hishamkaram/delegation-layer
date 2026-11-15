@@ -101,6 +101,7 @@ type privateGenerationFacts struct {
 	// Raw read owner; transitionErr retains its existing derived priority.
 	identityPublicationReadErr error
 	runtimeRestartPending      bool
+	drain                      *privateUpgradeDrain
 }
 
 func loadPrivateGenerationFacts(stateRoot string) (privateGenerationFacts, error) {
@@ -115,6 +116,7 @@ func loadPrivateGenerationFacts(stateRoot string) (privateGenerationFacts, error
 	facts.aliasPublishing, facts.aliasPublicationErr = privateRecoveryObservationConflict(stateRoot, facts.aliasPresent)
 	bootstrap, bootstrapFound, bootstrapErr := readPrivateBootstrapRecord(stateRoot)
 	facts.runtimeRestartPending = runtimeRestartPending(bootstrap)
+	facts.drain = bootstrap.DrainV1
 	bootstrapPending := bootstrapFound && (bootstrap.RuntimeRestart == nil || facts.runtimeRestartPending)
 	_, publishing, publicationErr := readPrivateIdentityPublication(stateRoot)
 	facts.identityPublicationReadErr = publicationErr
@@ -485,6 +487,9 @@ func privatePublishedRecoveryError(err error) error {
 }
 
 func preparePrivateWithLock(ctx context.Context, clientExecutable, daemonExecutable, stateRoot string, options Options, migrationOnly bool) (client *Client, resultErr error) {
+	if err := refusePendingPrivateUpgrade(stateRoot); err != nil {
+		return nil, err
+	}
 	bootstrapContext, cancel, options, err := privateBootstrapOptions(ctx, options)
 	if err != nil {
 		return nil, err

@@ -28,6 +28,57 @@ func ProbeSavedPrivateTaskObservation(ctx context.Context, stateRoot string, sav
 	return control.ProbeSavedPrivateTaskObservation(ctx, stateRoot, saved, options, selectPair)
 }
 
+func ProbeSavedPrivateUpgradeControl(ctx context.Context, stateRoot string, saved task.SupervisorRef, options Options, selectPair CompatiblePairSelector) (*Client, error) {
+	return control.ProbeSavedPrivateUpgradeControl(ctx, stateRoot, saved, options, selectPair)
+}
+
+type (
+	UpgradeOperationID        = control.UpgradeOperationID
+	UpgradeMode               = control.UpgradeMode
+	UpgradePhase              = control.UpgradePhase
+	PrivateUpgradeObservation = control.PrivateUpgradeObservation
+	PrivateUpgradeError       = control.PrivateUpgradeError
+)
+
+const (
+	UpgradeReactive             = control.UpgradeReactive
+	UpgradeOperationRequired    = control.UpgradeOperationRequired
+	UpgradeDraining             = control.UpgradeDraining
+	UpgradeAwaitingInstallation = control.UpgradeAwaitingInstallation
+	UpgradeAuthorized           = control.UpgradeAuthorized
+	UpgradeMigrating            = control.UpgradeMigrating
+)
+
+var (
+	ErrPrivateUpgradePending     = control.ErrPrivateUpgradePending
+	ErrPrivateUpgradeOperation   = control.ErrPrivateUpgradeOperation
+	ErrPrivateUpgradeNotRetained = control.ErrPrivateUpgradeNotRetained
+)
+
+func ParseUpgradeOperationID(value string) (UpgradeOperationID, error) {
+	return control.ParseUpgradeOperationID(value)
+}
+
+func ObservePrivateUpgrade(ctx context.Context, root taskdir.RootPin, op UpgradeOperationID) (PrivateUpgradeObservation, bool, error) {
+	return control.ObservePrivateUpgrade(ctx, root, op)
+}
+
+func BeginPrivateUpgradeWithLock(ctx context.Context, root taskdir.RootPin, mode UpgradeMode, options Options) (PrivateUpgradeObservation, error) {
+	return control.BeginPrivateUpgradeWithLock(ctx, root, mode, options)
+}
+
+func AdvancePrivateUpgradeDrainWithLock(ctx context.Context, root taskdir.RootPin, op UpgradeOperationID, options Options) (PrivateUpgradeObservation, error) {
+	return control.AdvancePrivateUpgradeDrainWithLock(ctx, root, op, options)
+}
+
+func AuthorizePrivateUpgradeCompletionWithLock(ctx context.Context, root taskdir.RootPin, op UpgradeOperationID, options Options) (PrivateUpgradeObservation, error) {
+	return control.AuthorizePrivateUpgradeCompletionWithLock(ctx, root, op, options)
+}
+
+func CompletePrivateUpgradeWithLock(ctx context.Context, root taskdir.RootPin, op UpgradeOperationID, selectPair CompatiblePairSelector, options Options) (*Client, PrivateUpgradeObservation, error) {
+	return control.CompletePrivateUpgradeWithLock(ctx, root, op, selectPair, options)
+}
+
 func CheckPrivateAdmissionRuntime(ctx context.Context, root string, runtime task.SupervisorRef) error {
 	return control.CheckPrivateAdmissionRuntime(ctx, root, runtime)
 }
@@ -514,6 +565,7 @@ type (
 	DaemonWaitOwner             = control.DaemonWaitOwner
 	DaemonWaitBirthOwner        = control.DaemonWaitBirthOwner
 	DaemonWaitCustodyOwner      = control.DaemonWaitCustodyOwner
+	DaemonWaitSettlementOwner   = control.DaemonWaitSettlementOwner
 	Options                     = control.Options
 	PrivateQueueCleanupPlan     = control.PrivateQueueCleanupPlan
 	PrivateTerminalCustodyScope = control.PrivateTerminalCustodyScope

@@ -24,8 +24,25 @@ func startDaemon(ctx context.Context, operationRoot, executable, configPath, bas
 // The optional scope is minted only by the matching restart owner after its
 // durable successor acceptance. It bypasses only that exact runtime fence.
 func startDaemonForRuntime(ctx context.Context, operationRoot, executable, configPath, base string, options Options, restart *privateRuntimeRestartStart) (privateDaemonStart, error) {
-	if err := restart.authorizeStart(ctx, operationRoot); err != nil {
-		return privateDaemonStart{}, err
+	return startDaemonWithAuthorization(ctx, operationRoot, executable, configPath, base, options, restart)
+}
+
+type privateDaemonStartAuthorization interface {
+	authorizeStart(context.Context, string) error
+}
+
+// Both lifecycle owners lend only their exact accepted Start to the canonical
+// starter. Start/Wait, before-reap birth and error retention stay here.
+func startDaemonWithAuthorization(ctx context.Context, operationRoot, executable, configPath, base string, options Options, scope privateDaemonStartAuthorization) (privateDaemonStart, error) {
+	if scope == nil {
+		if err := refusePendingPrivateRestart(operationRoot); err != nil {
+			return privateDaemonStart{}, err
+		}
+	}
+	if scope != nil {
+		if err := scope.authorizeStart(ctx, operationRoot); err != nil {
+			return privateDaemonStart{}, err
+		}
 	}
 	selected, err := canonicalExecutable(executable)
 	if err != nil || selected != executable {
@@ -53,7 +70,9 @@ func startDaemonForRuntime(ctx context.Context, operationRoot, executable, confi
 }
 
 type privateDaemonStart struct {
-	attempted  bool
+	attempted bool
+	// Only the live canonical callback can know that no child was created.
+	notStarted bool
 	done       <-chan struct{}
 	birthReady <-chan struct{}
 	birth      func() (lifetime.ProcessRef, bool, error)
@@ -91,15 +110,7 @@ func guardedDaemonStart(ctx context.Context, operationRoot, configPath string, c
 			return ErrInfrastructureOwnerRequired
 		}
 		called = true
-		startErr = ctx.Err()
-		if startErr == nil {
-			if err := cmd.Start(); err != nil {
-				startErr = fmt.Errorf("%w: start private pueued: %w", ErrBinding, err)
-			} else {
-				// A guard may report a post-Start fault; it cannot delay reaping.
-				started = startDaemonWait(cmd, report, lifetime.ObserveStartedProcess)
-			}
-		}
+		started, startErr = startPrivateDaemonCommand(ctx, cmd, report)
 		return startErr
 	}
 	guardErr := guard.GuardDaemonStart(ctx, operationRoot, start)
@@ -111,6 +122,18 @@ func guardedDaemonStart(ctx context.Context, operationRoot, configPath string, c
 	}
 	started.attempted = called
 	return started, errors.Join(guardErr, startErr, contractErr)
+}
+
+// A synchronous Start failure proves no child exists only to this live owner.
+// Once Start succeeds, the canonical before-reap birth and sole Wait own it.
+func startPrivateDaemonCommand(ctx context.Context, cmd *exec.Cmd, report func(error)) (privateDaemonStart, error) {
+	if err := ctx.Err(); err != nil {
+		return privateDaemonStart{notStarted: true}, err
+	}
+	if err := cmd.Start(); err != nil {
+		return privateDaemonStart{notStarted: true}, fmt.Errorf("%w: start private pueued: %w", ErrBinding, err)
+	}
+	return startDaemonWait(cmd, report, lifetime.ObserveStartedProcess), nil
 }
 
 // Called immediately after successful Start, this owner launches the sole Wait.

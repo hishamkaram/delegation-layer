@@ -276,6 +276,9 @@ func preparePrivateBootstrap(ctx context.Context, clientExecutable, daemonExecut
 	if !filepath.IsAbs(stateRoot) || filepath.Clean(stateRoot) != stateRoot {
 		return Options{}, ResolutionContext{}, "", "", "", nil, fmt.Errorf("%w: private supervisor root must be canonical and absolute", ErrConfiguration)
 	}
+	if err := refusePendingPrivateUpgrade(stateRoot); err != nil {
+		return Options{}, ResolutionContext{}, "", "", "", nil, err
+	}
 	normalized, err := normalizeOptions(options)
 	if err != nil {
 		return Options{}, ResolutionContext{}, "", "", "", nil, err

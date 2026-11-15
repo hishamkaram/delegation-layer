@@ -183,6 +183,9 @@ func privateSupervisorMigrationEdgePublishedWithLock(ctx context.Context, stateR
 func privateSupervisorMigrationEdgeFound(ctx context.Context, history privateMigrationHistory, wantPredecessor, wantSuccessor privateDaemonIdentity) (bool, error) {
 	edgeFound := false
 	for _, migration := range history.Migrations {
+		if migration.UpgradeGeneration.OperationID != "" && migration.Legacy == migration.Successor {
+			continue
+		}
 		if err := ctx.Err(); err != nil {
 			return false, err
 		}
@@ -204,6 +207,9 @@ func privateSupervisorSuccessorConnected(ctx context.Context, stateRoot string, 
 	}
 	cursor := privateDaemonIdentityForBinding(saved)
 	for _, migration := range history.Migrations {
+		if migration.UpgradeGeneration.OperationID != "" && migration.Legacy == migration.Successor {
+			continue
+		}
 		if err := ctx.Err(); err != nil {
 			return false, err
 		}

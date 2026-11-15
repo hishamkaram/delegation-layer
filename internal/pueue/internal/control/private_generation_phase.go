@@ -41,6 +41,9 @@ func (facts privateGenerationFacts) runtimeRefused(runtime task.SupervisorRef) (
 	if facts.runtimeRestartPending {
 		return false, ErrPrivateRuntimeRestartPending
 	}
+	if facts.drain != nil {
+		return false, ErrPrivateUpgradePending
+	}
 	ready, err := facts.publishedReady(facts.published)
 	if err != nil {
 		return false, err
@@ -52,6 +55,9 @@ func (facts privateGenerationFacts) runtimeRefused(runtime task.SupervisorRef) (
 }
 
 func (facts privateGenerationFacts) complete(binding task.SupervisorRef, allowRecoveryAlias bool) (bool, error) {
+	if facts.drain != nil {
+		return false, errors.Join(ErrPrivateUpgradePending, facts.migrationErr, facts.aliasErr, facts.publishedErr, facts.identityErr, facts.transitionErr, facts.identityPublicationReadErr)
+	}
 	if facts.runtimeRestartPending {
 		return false, errors.Join(ErrPrivateRuntimeRestartPending, facts.migrationErr, facts.aliasErr,
 			facts.publishedErr, facts.identityErr, facts.transitionErr, facts.identityPublicationReadErr)
@@ -65,9 +71,9 @@ func (facts privateGenerationFacts) complete(binding task.SupervisorRef, allowRe
 	return facts.publishedReady(binding)
 }
 
-// privateGenerationPurpose names the consumer of a generation decision. Every
-// purpose shares the same publication, generation, journal and alias fences;
-// only the alias match differs.
+// privateGenerationPurpose names the consumer of a generation decision.
+// Saved-row reads and exact upgrade control may observe a draining predecessor;
+// that exception grants no completed-generation or admission authority.
 type privateGenerationPurpose uint8
 
 const (
@@ -79,6 +85,8 @@ const (
 	// effective config is equivalent for that read. It grants no submission,
 	// repair, cleanup or retirement authority.
 	privateGenerationTaskRead
+	// Exact cancellation keeps its original permit and numeric identity lease.
+	privateGenerationUpgradeControl
 )
 
 func (facts privateGenerationFacts) phase(binding task.SupervisorRef) (privateGenerationPhase, error) {
@@ -86,6 +94,12 @@ func (facts privateGenerationFacts) phase(binding task.SupervisorRef) (privateGe
 }
 
 func (facts privateGenerationFacts) phaseFor(binding task.SupervisorRef, purpose privateGenerationPurpose) (privateGenerationPhase, error) {
+	if facts.drain != nil {
+		if purpose == privateGenerationGeneral {
+			return privateGenerationUnavailable, ErrPrivateUpgradePending
+		}
+		return facts.upgradePredecessorPhase(binding, purpose)
+	}
 	if facts.migrationErr != nil {
 		return privateGenerationUnavailable, facts.migrationErr
 	}
@@ -113,8 +127,26 @@ func (facts privateGenerationFacts) observableAliasMatches(binding task.Supervis
 	if !facts.aliasPresent {
 		return true, nil
 	}
-	if purpose == privateGenerationTaskRead {
+	if purpose == privateGenerationTaskRead || purpose == privateGenerationUpgradeControl {
 		return facts.alias.matches(binding), nil
 	}
 	return task.SameSupervisorIdentity(facts.alias.record.Supervisor, binding) && facts.alias.record.ConfigSHA256 == binding.ConfigDigest, nil
+}
+
+func (facts privateGenerationFacts) upgradePredecessorPhase(binding task.SupervisorRef, purpose privateGenerationPurpose) (privateGenerationPhase, error) {
+	if err := errors.Join(facts.migrationErr, facts.publishedErr, facts.identityErr, facts.transitionErr, facts.identityPublicationReadErr); err != nil {
+		return privateGenerationUnavailable, err
+	}
+	if facts.drain == nil || !facts.publishedFound || !facts.identityFound || facts.drain.Predecessor != facts.published ||
+		!privateFullGenerationMatches(binding, facts.published) || !privateDaemonIdentityMatchesBinding(facts.identity, binding) {
+		return privateGenerationUnavailable, ErrPrivateUpgradePending
+	}
+	if facts.migrationPresent && !privateMigrationPrepared(facts.migration) {
+		return privateGenerationUnavailable, ErrPrivateUpgradePending
+	}
+	matched, err := facts.observableAliasMatches(binding, purpose)
+	if err != nil || !matched {
+		return privateGenerationUnavailable, err
+	}
+	return privateGenerationObservable, nil
 }

@@ -71,6 +71,16 @@ type DaemonWaitCustodyOwner interface {
 	RequireDaemonWaitCustody(ctx context.Context, root string, expected lifetime.ProcessRef) error
 }
 
+// DaemonWaitSettlementOwner supplies exhaustive root-scoped custody knowledge.
+// owned=true reports the actual matching Start/Wait, including a retired live
+// owner; closed is its real Wait completion. owned=false is allowed only after
+// proving no live custodian can hold that predecessor. Unknown returns error.
+// A completed predecessor witness is never invalidated by a successor's Wait.
+type DaemonWaitSettlementOwner interface {
+	DaemonWaitOwner
+	ObserveDaemonWait(context.Context, string, lifetime.ProcessRef) (owned bool, closed bool, err error)
+}
+
 // Options controls caller observation and an optional explicit process context.
 // Nil Resolution and Environment use current process control values at each
 // fresh call; the default child environment is bounded to pueue's control
