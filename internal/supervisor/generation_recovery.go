@@ -12,6 +12,20 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 )
 
+// Private completion and inspection preparation have different owners. Only the
+// explicit migration coordinator may use this exact result to begin the existing
+// fresh preparation path; admission and continuation must retain the refusal.
+type unpreparedInspectionMigrationError struct{}
+
+func (*unpreparedInspectionMigrationError) Error() string {
+	return inspection.ErrGroupMigrationRequired.Error() + ": inspection edge has not been prepared"
+}
+
+func (*unpreparedInspectionMigrationError) Unwrap() error {
+	return inspection.ErrGroupMigrationRequired
+}
+func (*unpreparedInspectionMigrationError) unpreparedInspectionMigration() {}
+
 // CompletePendingGroupMigrationWithLock publishes only the exact pending
 // inspection edge after Pueue proves that the same private edge is complete.
 // The caller owns the state-root bootstrap lock throughout this operation.
@@ -32,10 +46,36 @@ func CompletePendingGroupMigrationWithLock(ctx context.Context, store *taskdir.S
 	if !complete {
 		return fmt.Errorf("%w: private supervisor edge is not complete", inspection.ErrGroupMigrationRequired)
 	}
-	if err = inspection.CompleteGroupMigration(ctx, store, resolution.GroupHead, successor); err != nil {
-		return fmt.Errorf("%w: publish exact inspection group edge: %w", inspection.ErrGroupMigrationRequired, err)
+	completed, err := inspection.GroupMigrationComplete(ctx, store, resolution.GroupHead, successor)
+	if err != nil {
+		return fmt.Errorf("%w: read completed inspection edge: %w", inspection.ErrGroupMigrationRequired, err)
 	}
-	return nil
+	if completed {
+		return nil
+	}
+	head, migrated, err := inspection.ReadGroupHead(ctx, store)
+	if err != nil {
+		return err
+	}
+	if head != resolution.GroupHead {
+		return fmt.Errorf("%w: inspection head changed before edge recovery (completed chain: %t)", task.ErrEvidenceFault, migrated)
+	}
+	proposals, err := inspection.PreparedGroupMigrationSuccessors(ctx, store)
+	if err != nil {
+		return err
+	}
+	for _, proposal := range proposals {
+		// Preparation records bind the complete reference, including the pair.
+		// Other validated proposals remain immutable audit state; only explicit
+		// migration may request this selected target as a new alternate.
+		if proposal == successor.Supervisor {
+			if err = inspection.CompleteGroupMigration(ctx, store, resolution.GroupHead, successor); err != nil {
+				return fmt.Errorf("%w: publish exact inspection group edge: %w", inspection.ErrGroupMigrationRequired, err)
+			}
+			return nil
+		}
+	}
+	return &unpreparedInspectionMigrationError{}
 }
 
 // An inspection head retains immutable launch provenance across same-logical

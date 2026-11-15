@@ -80,7 +80,34 @@ func resumeInspectionSupervisorGenerationWithLock(ctx context.Context, store *ta
 			return nil
 		}
 	}
-	return RecoverInspectionGroupGenerationWithLock(ctx, store, supervisor, false)
+	err = RecoverInspectionGroupGenerationWithLock(ctx, store, supervisor, false)
+	if _, unprepared := err.(interface{ unpreparedInspectionMigration() }); unprepared {
+		// Only explicit migration may continue into the existing callback's
+		// Prepare -> private-edge verification -> Complete sequence.
+		return prepareFreshInspectionMigration(ctx, store, supervisor)
+	}
+	return err
+}
+
+// The completed private edge does not grant inspection preparation. Restore
+// only the exact published daemon through ordinary startup so its current queue
+// can be observed, then apply the root-wide gate before any new group record.
+func prepareFreshInspectionMigration(ctx context.Context, store *taskdir.Store, client *pueue.Client) error {
+	published, found, err := pueue.ReadPrivateSupervisorBinding(store.Root)
+	if err != nil {
+		return err
+	}
+	if !found || published != client.Binding() {
+		return fmt.Errorf("%w: fresh inspection migration is not bound to the published supervisor", task.ErrIdentityMismatch)
+	}
+	if err = client.StartPrivate(ctx, store.Root); err != nil {
+		return err
+	}
+	snapshot, err := client.Snapshot(ctx)
+	if err != nil {
+		return fmt.Errorf("%w: observe published supervisor queue: %w", inspection.ErrGroupMigrationRequired, err)
+	}
+	return CheckMaintenanceQuiescence(ctx, store, published, snapshot.Jobs)
 }
 
 func reconcileInspectionMigrationEntryWithLock(ctx context.Context, store *taskdir.Store, supervisor *pueue.Client) (bool, error) {
