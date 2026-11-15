@@ -23,11 +23,71 @@ type MaintenanceAssessment struct {
 // MaintenanceBlocker contains only validated control metadata, never error
 // text, executable paths, provider output or a reusable numeric queue address.
 type MaintenanceBlocker struct {
-	Kind       string      `json:"kind"`
-	TaskID     string      `json:"task_id,omitempty"`
-	QueueState pueue.State `json:"queue_state,omitempty"`
-	ReasonCode string      `json:"reason_code"`
-	NextAction string      `json:"next_action"`
+	Kind        string      `json:"kind"`
+	TaskID      string      `json:"task_id,omitempty"`
+	OperationID string      `json:"operation_id,omitempty"`
+	QueueState  pueue.State `json:"queue_state,omitempty"`
+	ReasonCode  string      `json:"reason_code"`
+	NextAction  string      `json:"next_action"`
+}
+
+// AssessMaintenance composes queue evidence with every canonical root resource.
+// Queue activity remains a separate observation; a rowless live or ambiguous
+// resource can block replacement without inventing an active queue row.
+func (c *Cleanup) AssessMaintenance(ctx context.Context, store *taskdir.Store, binding task.SupervisorRef, jobs []pueue.Job) (MaintenanceAssessment, error) {
+	var assessment MaintenanceAssessment
+	err := withMaintenanceLease(ctx, store, func(locked context.Context) error {
+		var queueErr error
+		assessment, queueErr = c.InspectMigrationQueue(locked, store, InspectionGroup(store.RootID, binding), jobs)
+		rootErr := checkMaintenanceQuiescence(locked, store, binding, jobs)
+		var combined error
+		assessment, combined = combineMaintenance(assessment, queueErr, rootErr)
+		return combined
+	})
+	if err != nil && (assessment.Readiness == "" || !MaintenanceBusy(err)) {
+		assessment.Readiness = "unknown"
+		assessment.ActiveWork = QueueActivity(jobs)
+		assessment.FirstBlocker = runtimeMaintenanceBlocker(err, false)
+	}
+	return assessment, err
+}
+
+func combineMaintenance(assessment MaintenanceAssessment, queueErr, rootErr error) (MaintenanceAssessment, error) {
+	if rootErr == nil {
+		return assessment, queueErr
+	}
+	if queueErr != nil && !MaintenanceBusy(queueErr) {
+		return assessment, errors.Join(queueErr, rootErr)
+	}
+	if !MaintenanceBusy(rootErr) {
+		assessment.Readiness = "unknown"
+		assessment.FirstBlocker = runtimeMaintenanceBlocker(rootErr, false)
+	} else if assessment.Readiness == "clear" {
+		assessment.Readiness = "blocked"
+		assessment.FirstBlocker = runtimeMaintenanceBlocker(rootErr, true)
+	}
+	return assessment, &MaintenanceError{Assessment: assessment, Cause: errors.Join(queueErr, rootErr)}
+}
+
+func runtimeMaintenanceBlocker(cause error, busy bool) *MaintenanceBlocker {
+	blocker := &MaintenanceBlocker{Kind: "observation", ReasonCode: "runtime_evidence_unreadable", NextAction: "stop_and_report"}
+	var resource *RuntimeMaintenanceError
+	if errors.As(cause, &resource) {
+		blocker.Kind = resource.Kind
+		if resource.Kind == "task" {
+			blocker.TaskID = resource.ID
+		} else {
+			blocker.OperationID = resource.ID
+		}
+	}
+	if busy {
+		blocker.ReasonCode = "runtime_closure_unproven"
+		blocker.NextAction = "wait_for_legacy_work"
+		if blocker.Kind == "task" {
+			blocker.NextAction = "human_review_task"
+		}
+	}
+	return blocker
 }
 
 // MaintenanceError retains the owner's actual causes alongside a bounded

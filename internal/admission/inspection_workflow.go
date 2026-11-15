@@ -47,7 +47,7 @@ func InspectProviderContext(parent context.Context, options InspectionOptions, s
 	openedAt := time.Now()
 	setupContext, cancelSetup := context.WithDeadline(parent, openedAt.Add(inspectionTimeout))
 	defer cancelSetup()
-	operation, err := OpenInspectionOperationContext(setupContext, store, req, binding, openedAt)
+	operation, err := openInspectionOperationWithRuntime(setupContext, store, req, binding, inspectionSupervisor.RuntimeBinding(), openedAt)
 	if err != nil {
 		return nil, time.Time{}, AnnotateMissingInspectionStage("opening inspection operation", err)
 	}

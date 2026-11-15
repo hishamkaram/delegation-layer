@@ -22,10 +22,80 @@ func CheckRuntimeQuiescence(ctx context.Context, store *taskdir.Store, binding t
 	return checkRuntimeQuiescence(ctx, store, binding, jobs, false)
 }
 
-// CheckFencedRuntimeQuiescence also permits exact preparation-only records.
-// The caller must first validate the matching durable runtime-restart fence
-// under bootstrap EX. These records are not declared admitted or closed.
-func CheckFencedRuntimeQuiescence(ctx context.Context, store *taskdir.Store, binding task.SupervisorRef, jobs []pueue.Job) error {
+// RuntimeMaintenanceError identifies the canonical resource that blocks
+// maintenance without parsing formatted error text or exposing a pathname.
+type RuntimeMaintenanceError struct {
+	Kind  string
+	ID    string
+	Cause error
+}
+
+func (e *RuntimeMaintenanceError) Error() string {
+	return "runtime maintenance " + e.Kind + " " + e.ID + ": " + e.Cause.Error()
+}
+func (e *RuntimeMaintenanceError) Unwrap() error { return e.Cause }
+
+// CheckMaintenanceQuiescence derives its preparation-only rule from the
+// canonical exact-root Drain under the actual generation SH or caller's EX.
+// No caller-provided readiness flag can enable the narrower inspection.
+func CheckMaintenanceQuiescence(ctx context.Context, store *taskdir.Store, binding task.SupervisorRef, jobs []pueue.Job) error {
+	if ctx == nil || store == nil {
+		return task.ErrInvalidPermit
+	}
+	return withMaintenanceLease(ctx, store, func(locked context.Context) error {
+		return checkMaintenanceQuiescence(locked, store, binding, jobs)
+	})
+}
+
+func withMaintenanceLease(ctx context.Context, store *taskdir.Store, inspect func(context.Context) error) error {
+	if ctx == nil || store == nil {
+		return task.ErrInvalidPermit
+	}
+	if pueue.RequireRuntimeRestartBootstrap(ctx, store.Root) == nil {
+		return inspect(ctx)
+	}
+	return pueue.WithSupervisorLeaseContext(ctx, store.Root, inspect)
+}
+
+func checkMaintenanceQuiescence(locked context.Context, store *taskdir.Store, binding task.SupervisorRef, jobs []pueue.Job) error {
+	pin, err := store.PinRootContext(locked)
+	if err != nil {
+		return err
+	}
+	observed, found, err := pueue.ObservePrivateUpgrade(locked, pin, "")
+	if err != nil {
+		return err
+	}
+	if found && (observed.Completed || observed.Predecessor != binding) {
+		return task.ErrIdentityMismatch
+	}
+	return checkRuntimeQuiescence(locked, store, binding, jobs, found)
+}
+
+// CheckRuntimeRestartQuiescence retains the explicit restart subject. The
+// canonical reader, not the callback, validates the exact pending fence before
+// preparation-only records can be considered for maintenance.
+func CheckRuntimeRestartQuiescence(ctx context.Context, store *taskdir.Store, from pueue.RuntimeRestartReference, binding task.SupervisorRef, jobs []pueue.Job) error {
+	if ctx == nil || store == nil {
+		return task.ErrInvalidPermit
+	}
+	if err := pueue.RequireRuntimeRestartBootstrap(ctx, store.Root); err != nil {
+		return err
+	}
+	pending, err := pueue.PrivateRuntimeRestartPending(ctx, store.Root)
+	if err != nil || !pending {
+		if err != nil {
+			return err
+		}
+		return CheckRuntimeQuiescence(ctx, store, binding, jobs)
+	}
+	observed, err := pueue.ObservePrivateRuntimeRestart(ctx, store.Root, from)
+	if err != nil {
+		return err
+	}
+	if observed.From != from || observed.Binding != binding || observed.Phase == pueue.RuntimeRestartReady {
+		return task.ErrIdentityMismatch
+	}
 	return checkRuntimeQuiescence(ctx, store, binding, jobs, true)
 }
 
@@ -142,7 +212,7 @@ func candidateSets(candidates runtimeCandidates) (map[string]bool, map[string]bo
 func inspectRuntimeCandidates(ctx context.Context, store *taskdir.Store, candidates runtimeCandidates, fenced bool) error {
 	for _, id := range candidates.tasks {
 		if err := inspectRuntimeTask(ctx, store, id, fenced); err != nil {
-			return fmt.Errorf("runtime quiescence task %s: %w", id, runtimeQuiescenceError(err))
+			return &RuntimeMaintenanceError{Kind: "task", ID: id, Cause: runtimeQuiescenceError(err)}
 		}
 	}
 	observe := func(observation taskdir.ControlLifetimeObservation) error {
@@ -150,12 +220,12 @@ func inspectRuntimeCandidates(ctx context.Context, store *taskdir.Store, candida
 	}
 	for _, id := range candidates.inspections {
 		if err := inspection.ObserveLifetimeContext(ctx, store, id, observe); err != nil {
-			return fmt.Errorf("runtime quiescence inspection %s: %w", id, runtimeQuiescenceError(err))
+			return &RuntimeMaintenanceError{Kind: "inspection", ID: id, Cause: runtimeQuiescenceError(err)}
 		}
 	}
 	for _, id := range candidates.workspaces {
 		if err := workspace.ObserveLifetimeContext(ctx, store, id, observe); err != nil {
-			return fmt.Errorf("runtime quiescence workspace operation %s: %w", id, runtimeQuiescenceError(err))
+			return &RuntimeMaintenanceError{Kind: "workspace_operation", ID: id, Cause: runtimeQuiescenceError(err)}
 		}
 	}
 	return nil

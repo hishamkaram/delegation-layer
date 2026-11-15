@@ -14,9 +14,13 @@ import (
 )
 
 func OpenInspectionOperationContext(ctx context.Context, store *taskdir.Store, request task.TaskRecord, binding inspection.Binding, now time.Time) (operation *inspection.Operation, resultErr error) {
+	return openInspectionOperationWithRuntime(ctx, store, request, binding, binding.Supervisor, now)
+}
+
+func openInspectionOperationWithRuntime(ctx context.Context, store *taskdir.Store, request task.TaskRecord, binding inspection.Binding, runtime task.SupervisorRef, now time.Time) (operation *inspection.Operation, resultErr error) {
 	operation, err := LoadInspectionOperationContext(ctx, store, request)
 	if task.RecordAbsent(err) {
-		return CreateAdmissionInspectionOperationContext(ctx, store, request, binding, now)
+		return createInspectionOperationWithRuntime(ctx, store, request, binding, runtime, now)
 	}
 	if err != nil {
 		return nil, err
@@ -81,7 +85,20 @@ func validateCompletedLegacyInspectionReplay(ctx context.Context, root string, o
 	return err
 }
 
-func CreateAdmissionInspectionOperationContext(ctx context.Context, store *taskdir.Store, request task.TaskRecord, binding inspection.Binding, now time.Time) (*inspection.Operation, error) {
+func CreateAdmissionInspectionOperationContext(ctx context.Context, store *taskdir.Store, request task.TaskRecord, binding inspection.Binding, now time.Time) (operation *inspection.Operation, resultErr error) {
+	return createInspectionOperationWithRuntime(ctx, store, request, binding, binding.Supervisor, now)
+}
+
+func createInspectionOperationWithRuntime(ctx context.Context, store *taskdir.Store, request task.TaskRecord, binding inspection.Binding, runtime task.SupervisorRef, now time.Time) (operation *inspection.Operation, resultErr error) {
+	resultErr = supervisorcore.WithAdmissionCreation(ctx, store.Root, binding.Supervisor, runtime, func(locked context.Context) error {
+		var err error
+		operation, err = createAdmissionInspectionOperation(locked, store, request, binding, now)
+		return err
+	})
+	return operation, resultErr
+}
+
+func createAdmissionInspectionOperation(ctx context.Context, store *taskdir.Store, request task.TaskRecord, binding inspection.Binding, now time.Time) (*inspection.Operation, error) {
 	identity, err := OperationID(ctx, store, request)
 	if err != nil {
 		return nil, err

@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"os"
@@ -9,6 +10,7 @@ import (
 
 	supervisorcore "github.com/hishamkaram/delegation-layer/internal/supervisor"
 	"github.com/hishamkaram/delegation-layer/internal/supervisor/infrastructure"
+	supervisorfixture "github.com/hishamkaram/delegation-layer/internal/supervisor/testsupport"
 
 	"github.com/hishamkaram/delegation-layer/internal/inspection"
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
@@ -22,11 +24,16 @@ func TestSupervisorUnknownQueueStateIsNotObservedActivity(t *testing.T) {
 }
 
 func TestSupervisorClosureBlockerDoesNotInventActiveWork(t *testing.T) {
-	store, td, _ := lifecyclefixture.NewAppTestTask(t, false)
+	store := supervisorfixture.NewInspectionStore(t)
+	td, _ := lifecyclefixture.NewAppTaskInStoreWithSupervisorConfig(t, store, "cccccccccccccccccccccccccccccccc", false, nil, pueue.PrivateConfigPath(store.Root))
 	meta := lifecyclefixture.PrepareAppBudgetRecords(t, td)
 	label := "delegate:" + store.RootID + ":" + td.TaskID
 	job := pueue.Job{ID: 7, Label: &label, State: pueue.StateEnded, Group: "default"}
-	cause := authorizePrivateMigrationQueue(t.Context(), store.Root, meta.SupervisorConfig, []pueue.Job{job})
+	// Production migration invokes this policy under the actual bootstrap EX.
+	// Model that prerequisite; the observer itself never creates a lease inode.
+	cause := pueue.WithBootstrapLockContext(t.Context(), store.Root, func(locked context.Context) error {
+		return authorizePrivateMigrationQueue(locked, store.Root, meta.SupervisorConfig, []pueue.Job{job})
+	})
 	if !errors.Is(cause, inspection.ErrGroupMigrationBusy) {
 		t.Fatalf("fixture has no closure-only busy refusal: %v", cause)
 	}

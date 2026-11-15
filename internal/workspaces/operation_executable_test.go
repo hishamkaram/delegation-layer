@@ -43,9 +43,12 @@ func TestWorkspaceOperationWriterRecordsInstalledPathWithoutProgramDigest(t *tes
 	}
 	deadline := time.Now().Add(-time.Second).UTC().Format(time.RFC3339Nano)
 	subject := workspace.Subject{Kind: workspace.SubjectTask, ID: strings.Repeat("b", 32), SHA256: strings.Repeat("c", 64)}
-	request, err := newWorkspaceOperationRequest(t.Context(), store, OperationOptions{Runtime: installedOperationRuntime{runner: runner}}, strings.Repeat("d", 32), OperationSpec{Kind: workspace.OperationCapture, Subject: subject, Budget: time.Minute, Deadline: deadline})
+	request, actualRuntime, err := newWorkspaceOperationRequest(t.Context(), store, OperationOptions{Runtime: installedOperationRuntime{runner: runner}}, strings.Repeat("d", 32), OperationSpec{Kind: workspace.OperationCapture, Subject: subject, Budget: time.Minute, Deadline: deadline})
 	if err != nil {
 		t.Fatal(err)
+	}
+	if actualRuntime != (task.SupervisorRef{}) {
+		t.Fatal("expired metadata fabricated a runtime")
 	}
 	if request.ExecutableIdentity != task.ExecutableIdentityInstalledPathV1 || request.WorkerSHA256 != "" || request.WorkerExecutable != runner || request.Supervisor != binding || request.Subject != subject || request.Deadline != deadline {
 		t.Fatalf("operation writer lost selected worker or canonical input: %+v", request)

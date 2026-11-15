@@ -38,7 +38,7 @@ func authorizePrivateMigrationQueue(ctx context.Context, stateRoot string, legac
 		return err
 	}
 	defer func() { resultErr = errors.Join(resultErr, store.Close()) }()
-	_, err := privateCleanupOwner().InspectMigrationQueue(ctx, store, supervisorcore.InspectionGroup(store.RootID, legacy), jobs)
+	_, err := privateCleanupOwner().AssessMaintenance(ctx, store, legacy, jobs)
 	if err != nil && !supervisorcore.MaintenanceBusy(err) {
 		return errors.Join(pueue.ErrPrivateSupervisorMigrationRequired, err)
 	}
@@ -105,6 +105,11 @@ func supervisorStatus(root string, deps Dependencies, response Response) (result
 	}
 	defer func() { mergeCommandClose(&result, store.Close) }()
 	response.RootID = store.RootID
+	if observed, found, observeErr := observeActiveSupervisorUpgrade(controlContext, store); observeErr != nil {
+		return failedSupervisorCause(response, "supervisor upgrade journal could not be inspected", observeErr, 1)
+	} else if found {
+		return supervisorUpgradeStatus(controlContext, store, deps, options, response, observed)
+	}
 	result = supervisorStatusFromStore(controlContext, root, deps, options, response, store)
 	applyMaintenanceGuidance(result.response.SupervisorControl)
 	return result
@@ -561,11 +566,12 @@ func supervisorMaintenanceDiagnostic(ctx context.Context, store *taskdir.Store, 
 	if !found {
 		return failedSupervisorCause(response, "saved supervisor binding is absent", pueue.ErrPrivateSupervisorNotInitialized, 1)
 	}
-	clientExecutable, _, err := installation.ResolvePrivateSupervisorExecutables(deps.supervisorLookup())
+	clientExecutable, daemonExecutable, err := installation.ResolvePrivateSupervisorExecutables(deps.supervisorLookup())
 	if err != nil {
 		return failedSupervisorCause(response, "installed supervisor transport could not be inspected", err, 1)
 	}
-	owner, err := supervisorcore.AcquireClient(pueue.BindSavedForMigrationWithClient(ctx, binding, clientExecutable, options))
+	client, err := supervisorMaintenanceClient(ctx, store, binding, clientExecutable, daemonExecutable, options)
+	owner, err := supervisorcore.AcquireClient(client, err)
 	cleanupCause := err
 	defer func() {
 		if closeErr := owner.CloseAfterPending(cleanupCause); closeErr != nil {
@@ -794,7 +800,7 @@ func applyMaintenanceGuidance(control *SupervisorControlResponse) {
 }
 
 func observeSupervisorMaintenance(ctx context.Context, store *taskdir.Store, binding task.SupervisorRef, jobs []pueue.Job, control *SupervisorControlResponse) error {
-	assessment, err := privateCleanupOwner().InspectMigrationQueue(ctx, store, supervisorcore.InspectionGroup(store.RootID, binding), jobs)
+	assessment, err := privateCleanupOwner().AssessMaintenance(ctx, store, binding, jobs)
 	applyMaintenanceAssessment(control, assessment)
 	control.ObservedAt = time.Now().UTC().Format(time.RFC3339Nano)
 	if supervisorcore.MaintenanceBusy(err) {
@@ -868,7 +874,7 @@ func legacyActiveWork(snapshot pueue.QueueSnapshot) string {
 	return supervisorcore.QueueActivity(snapshot.Jobs)
 }
 
-func supervisorEnsureOwner(a Arguments, deps Dependencies) (result commandResult) {
+func supervisorBootstrapOwner(a Arguments, deps Dependencies) (result commandResult) {
 	response := newResponse("supervisor")
 	root, err := tasklifecycle.ResolveRoot(a.Root)
 	if err != nil {

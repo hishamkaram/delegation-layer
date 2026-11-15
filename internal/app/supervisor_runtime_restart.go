@@ -187,21 +187,7 @@ func authorizePrivateRuntimeRestart(ctx context.Context, store *taskdir.Store, f
 	if err := validateRuntimeRestartSubject(ctx, store, from); err != nil {
 		return err
 	}
-	pending, err := pueue.PrivateRuntimeRestartPending(ctx, store.Root)
-	if err != nil {
-		return err
-	}
-	if !pending {
-		return supervisor.CheckRuntimeQuiescence(ctx, store, binding, jobs)
-	}
-	observed, err := pueue.ObservePrivateRuntimeRestart(ctx, store.Root, from)
-	if err != nil {
-		return err
-	}
-	if observed.From != from || observed.Binding != binding || observed.Phase == pueue.RuntimeRestartReady {
-		return task.ErrIdentityMismatch
-	}
-	return supervisor.CheckFencedRuntimeQuiescence(ctx, store, binding, jobs)
+	return supervisor.CheckRuntimeRestartQuiescence(ctx, store, from, binding, jobs)
 }
 
 func validateRuntimeRestartSubject(ctx context.Context, store *taskdir.Store, from pueue.RuntimeRestartReference) (resultErr error) {

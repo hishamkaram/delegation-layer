@@ -21,72 +21,75 @@ import (
 
 // Arguments contains requested values only. Parsing grants no external authority.
 type Arguments struct {
-	Gateway                  gatewaycommand.Arguments
-	Connector                ConnectorArguments
-	LogStream                string
-	LogCursor                string
-	LogOffset                int64
-	LogLimit                 int64
-	LogOffsetSet             bool
-	logOptionsSet            bool
-	RemoteScope              string
-	RemoteApply              bool
-	RemoteDryRun             bool
-	remoteScopeSet           bool
-	ResourceGuards           resourceadmission.GuardPolicy
-	Device                   string
-	RemoteRoot               string
-	RemoteCwd                string
-	InputManifest            string
-	OutputManifest           string
-	OutputDirectory          string
-	RemoteExecutable         string
-	SSHConfig                string
-	RemoteAfter              string
-	RemoteAction             string
-	Fingerprint              string
-	Stdio                    bool
-	remoteBinding            *task.RemoteBinding
-	remoteCancelID           string
-	MessageID                string
-	RequestID                string
-	Answers                  string
-	AnswersBytes             []byte
-	SuccessorTaskID          string
-	HelpPath                 []string
-	After                    uint64
-	Command                  string
-	SupervisorAction         string
-	SupervisorFromStartup    string
-	SupervisorRuntimeRestart bool
-	SchedulerAction          string
-	Root                     string
-	PueueConfig              string
-	Runner                   string
-	TaskID                   string
-	Auto                     bool
-	Provider                 string
-	Brief                    string
-	BriefBytes               []byte
-	Cwd                      string
-	Config                   task.TaskConfig
-	ReviewTarget             string
-	ResumeTask               string
-	JSON                     bool
-	Watch                    time.Duration
-	WaitTaskIDs              []string
-	WaitAll                  bool
-	Isolation                string
-	WorkspaceID              string
-	Base                     string
-	WorkspaceBudget          string
-	WorkspaceAction          string
-	WorkspaceOperationID     string
-	WorkspaceAfter           string
-	WorkspaceLimit           int
-	Discard                  bool
-	ExecArguments            []string
-	workspaceBinding         *task.WorkspaceBinding
+	Gateway                   gatewaycommand.Arguments
+	Connector                 ConnectorArguments
+	LogStream                 string
+	LogCursor                 string
+	LogOffset                 int64
+	LogLimit                  int64
+	LogOffsetSet              bool
+	logOptionsSet             bool
+	RemoteScope               string
+	RemoteApply               bool
+	RemoteDryRun              bool
+	remoteScopeSet            bool
+	ResourceGuards            resourceadmission.GuardPolicy
+	Device                    string
+	RemoteRoot                string
+	RemoteCwd                 string
+	InputManifest             string
+	OutputManifest            string
+	OutputDirectory           string
+	RemoteExecutable          string
+	SSHConfig                 string
+	RemoteAfter               string
+	RemoteAction              string
+	Fingerprint               string
+	Stdio                     bool
+	remoteBinding             *task.RemoteBinding
+	remoteCancelID            string
+	MessageID                 string
+	RequestID                 string
+	Answers                   string
+	AnswersBytes              []byte
+	SuccessorTaskID           string
+	HelpPath                  []string
+	After                     uint64
+	Command                   string
+	SupervisorAction          string
+	SupervisorFromStartup     string
+	SupervisorRuntimeRestart  bool
+	SupervisorPrepareUpgrade  bool
+	SupervisorCompleteUpgrade string
+	SupervisorRefreshOwner    bool
+	SchedulerAction           string
+	Root                      string
+	PueueConfig               string
+	Runner                    string
+	TaskID                    string
+	Auto                      bool
+	Provider                  string
+	Brief                     string
+	BriefBytes                []byte
+	Cwd                       string
+	Config                    task.TaskConfig
+	ReviewTarget              string
+	ResumeTask                string
+	JSON                      bool
+	Watch                     time.Duration
+	WaitTaskIDs               []string
+	WaitAll                   bool
+	Isolation                 string
+	WorkspaceID               string
+	Base                      string
+	WorkspaceBudget           string
+	WorkspaceAction           string
+	WorkspaceOperationID      string
+	WorkspaceAfter            string
+	WorkspaceLimit            int
+	Discard                   bool
+	ExecArguments             []string
+	workspaceBinding          *task.WorkspaceBinding
 
 	// Checkpoint values are requested only; creation targets reuse Cwd and
 	// WorkspaceID, and status reuses Watch.
@@ -138,11 +141,12 @@ type Arguments struct {
 	generatedTaskID string
 	// These flags are tracked separately from their values so an explicitly
 	// empty unsupported supervisor option is rejected too.
-	supervisorPueueConfigSet bool
-	supervisorRunnerSet      bool
-	schedulerHostReadFD      int
-	schedulerHostWriteFD     int
-	schedulerResident        bool
+	supervisorPueueConfigSet     bool
+	supervisorRunnerSet          bool
+	supervisorCompleteUpgradeSet bool
+	schedulerHostReadFD          int
+	schedulerHostWriteFD         int
+	schedulerResident            bool
 }
 
 func noteControlFlags(fs *flag.FlagSet, a *Arguments) {
@@ -161,6 +165,8 @@ func noteControlFlags(fs *flag.FlagSet, a *Arguments) {
 				a.supervisorPueueConfigSet = true
 			case "runner":
 				a.supervisorRunnerSet = true
+			case "complete-upgrade":
+				a.supervisorCompleteUpgradeSet = true
 			}
 		case "scheduler":
 			if selected.Name == "scheduler-host-read-fd" || selected.Name == "scheduler-host-write-fd" {
@@ -218,6 +224,10 @@ func registerResidentCommandFlags(fs *flag.FlagSet, a *Arguments) bool {
 			fs.StringVar(&a.SupervisorFromStartup, "from-startup", "", "exact original startup token from status --runtime-restart")
 		case "status":
 			fs.BoolVar(&a.SupervisorRuntimeRestart, "runtime-restart", false, "observe dated daemon Wait custody for an explicit restart")
+		case "ensure-owner":
+			fs.BoolVar(&a.SupervisorPrepareUpgrade, "prepare-upgrade", false, "drain this root before installing an upgrade")
+			fs.StringVar(&a.SupervisorCompleteUpgrade, "complete-upgrade", "", "complete this exact prepared upgrade operation")
+			fs.BoolVar(&a.SupervisorRefreshOwner, "refresh-owner", false, "explicitly refresh the authenticated installed helper before v5 contact")
 		}
 		return true
 	case "scheduler":
@@ -289,6 +299,14 @@ func (a *Arguments) validateSupervisor(positional []string) error {
 	if a.SupervisorAction == "restart" {
 		if _, err := infrastructure.ParseRuntimeRestartReference(a.SupervisorFromStartup); err != nil {
 			return errors.New("supervisor restart requires a canonical --from-startup token from status --runtime-restart")
+		}
+	}
+	if a.SupervisorPrepareUpgrade && a.SupervisorCompleteUpgrade != "" {
+		return errors.New("--prepare-upgrade and --complete-upgrade are mutually exclusive")
+	}
+	if a.supervisorCompleteUpgradeSet || a.SupervisorCompleteUpgrade != "" {
+		if _, err := infrastructure.ParseUpgradeOperationID(a.SupervisorCompleteUpgrade); err != nil {
+			return errors.New("--complete-upgrade requires a canonical upgrade operation ID")
 		}
 	}
 	return validateNoPositional("supervisor", positional)

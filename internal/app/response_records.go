@@ -158,6 +158,7 @@ type SupervisorControlResponse struct {
 	NextAction           string                            `json:"next_action"`
 	ReasonCode           string                            `json:"reason_code,omitempty"`
 	RuntimeRestart       *SupervisorRuntimeRestartResponse `json:"runtime_restart,omitempty"`
+	Upgrade              *SupervisorUpgradeResponse        `json:"upgrade,omitempty"`
 }
 
 type StopResponse struct {

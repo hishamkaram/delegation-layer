@@ -71,14 +71,15 @@ func bindWorkspacePurpose(ctx context.Context, resource *workspace.Resource, req
 }
 
 func createWorkspaceOperation(ctx context.Context, store *taskdir.Store, resource *workspace.Resource, deps OperationOptions, spec OperationSpec) (operation *workspace.Operation, resultErr error) {
-	request, err := newWorkspaceOperationRequest(ctx, store, deps, resource.Request().WorkspaceID, spec)
+	request, runtime, err := newWorkspaceOperationRequest(ctx, store, deps, resource.Request().WorkspaceID, spec)
 	if err != nil {
 		return nil, err
 	}
-	operation, err = workspace.OpenOperation(ctx, store, request)
+	operation, err = openWorkspaceOperationWithRuntime(ctx, store, request, runtime)
 	if err != nil {
 		return nil, err
 	}
+
 	winner, err := resource.AssociateOperation(ctx, spec.Purpose, request)
 	if err != nil {
 		return operation, err
@@ -101,55 +102,89 @@ func createWorkspaceOperation(ctx context.Context, store *taskdir.Store, resourc
 // newWorkspaceOperationRequest binds one finite helper's deadline, published
 // runtime binding, fresh identity and selected installed worker. Associating the
 // request with a workspace purpose stays with its caller.
-func newWorkspaceOperationRequest(ctx context.Context, store *taskdir.Store, deps OperationOptions, workspaceID string, spec OperationSpec) (workspace.OperationRequest, error) {
+func newWorkspaceOperationRequest(ctx context.Context, store *taskdir.Store, deps OperationOptions, workspaceID string, spec OperationSpec) (workspace.OperationRequest, task.SupervisorRef, error) {
 	deadline, err := workspaceOperationDeadline(spec)
 	if err != nil {
-		return workspace.OperationRequest{}, err
+		return workspace.OperationRequest{}, task.SupervisorRef{}, err
 	}
-	runner, supervisor, err := workspaceOperationRuntime(ctx, store, deps, deadline)
+	runner, logical, runtime, err := workspaceOperationRuntime(ctx, store, deps, deadline)
 	if err != nil {
-		return workspace.OperationRequest{}, err
+		return workspace.OperationRequest{}, runtime, err
 	}
 	if err = validateWorkspaceOperationExecutable(store.Root, runner); err != nil {
-		return workspace.OperationRequest{}, err
+		return workspace.OperationRequest{}, runtime, err
 	}
 	id, err := randomid.NewTaskID()
 	if err != nil {
-		return workspace.OperationRequest{}, err
+		return workspace.OperationRequest{}, runtime, err
 	}
-	return workspace.OperationRequest{
-		SchemaVersion: task.SchemaVersion, RootID: store.RootID, OperationID: id,
-		WorkspaceID: workspaceID, Kind: spec.Kind, Subject: spec.Subject,
-		Deadline:         deadline,
-		WorkerExecutable: runner, ExecutableIdentity: task.ExecutableIdentityInstalledPathV1, Supervisor: supervisor,
-		Arguments: spec.Arguments, Discard: spec.Discard, Checkpoint: cloneCheckpointSelection(spec.Checkpoint),
-	}, nil
+	return workspace.OperationRequest{SchemaVersion: task.SchemaVersion, RootID: store.RootID, OperationID: id, WorkspaceID: workspaceID, Kind: spec.Kind, Subject: spec.Subject, Deadline: deadline, WorkerExecutable: runner, ExecutableIdentity: task.ExecutableIdentityInstalledPathV1, Supervisor: logical, Arguments: spec.Arguments, Discard: spec.Discard, Checkpoint: cloneCheckpointSelection(spec.Checkpoint)}, runtime, nil
 }
 
-func workspaceOperationRuntime(ctx context.Context, store *taskdir.Store, deps OperationOptions, deadline string) (runner string, binding task.SupervisorRef, resultErr error) {
+func workspaceOperationRuntime(ctx context.Context, store *taskdir.Store, deps OperationOptions, deadline string) (runner string, logical, runtime task.SupervisorRef, resultErr error) {
 	runner, err := deps.Runtime.ManagedRunner()
 	if err != nil {
-		return "", binding, err
+		return "", logical, runtime, err
 	}
 	cutoff, err := time.Parse(time.RFC3339Nano, deadline)
 	if err != nil {
-		return "", binding, err
+		return "", logical, runtime, err
 	}
 	if !time.Now().Before(cutoff) {
 		var found bool
-		binding, found, err = pueue.ReadPrivateSupervisorBinding(store.Root)
+		logical, found, err = pueue.ReadPrivateSupervisorBinding(store.Root)
 		if err != nil || !found {
-			return "", binding, errors.Join(task.ErrEvidenceFault, err)
+			return "", logical, runtime, errors.Join(task.ErrEvidenceFault, err)
 		}
-		return runner, binding, ctx.Err()
+		return runner, logical, runtime, ctx.Err()
 	}
 	runner, client, err := deps.Runtime.PrepareManaged(ctx, store, runner)
 	owner, err := supervisorcore.AcquireClient(client, err)
 	defer func() { resultErr = errors.Join(resultErr, owner.CloseAfterPending(resultErr)) }()
 	if err != nil {
-		return "", binding, err
+		return "", logical, runtime, err
 	}
-	return runner, owner.Client().Binding(), nil
+	return runner, owner.Client().Binding(), owner.Client().RuntimeBinding(), nil
+}
+
+// A fresh helper requires actual-runtime capability evidence. Expired metadata
+// obtains no runtime: under SH its validated canonical generation may be read,
+// but provider/daemon preparation and capability probes remain forbidden.
+func openWorkspaceOperationWithRuntime(ctx context.Context, store *taskdir.Store, request workspace.OperationRequest, runtime task.SupervisorRef) (operation *workspace.Operation, resultErr error) {
+	create := func(locked context.Context) error {
+		var err error
+		operation, err = workspace.OpenOperation(locked, store, request)
+		return err
+	}
+	if runtime != (task.SupervisorRef{}) {
+		resultErr = supervisorcore.WithAdmissionCreation(ctx, store.Root, request.Supervisor, runtime, create)
+	} else {
+		resultErr = withExpiredWorkspaceCreation(ctx, store, request, create)
+	}
+	if resultErr != nil && operation != nil {
+		return nil, errors.Join(resultErr, operation.Close())
+	}
+	return operation, resultErr
+}
+
+func withExpiredWorkspaceCreation(ctx context.Context, store *taskdir.Store, request workspace.OperationRequest, create func(context.Context) error) error {
+	cutoff, err := time.Parse(time.RFC3339Nano, request.Deadline)
+	if err != nil || time.Now().Before(cutoff) {
+		return errors.Join(task.ErrIdentityMismatch, err)
+	}
+	if !pueue.IsPrivateConfig(store.Root, request.Supervisor.ConfigPath) {
+		return create(ctx)
+	}
+	return pueue.WithSupervisorLeaseContext(ctx, store.Root, func(locked context.Context) error {
+		complete, readErr := pueue.PrivateSupervisorMigrationComplete(store.Root, request.Supervisor)
+		if readErr != nil {
+			return readErr
+		}
+		if !complete {
+			return pueue.ErrPrivateSupervisorSubmissionIncomplete
+		}
+		return create(locked)
+	})
 }
 
 func workspaceOperationDeadline(spec OperationSpec) (string, error) {
