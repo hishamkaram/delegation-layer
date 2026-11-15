@@ -74,6 +74,9 @@ func writeHumanSupervisor(output *strings.Builder, control *SupervisorControlRes
 		fmt.Fprintf(output, " migration_phase=%s", control.MigrationPhase)
 	}
 	output.WriteByte('\n')
+	if binding := control.InstallationBinding; binding != nil {
+		fmt.Fprintf(output, "installation_binding scope=%s verification=%s relation=%s client_selected=%s client_recorded=%s daemon_selected=%s daemon_recorded=%s\n", binding.Scope, binding.Verification, binding.Relation, binding.Client.SelectedAvailability, binding.Client.RecordedAvailability, binding.Daemon.SelectedAvailability, binding.Daemon.RecordedAvailability)
+	}
 	if blocker := control.FirstBlocker; blocker != nil {
 		fmt.Fprintf(output, "first_blocker kind=%s task_id=%s queue_state=%s reason_code=%s next_action=%s\n", blocker.Kind, blocker.TaskID, blocker.QueueState, blocker.ReasonCode, blocker.NextAction)
 	}

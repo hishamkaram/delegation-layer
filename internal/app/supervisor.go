@@ -92,6 +92,7 @@ func supervisorRootAbsent(root string, operationErr error) bool {
 }
 
 func supervisorStatus(root string, deps Dependencies, response Response) (result commandResult) {
+	defer func() { observeSupervisorInstallation(root, deps, &result) }()
 	options := supervisorControlOptions(deps)
 	controlContext, cancel := supervisorcore.ControlContext(options)
 	defer cancel()
@@ -107,6 +108,23 @@ func supervisorStatus(root string, deps Dependencies, response Response) (result
 	result = supervisorStatusFromStore(controlContext, root, deps, options, response, store)
 	applyMaintenanceGuidance(result.response.SupervisorControl)
 	return result
+}
+
+func observeSupervisorInstallation(root string, deps Dependencies, result *commandResult) {
+	control := result.response.SupervisorControl
+	if control == nil {
+		return
+	}
+	binding, found, err := pueue.ReadPrivateSupervisorBinding(root)
+	var recorded *task.SupervisorRef
+	if found && err == nil {
+		recorded = &binding
+	}
+	observation := installation.ObserveSupervisorBinding(installation.BindingRuntimeSelected, installation.ObserveSelectedSupervisorPair(deps.supervisorLookup()), recorded, err)
+	control.InstallationBinding = &observation
+	if result.code == 0 && control.FirstBlocker == nil && control.NextAction == "none" && observation.HandoffAdvised() {
+		control.NextAction = "run_supervisor_ensure_owner"
+	}
 }
 
 func supervisorStatusFromStore(ctx context.Context, root string, deps Dependencies, options pueue.Options, response Response, store *taskdir.Store) commandResult {
@@ -500,6 +518,7 @@ type supervisorMigrationState struct {
 }
 
 func supervisorMigrate(root string, deps Dependencies, response Response) (result commandResult) {
+	defer func() { observeSupervisorInstallation(root, deps, &result) }()
 	options := supervisorControlOptions(deps)
 	controlContext, cancel := supervisorcore.ControlContext(options)
 	defer cancel()

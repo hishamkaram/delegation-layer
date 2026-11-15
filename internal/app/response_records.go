@@ -5,6 +5,7 @@ import (
 
 	schedulercontract "github.com/hishamkaram/delegation-layer/internal/scheduler/contract"
 	"github.com/hishamkaram/delegation-layer/internal/supervisor"
+	"github.com/hishamkaram/delegation-layer/internal/supervisor/installation"
 	"github.com/hishamkaram/delegation-layer/internal/tasklifecycle"
 
 	"github.com/hishamkaram/delegation-layer/internal/task"
@@ -144,6 +145,7 @@ type SupervisorResponse = tasklifecycle.SupervisorObservation
 // SupervisorControlResponse describes Delegate-owned supervisor recovery
 // without exposing executable paths, socket paths, or process diagnostics.
 type SupervisorControlResponse struct {
+	InstallationBinding  *installation.BindingObservation  `json:"installation_binding,omitempty"`
 	MigrationReadiness   string                            `json:"migration_readiness,omitempty"`
 	FirstBlocker         *supervisor.MaintenanceBlocker    `json:"first_blocker,omitempty"`
 	ObservedAt           string                            `json:"observed_at,omitempty"`

@@ -55,9 +55,10 @@ type DoctorRole struct {
 	Status string `json:"status"`
 }
 type DoctorSupervisor struct {
-	Binding    string `json:"binding"`
-	Liveness   string `json:"liveness"`
-	ActiveWork string `json:"active_work"`
+	InstallationBinding *installation.BindingObservation `json:"installation_binding,omitempty"`
+	Binding             string                           `json:"binding"`
+	Liveness            string                           `json:"liveness"`
+	ActiveWork          string                           `json:"active_work"`
 }
 type DoctorProvider struct {
 	ID             string `json:"id"`
@@ -111,8 +112,9 @@ func observeDoctor(a Arguments, deps Dependencies, self string, selfErr error) (
 }
 
 type doctorObservation struct {
-	report DoctorReport
-	code   int
+	selectedSupervisor installation.SupervisorPairMetadata
+	report             DoctorReport
+	code               int
 }
 
 func (o *doctorObservation) issue(area, reason, next string, incomplete bool) {
@@ -127,6 +129,7 @@ func (o *doctorObservation) issue(area, reason, next string, incomplete bool) {
 func (o *doctorObservation) installation(self string, selfErr error) {
 	report := &o.report
 	if selfErr != nil {
+		o.selectedSupervisor = installation.SupervisorPairMetadata{Client: installation.BundleRole{Err: selfErr}, Daemon: installation.BundleRole{Err: selfErr}, SelectionError: selfErr}
 		report.Installation.Status = "observation_incomplete"
 		for _, name := range []string{"delegate", "delegate_run", "pueue", "pueued"} {
 			report.Installation.Roles[name] = DoctorRole{Status: "observation_incomplete"}
@@ -134,6 +137,7 @@ func (o *doctorObservation) installation(self string, selfErr error) {
 		o.issue("installation", "observation_incomplete", "Retry from the selected installed Delegate executable.", true)
 	} else {
 		roles := installation.ObserveBundle(self)
+		o.selectedSupervisor = installation.SupervisorPairMetadata{Client: roles["pueue"], Daemon: roles["pueued"]}
 		for _, name := range []string{"delegate", "delegate_run", "pueue", "pueued"} {
 			role := roles[name]
 			status := installation.BundleRoleStatus(role.Err)
@@ -154,22 +158,35 @@ func (o *doctorObservation) installation(self string, selfErr error) {
 
 func (o *doctorObservation) root(requested string) {
 	report := &o.report
+	var recorded *task.SupervisorRef
+	var recordErr error
+	defer func() {
+		observation := installation.ObserveSupervisorBinding(installation.BindingLoadedBundle, o.selectedSupervisor, recorded, recordErr)
+		report.Supervisor.InstallationBinding = &observation
+		if observation.HandoffAdvised() {
+			o.issue("supervisor", "supervisor_installation_differs", "Run delegate supervisor ensure-owner --json with the same state root to inspect the installed pair handoff; metadata does not prove daemon termination.", false)
+		}
+	}()
 	root, err := tasklifecycle.ResolveRoot(requested)
 	report.Root = DoctorRoot{Path: root, Status: "observation_incomplete"}
 	if err != nil {
+		recordErr = err
 		o.issue("root", "observation_incomplete", "Check the absolute state root and its parent directory permissions.", true)
 	} else if info, statErr := os.Stat(root); errors.Is(statErr, os.ErrNotExist) {
 		report.Root.Status = "not_initialized"
 		report.Supervisor.Binding = "not_initialized"
 	} else if statErr != nil || !info.IsDir() {
+		recordErr = errors.Join(statErr, task.ErrEvidenceFault)
 		o.issue("root", "observation_incomplete", "Check that the selected state root is an accessible directory.", true)
 	} else {
 		report.Root.Status = "present"
-		_, found, bindingErr := pueue.ReadPrivateSupervisorBinding(root)
+		binding, found, bindingErr := pueue.ReadPrivateSupervisorBinding(root)
+		recordErr = bindingErr
 		switch {
 		case bindingErr != nil:
 			o.issue("supervisor", "observation_incomplete", "Inspect the persisted private supervisor binding before using this state root.", true)
 		case found:
+			recorded = &binding
 			report.Supervisor.Binding = "present"
 		default:
 			report.Supervisor.Binding = "binding_absent"
@@ -226,6 +243,9 @@ func doctorIncomplete(err error) bool {
 func writeDoctorHuman(w io.Writer, report DoctorReport) error {
 	var output strings.Builder
 	fmt.Fprintf(&output, "doctor: installation=%s compatibility=%s\nroot=%s status=%s\nsupervisor binding=%s liveness=%s active_work=%s\n", report.Installation.Status, report.Installation.Compatibility, report.Root.Path, report.Root.Status, report.Supervisor.Binding, report.Supervisor.Liveness, report.Supervisor.ActiveWork)
+	if binding := report.Supervisor.InstallationBinding; binding != nil {
+		fmt.Fprintf(&output, "supervisor installation_binding=%s scope=%s verification=%s\n", binding.Relation, binding.Scope, binding.Verification)
+	}
 	for _, name := range []string{"delegate", "delegate_run", "pueue", "pueued"} {
 		role := report.Installation.Roles[name]
 		fmt.Fprintf(&output, "%s=%s path=%s\n", name, role.Status, role.Path)

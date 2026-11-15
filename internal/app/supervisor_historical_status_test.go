@@ -36,7 +36,8 @@ func runHistoricalStatusReadinessScenario(t *testing.T, group, missing bool) {
 	}
 	deps := fixture.dependencies()
 	ready := supervisorStatus(fixture.root, deps, newSupervisorCommandResponse("status"))
-	assertReadyHistoricalSupervisorStatus(t, ready, "none")
+	// A compatible historical daemon remains usable; installation drift is advisory.
+	assertReadyHistoricalSupervisorStatus(t, ready, "run_supervisor_ensure_owner")
 	stopHistoricalInstallationPredecessor(t, fixture)
 	configPath := pueue.PrivateConfigPath(fixture.root)
 	configBefore := readSupervisorProbeTestFile(t, configPath)
