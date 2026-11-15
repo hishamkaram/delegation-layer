@@ -382,6 +382,10 @@ func PrivateSupervisorMigrationPending(stateRoot string) (bool, error) {
 	return control.PrivateSupervisorMigrationPending(stateRoot)
 }
 
+func PrivateSupervisorInitialBootstrapEligible(stateRoot string) (bool, error) {
+	return control.PrivateSupervisorInitialBootstrapEligible(stateRoot)
+}
+
 type PrivateMigrationPhase = control.PrivateMigrationPhase
 
 const (
