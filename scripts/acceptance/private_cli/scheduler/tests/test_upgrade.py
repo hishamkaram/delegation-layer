@@ -136,7 +136,7 @@ class UpgradeSnapshotTests(unittest.TestCase):
 
     def test_schema2_snapshot_preserves_every_reliability_owner_table(self):
         with tempfile.TemporaryDirectory() as directory:
-            state = Path(directory)
+            state = Path(directory).resolve(strict=True)
             (state / ".scheduler").mkdir()
             database = state / ".scheduler/schedules.sqlite"
             with sqlite3.connect(database) as connection:
@@ -203,7 +203,7 @@ class UpgradeSnapshotTests(unittest.TestCase):
 
     def test_snapshot_refuses_wrong_root_and_never_initializes_missing_store(self):
         with tempfile.TemporaryDirectory() as directory:
-            state = Path(directory)
+            state = Path(directory).resolve(strict=True)
             with self.assertRaises(FileNotFoundError):
                 upgrade_snapshot.snapshot(state, "a" * 32)
             (state / ".scheduler").mkdir()
@@ -215,6 +215,11 @@ class UpgradeSnapshotTests(unittest.TestCase):
             content = database.read_bytes()
             with self.assertRaisesRegex(RuntimeError, "root"):
                 upgrade_snapshot.snapshot(state, "a" * 32)
+            self.assertEqual(database.read_bytes(), content)
+            linked_state = state / "linked-state"
+            linked_state.symlink_to(state, target_is_directory=True)
+            with self.assertRaisesRegex(RuntimeError, "database is unsafe"):
+                upgrade_snapshot.snapshot(linked_state, "b" * 32)
             self.assertEqual(database.read_bytes(), content)
 
 
