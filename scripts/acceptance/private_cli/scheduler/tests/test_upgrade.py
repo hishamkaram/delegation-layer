@@ -244,14 +244,49 @@ class UpgradeSelectionTests(unittest.TestCase):
         command.assert_not_called()
         self.assertFalse(case.upgraded)
 
+    def doctor_response(self, compatibility="migration_required", *, current=False):
+        candidate = self.fixture_case.base / "new-libexec"
+        relation = "current" if current else "different"
+        role = {"relation": relation, "selected_availability": "present", "recorded_availability": "present"}
+        return {
+            "installation": {"scope": "installation_bundle", "verification": "filesystem_metadata",
+                             "compatibility": "not_checked", "status": "observed", "roles": {
+                "delegate": {"path": str(self.fixture_case.fixture.upgraded_install / "delegate"), "status": "available"},
+                "delegate_run": {"path": str(self.fixture_case.fixture.upgraded_install / "delegate-run"), "status": "available"},
+                "pueue": {"path": str(candidate / "pueue"), "status": "available"},
+                "pueued": {"path": str(candidate / "pueued"), "status": "available"}}},
+            "supervisor": {"binding": "present", "liveness": "not_checked", "active_work": "unknown",
+                           "installation_binding": {"scope": "loaded_bundle", "verification": "filesystem_metadata",
+                                                    "relation": relation, "client": dict(role), "daemon": dict(role)}},
+            "issues": [] if current else [{"code": "supervisor_installation_differs", "area": "supervisor",
+                "next_step": "Run delegate supervisor ensure-owner --json with the same state root to inspect the installed pair handoff; metadata does not prove daemon termination."}],
+            "scheduler": {"compatibility": compatibility, "verification": "read_only",
+                          "issues": [] if compatibility == "compatible" else [{"code": compatibility, "area": "scheduler"}]},
+        }
+
+    def test_doctor_accepts_exact_candidate_drift_before_supervisor_handoff(self):
+        case = self.fixture_case.case(use_default=False)
+        case.upgraded = True
+        case.lifetime.upgraded_libexec = self.fixture_case.base / "new-libexec"
+        (case.fixture.state / ".scheduler").mkdir()
+        response = self.doctor_response()
+        self.assertNotEqual(case.lifetime.old_libexec, case.lifetime.upgraded_libexec)
+        def command(_name, arguments, expected=(0,)):
+            self.assertEqual(arguments, ["doctor"])
+            self.assertEqual(expected, (2,), "installed pair drift must require exactly doctor exit2")
+            return response
+        with patch.object(case, "command", side_effect=command):
+            upgrade.observe_doctor(case, "before", "migration_required")
+
     def test_doctor_must_preserve_database_and_sidecars_and_keep_advisory_separate(self):
         case = self.fixture_case.case(use_default=False)
+        case.upgraded = True
+        case.lifetime.upgraded_libexec = self.fixture_case.base / "new-libexec"
         directory = case.fixture.state / ".scheduler"
         directory.mkdir()
         database = directory / "schedules.sqlite"
         database.write_bytes(b"controlled database evidence")
-        response = {"issues": [], "scheduler": {"compatibility": "migration_required", "verification": "read_only",
-                                              "issues": [{"code": "migration_required"}]}}
+        response = self.doctor_response()
         with patch.object(case, "command", return_value=response):
             upgrade.observe_doctor(case, "before", "migration_required")
         def changed(*_args):
@@ -259,6 +294,81 @@ class UpgradeSelectionTests(unittest.TestCase):
             return response
         with patch.object(case, "command", side_effect=changed), self.assertRaisesRegex(RuntimeError, "sidecars"):
             upgrade.observe_doctor(case, "changed", "migration_required")
+
+    def test_transition_keeps_drift_until_supervisor_handoff_then_requires_current(self):
+        state = self.fixture_case.fixture.state
+        (state / ".scheduler").mkdir()
+        self.fixture_case.lifetime.upgraded_libexec = self.fixture_case.base / "new-libexec"
+        for release in releases.RELEASES:
+            with self.subTest(baseline=release.version):
+                case = self.fixture_case.case(use_default=False)
+                case.service.stopped = True
+                case.root_id = "a" * 32
+                before = upgrade_snapshot.StoreSnapshot(release.schema, case.root_id, (), ())
+                reliability = tuple((name, ("id",), ()) for name in upgrade_snapshot.RELIABILITY_TABLES)
+                after = replace(before, version=2, tables=reliability)
+                responses = {
+                    "doctor-before-migration": (["doctor"], 2, self.doctor_response(
+                        "migration_required" if release.schema == 1 else "compatible")),
+                    "scheduler-migrate": (["scheduler", "migrate"], 0,
+                                          {"root_id": case.root_id, "scheduler": {"state": "migrated"}}),
+                    "doctor-after-migration": (["doctor"], 2, self.doctor_response("compatible")),
+                    "supervisor-migrate": (["supervisor", "migrate"], 0, {}),
+                    "doctor-after-supervisor-migration": (["doctor"], 0, self.doctor_response("compatible", current=True)),
+                }
+                observed = []
+                def command(name, arguments, expected=(0,)):
+                    argv, code, response = responses[name]
+                    self.assertEqual(arguments, argv)
+                    self.assertEqual(expected, (code,))
+                    observed.append(name)
+                    return response
+                with patch.object(case, "command", side_effect=command), patch.object(upgrade, "snapshot", return_value=after):
+                    upgrade.transition(case, before, release, candidate_version="0.7.0")
+                self.assertEqual(observed, list(responses))
+
+    def test_doctor_rejects_unexpected_drift_binding_selection_and_scheduler_advisory(self):
+        case = self.fixture_case.case(use_default=False)
+        case.upgraded = True
+        case.lifetime.upgraded_libexec = self.fixture_case.base / "new-libexec"
+        (case.fixture.state / ".scheduler").mkdir()
+        for fault in ("missing_issue", "extra_issue", "wrong_issue", "current_binding", "missing_role",
+                      "old_selection", "wrong_scheduler", "scheduler_write", "extra_scheduler_issue"):
+            changed = self.doctor_response()
+            supervisor = upgrade.json_object(changed["supervisor"])
+            binding = upgrade.json_object(supervisor["installation_binding"])
+            installation = upgrade.json_object(changed["installation"])
+            roles = upgrade.json_object(installation["roles"])
+            scheduler = upgrade.json_object(changed["scheduler"])
+            if fault == "missing_issue":
+                changed["issues"] = []
+            elif fault == "extra_issue":
+                changed["issues"] = [{"code": "supervisor_installation_differs", "area": "supervisor"},
+                                     {"code": "observation_incomplete", "area": "root"}]
+            elif fault == "wrong_issue":
+                changed["issues"] = [{"code": "observation_incomplete", "area": "supervisor"}]
+            elif fault == "current_binding":
+                binding["relation"] = "current"
+            elif fault == "missing_role":
+                daemon = upgrade.json_object(binding["daemon"])
+                daemon["recorded_availability"] = "missing"
+                binding["daemon"] = daemon
+            elif fault == "old_selection":
+                client = upgrade.json_object(roles["pueue"])
+                client["path"] = str(self.fixture_case.base / "libexec/pueue")
+                roles["pueue"] = client
+            elif fault == "wrong_scheduler":
+                scheduler["compatibility"] = "compatible"
+            elif fault == "scheduler_write":
+                scheduler["verification"] = "read_write"
+            else:
+                scheduler["issues"] = [{"code": "migration_required", "area": "scheduler"},
+                                       {"code": "observation_incomplete", "area": "scheduler"}]
+            supervisor["installation_binding"] = binding
+            installation["roles"] = roles
+            changed.update(supervisor=supervisor, installation=installation, scheduler=scheduler)
+            with self.subTest(fault=fault), patch.object(case, "command", return_value=changed), self.assertRaises(RuntimeError):
+                upgrade.observe_doctor(case, "before", "migration_required")
 
     def test_occurrence_poll_retries_only_native_contention(self):
         case = self.fixture_case.case(use_default=False)
