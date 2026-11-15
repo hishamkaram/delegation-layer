@@ -95,6 +95,13 @@ func createInspectionOperationWithRuntime(ctx context.Context, store *taskdir.St
 		operation, err = createAdmissionInspectionOperation(locked, store, request, binding, now)
 		return err
 	})
+	return finishInspectionCreation(operation, resultErr)
+}
+
+func finishInspectionCreation(operation *inspection.Operation, resultErr error) (*inspection.Operation, error) {
+	if resultErr != nil && operation != nil {
+		return nil, errors.Join(resultErr, operation.Close())
+	}
 	return operation, resultErr
 }
 
