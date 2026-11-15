@@ -477,9 +477,14 @@ queue, refuses to stop it while queued or running work exists, and
 otherwise shuts it down through its own client and watches for the endpoint to
 become unavailable after graceful shutdown. If it was the same private endpoint
 used by the current bundled supervisor, Delegate starts that bundled daemon and
-waits for readiness before recording the completed migration. Normal admission
-then creates the successor inspection group. A crash between these steps is
-resumed from the immutable migration journal. A successful JSON response has
+waits for readiness before recording the completed migration. Inspection routing
+completes through its own journal; normal admission uses the recorded successor.
+A completed private handoff does not by itself prepare an inspection edge.
+Explicit migration can prepare that edge after checking the current queue and
+root-wide closure evidence. If the exact published current daemon has stopped,
+this path can restart it normally before those checks; it does not repeat the
+completed private handoff. A crash between these steps is resumed from the
+immutable migration journals. A successful JSON response has
 `supervisor_control.state: "migrated"` and
 `supervisor_control.next_action: "retry_dispatch"`. The command never
 migrates or stops an external Pueue configuration.

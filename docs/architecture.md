@@ -381,6 +381,14 @@ requires its recorded authorization; custom or ambiguous workers are not silentl
 rewritten. Public recovery instructions live in
 [result handling](../skills/agent-integration/references/result-handling.md).
 
+Private generation completion and inspection-edge preparation have separate
+owners. Shared admission and continuation refuse an unprepared inspection edge.
+Only explicit migration may prepare the selected canonical target after reading
+its current queue and checking root-wide maintenance quiescence under bootstrap
+EX. A stopped published current daemon may restart normally for that observation;
+the completed private history remains unchanged. Unaccepted inspection proposals
+cannot replace a connected completed private generation.
+
 Installation handoff uses a `drain_v1` variant in that same bootstrap journal.
 It owns the exact root and predecessor, stable operation identity, preparation
 mode, completion authorization and once-selected installed pair. Committing it
