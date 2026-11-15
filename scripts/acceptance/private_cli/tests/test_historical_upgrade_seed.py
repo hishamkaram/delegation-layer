@@ -262,6 +262,94 @@ class InstalledUpgradeRecordTests(unittest.TestCase):
     def test_live_package_removal_detects_unrecorded_drain_daemon_replacement(self):
         self._warm_removal_case("drain replaced")
 
+    def _proactive_upgrade_case(self, fault=""):
+        operation_id = "upgrade-v1:" + "e" * 32
+        config = self.supervisor / "pueue.yml"
+        config.write_text("owned fixture configuration\n")
+        journal = self.state / "infrastructure"
+        journal.mkdir()
+        fence = self.supervisor / "bootstrap.pending"
+        arguments = ["--root", str(self.state), "supervisor", "ensure-owner"]
+        completed = False
+        calls = []
+
+        def response(next_action, *, complete=False):
+            report = {"operation_id": operation_id, "mode": "operation_required",
+                      "phase": "migrating" if complete else "awaiting_installation"}
+            if complete:
+                report["completed"] = True
+            else:
+                report["completion_command"] = ["delegate", *arguments, "--complete-upgrade", operation_id,
+                                                "--refresh-owner", "--json"]
+            return {"supervisor_control": {"next_action": next_action, "upgrade": report,
+                    "state": "migrated" if complete else "upgrade_prepared"}}
+
+        def run_control(_delegate, _env, actual, **_options):
+            nonlocal completed
+            calls.append(actual)
+            if actual[-2:] == ["status", "--json"]:
+                self.assertFalse(completed)
+                return response("install_then_complete_upgrade")
+            if "--prepare-upgrade" in actual:
+                fence.write_text("prepared; explicit completion required\n")
+                return response("install_then_complete_upgrade")
+            if "--complete-upgrade" in actual:
+                previous = [call for call in calls[:-1] if "--complete-upgrade" in call]
+                if fault == "preflight pending" and not previous:
+                    return {"supervisor_control": {"state": "blocked",
+                            "next_action": "repeat_supervisor_ensure_owner"}}
+                if completed:
+                    if fault == "historical effect":
+                        (journal / "unexpected-new-owner.json").write_text("new owner effect\n")
+                    return response("inspect_supervisor_status", complete=True)
+                if fault == "preflight pending":
+                    self.assertNotIn("--refresh-owner", actual)
+                else:
+                    self.assertIn("--refresh-owner", actual)
+                completed = True
+                fence.unlink()
+                write_json(self.supervisor / "migration-history.json", {"fixture_completed_operation": operation_id})
+                return response("retry_dispatch", complete=True)
+            if fence.exists():
+                if fault == "ensure authorizes":
+                    fence.write_text("unrelated ensure authorized the installation\n")
+                return response("install_then_complete_upgrade")
+            return {"status": "owner_ready", "supervisor_control": {"state": "ready"}}
+
+        with patch.object(upgrade, "run_json", side_effect=run_control), \
+                patch.object(upgrade, "private_shutdown_evidence", side_effect=lambda _config: (
+                    18002 if completed else 18001, None, None)), \
+                patch.object(upgrade, "private_daemon_process_gone", return_value=True) as absent:
+            if fault and fault != "preflight pending":
+                reason = {"ensure authorizes": "ordinary ensure authorized or advanced",
+                          "historical effect": "historical completion repeated"}[fault]
+                with self.assertRaisesRegex(RuntimeError, reason):
+                    upgrade.prove_proactive_same_pair_upgrade(self.root / "delegate", {}, self.state, config,
+                                                              self.root, capture_root=None)
+                if fault == "ensure authorizes":
+                    self.assertFalse(any("--complete-upgrade" in call for call in calls))
+                    absent.assert_not_called()
+            else:
+                evidence = upgrade.prove_proactive_same_pair_upgrade(self.root / "delegate", {}, self.state, config,
+                                                                    self.root, capture_root=None)
+                self.assertEqual(evidence["operation_id"], operation_id)
+                self.assertTrue(evidence["fresh_daemon"])
+                self.assertTrue(evidence["historical_repeat_no_effect"])
+                self.assertEqual(len(calls), 7 if fault == "preflight pending" else 5)
+                self.assertEqual(absent.call_args.args[0], 18001)
+
+    def test_proactive_same_pair_noop_installation_requires_completion_and_fresh_daemon(self):
+        self._proactive_upgrade_case()
+
+    def test_proactive_upgrade_detects_unrelated_ensure_authorization(self):
+        self._proactive_upgrade_case("ensure authorizes")
+
+    def test_proactive_upgrade_detects_historical_owner_effect(self):
+        self._proactive_upgrade_case("historical effect")
+
+    def test_proactive_upgrade_waits_for_preflight_without_repeating_owner_refresh(self):
+        self._proactive_upgrade_case("preflight pending")
+
     def pending(self, *, binding=None, shutdown=False, proposal_digest=None, source=None, group_directory=None,
                 legacy_pid=0, legacy_process_start=""):
         source = self.binding if source is None else source

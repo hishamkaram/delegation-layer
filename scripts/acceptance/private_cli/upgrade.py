@@ -560,7 +560,7 @@ def _require_one_warm_queue_identity(state, response, client, config, env, captu
             "warm dispatch did not retain exactly one matching running queue identity")
 
 
-def _live_upgrade_report(response, operation_id=None):
+def _live_upgrade_report(response, operation_id=None, *, mode="reactive"):
     control = response.get("supervisor_control")
     require(isinstance(control, dict), "live upgrade omitted supervisor control")
     report = control.get("upgrade")
@@ -569,11 +569,11 @@ def _live_upgrade_report(response, operation_id=None):
     require(isinstance(actual, str) and re.fullmatch(r"upgrade-v1:[0-9a-f]{32}", actual) is not None,
             "live upgrade has no valid operation identity")
     require(operation_id is None or actual == operation_id, "live upgrade replaced its operation")
-    require(report.get("mode") == "reactive", "live upgrade changed its authorization mode")
+    require(report.get("mode") == mode, "live upgrade changed its authorization mode")
     return control, report
 
 
-def _complete_live_upgrade(delegate, env, state, receipts, operation_id, *, capture_root):
+def _complete_live_upgrade(delegate, env, state, receipts, operation_id, *, capture_root, mode="reactive"):
     """Resume only acknowledged maintenance progress, never uncertain provider work."""
     deadline = time.monotonic() + 120
     attempt = 0
@@ -581,13 +581,34 @@ def _complete_live_upgrade(delegate, env, state, receipts, operation_id, *, capt
     def complete():
         nonlocal attempt
         attempt += 1
+        arguments = ["--root", str(state), "supervisor", "ensure-owner"]
+        if mode == "operation_required":
+            arguments.extend(["--complete-upgrade", operation_id])
+            if attempt == 1:
+                arguments.append("--refresh-owner")
+        arguments.append("--json")
         response = run_json(
-            delegate, env, ["--root", str(state), "supervisor", "ensure-owner", "--json"],
+            delegate, env, arguments,
             expected=(0, 3), timeout=None, deadline=deadline,
             receipt=receipts / ("upgrade-live-complete-%d.json" % attempt),
             capture_root=capture_root, capture_response=True,
         )
-        control, report = _live_upgrade_report(response, operation_id)
+        pending_control = response.get("supervisor_control")
+        if isinstance(pending_control, dict) and not pending_control.get("upgrade"):
+            require(pending_control.get("state") == "blocked"
+                    and pending_control.get("next_action") == "repeat_supervisor_ensure_owner"
+                    and not response.get("error"),
+                    "upgrade without an OP was not an acknowledged pending preflight")
+            observed = run_json(
+                delegate, env, ["--root", str(state), "supervisor", "status", "--json"],
+                timeout=None, deadline=deadline,
+                receipt=receipts / ("upgrade-live-preflight-status-%d.json" % attempt),
+                capture_root=capture_root, capture_response=True,
+            )
+            _, existing = _live_upgrade_report(observed, operation_id, mode=mode)
+            require(not existing.get("completed", False), "pending preflight changed its saved operation")
+            return False
+        control, report = _live_upgrade_report(response, operation_id, mode=mode)
         if report.get("completed") is True:
             require(control.get("state") == "migrated" and control.get("next_action") == "retry_dispatch",
                     "completed live handoff did not verify current admission readiness")
@@ -598,6 +619,67 @@ def _complete_live_upgrade(delegate, env, state, receipts, operation_id, *, capt
         return False
 
     return wait_until(complete, timeout=120, description="explicit live installed-pair handoff")
+
+
+def prove_proactive_same_pair_upgrade(delegate, env, state, config, receipts, *, capture_root):
+    """An explicit no-op installation still replaces the daemon, once per OP."""
+    authority = _warm_authority_records(state)
+    with private_fixture_transition(state):
+        predecessor_pid = private_shutdown_evidence(config)[0]
+        config_before = config.read_bytes()
+    arguments = ["--root", str(state), "supervisor", "ensure-owner"]
+    ready = run_json(delegate, env, [*arguments, "--json"],
+                     receipt=receipts / "upgrade-current-noop.json", capture_root=capture_root,
+                     capture_response=True)
+    require(ready.get("status") == "owner_ready"
+            and not ready.get("supervisor_control", {}).get("upgrade"),
+            "ordinary current-pair ensure created an unnecessary upgrade")
+    prepared = run_json(delegate, env, [*arguments, "--prepare-upgrade", "--json"],
+                        receipt=receipts / "upgrade-proactive-prepare.json", capture_root=capture_root,
+                        capture_response=True)
+    control, report = _live_upgrade_report(prepared, mode="operation_required")
+    operation_id = report["operation_id"]
+    completion = ["delegate", *arguments, "--complete-upgrade", operation_id, "--refresh-owner", "--json"]
+    require(report.get("phase") == "awaiting_installation" and not report.get("completed", False)
+            and control.get("next_action") == "install_then_complete_upgrade"
+            and report.get("completion_command") == completion,
+            "proactive prepare omitted its exact completion authorization")
+    fence = state / ".supervisor" / "bootstrap.pending"
+    before = fence.read_bytes()
+    pending = run_json(delegate, env, [*arguments, "--json"], expected=(3,),
+                       receipt=receipts / "upgrade-proactive-unrelated-ensure.json", capture_root=capture_root,
+                       capture_response=True)
+    _, unchanged = _live_upgrade_report(pending, operation_id, mode="operation_required")
+    require(unchanged.get("phase") == "awaiting_installation" and not unchanged.get("completed", False)
+            and fence.read_bytes() == before and config.read_bytes() == config_before
+            and _warm_authority_records(state) == authority,
+            "ordinary ensure authorized or advanced a prepared installation")
+    with private_fixture_transition(state):
+        require(private_shutdown_evidence(config)[0] == predecessor_pid,
+                "proactive prepare replaced the daemon before completion")
+    # No installer runs: the same selected installed pair must get a fresh birth.
+    _complete_live_upgrade(delegate, env, state, receipts, operation_id,
+                           capture_root=capture_root, mode="operation_required")
+    with private_fixture_transition(state):
+        successor_pid = private_shutdown_evidence(config)[0]
+    require(successor_pid != predecessor_pid, "same-pair completion reused its predecessor daemon")
+    deadline = time.monotonic() + 30
+    wait_until(lambda: private_daemon_process_gone(predecessor_pid, deadline, capture_root=capture_root),
+               timeout=30, description="proactive predecessor PID absence")
+    completed_authority = _warm_authority_records(state)
+    owner_history = snapshot(state / "infrastructure")
+    repeated = run_json(delegate, env, [*arguments, "--complete-upgrade", operation_id, "--refresh-owner", "--json"],
+                        receipt=receipts / "upgrade-proactive-historical-repeat.json", capture_root=capture_root,
+                        capture_response=True)
+    repeated_control, repeated_report = _live_upgrade_report(repeated, operation_id, mode="operation_required")
+    require(repeated_report.get("completed") is True
+            and repeated_control.get("next_action") == "inspect_supervisor_status"
+            and _warm_authority_records(state) == completed_authority
+            and snapshot(state / "infrastructure") == owner_history,
+            "historical completion repeated an upgrade or owner rotation")
+    return {"operation_id": operation_id, "same_pair_noop_installation": True,
+            "unrelated_ensure_preserved_fence": True, "fresh_daemon": True,
+            "predecessor_native_pid_absent": True, "historical_repeat_no_effect": True}
 
 
 def prove_live_package_removal(
@@ -857,6 +939,8 @@ def prepare_upgrade_history(
         history=history, lease_nonce=lease_nonce, old_delegate=old_delegate, old_libexec=old_libexec,
         receipts=receipts, remove_old_package=remove_old_package, state=state, waiter_directory=waiter_directory,
     )
+    evidence["proactive_same_pair_upgrade"] = prove_proactive_same_pair_upgrade(
+        delegate, env, state, config, receipts, capture_root=capture_root)
     # Retain the independent stopped-daemon migration case after the live proof.
     shutdown_private_supervisor(
         client, config, env, state=state, task_ids=tuple(attempted_task_ids), capture_root=capture_root
