@@ -147,8 +147,7 @@ func observeHistoricalCustodians(ctx context.Context, journal *intentJournal, re
 		if err = observeHistoricalCustodian(ctx, journal, reader, pin, current, sequence, boot); err != nil {
 			// Continue only this native-present origin. Every historian keeps its
 			// own tag; a later independent fault retains the complete graph.
-			var origin *historicalDaemonWaitPendingError
-			if errors.As(err, &origin) && err == origin {
+			if _, knownPending := err.(interface{ HistoricalDaemonWaitPending() }); knownPending {
 				pending = errors.Join(pending, err)
 				continue
 			}

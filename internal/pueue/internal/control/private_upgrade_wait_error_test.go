@@ -19,8 +19,9 @@ type upgradeWaitSourceError struct {
 	cause    error
 }
 
-func (*upgradeWaitSourceError) Error() string   { return "fixture Wait observation" }
-func (e *upgradeWaitSourceError) Unwrap() error { return e.cause }
+func (*upgradeWaitSourceError) Error() string              { return "fixture Wait observation" }
+func (e *upgradeWaitSourceError) Unwrap() error            { return e.cause }
+func (e *upgradeWaitSourceError) waitSourceIdentity() *int { return e.identity }
 
 func upgradeUnclosedMigrationFixture(t *testing.T, dispatched bool) (generationGuardFixture, privateMigrationRecord) {
 	t.Helper()
@@ -91,8 +92,8 @@ func testUpgradeWaitSourceForwarding(t *testing.T, dispatched bool) {
 			}
 			return waitErr
 		})
-		var forwarded *upgradeWaitSourceError
-		if !errors.As(err, &forwarded) || err != forwarded || forwarded.identity != source.identity || errors.Is(err, ErrPrivateSupervisorMigrationRequired) || !errors.Is(err, cause) {
+		forwarded, original := err.(interface{ waitSourceIdentity() *int })
+		if !original || forwarded.waitSourceIdentity() != source.identity || errors.Is(err, ErrPrivateSupervisorMigrationRequired) || !errors.Is(err, cause) {
 			t.Fatalf("upgrade Wait source error was changed: err=%v", err)
 		}
 		assertExecutionTargetTreeUnchanged(t, f.base, before)
