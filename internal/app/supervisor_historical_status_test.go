@@ -31,6 +31,7 @@ func TestPublicSupervisorStatusReportsHistoricalReadiness(t *testing.T) {
 func runHistoricalStatusReadinessScenario(t *testing.T, group, missing bool) {
 	t.Helper()
 	fixture := newHistoricalInstallationMigrationFixture(t, missing)
+	prepareClosedHistoricalStatusFixture(t, fixture)
 	if group {
 		writeSupervisorGenerationTestGroup(t, fixture.store, fixture.predecessor)
 	}
@@ -200,6 +201,7 @@ func assertHistoricalStatusPhaseDispatch(t *testing.T, fixture *historicalSuperv
 func TestHistoricalSupervisorStatusObservesDriftedSavedEndpoint(t *testing.T) {
 	t.Parallel()
 	fixture := newHistoricalInstallationMigrationFixture(t, false)
+	prepareClosedHistoricalStatusFixture(t, fixture)
 	configPath := pueue.PrivateConfigPath(fixture.root)
 	original := prepareHistoricalStatusEndpointDrift(t, fixture)
 	drifted := readSupervisorProbeTestFile(t, configPath)

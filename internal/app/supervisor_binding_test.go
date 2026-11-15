@@ -11,13 +11,40 @@ import (
 
 	"github.com/hishamkaram/delegation-layer/internal/supervisor/testsupport"
 	"github.com/hishamkaram/delegation-layer/internal/task"
+	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 )
 
 func TestSupervisorStatusRecommendsInstalledPairHandoff(t *testing.T) {
 	for _, missing := range []bool{false, true} {
 		t.Run(map[bool]string{false: "present recorded pair", true: "deleted recorded pair"}[missing], func(t *testing.T) {
-			assertInstalledPairHandoff(t, newHistoricalInstallationMigrationFixture(t, missing), missing)
+			fixture := newHistoricalInstallationMigrationFixture(t, missing)
+			prepareClosedHistoricalStatusFixture(t, fixture)
+			assertInstalledPairHandoff(t, fixture, missing)
 		})
+	}
+}
+
+func prepareClosedHistoricalStatusFixture(t *testing.T, fixture *historicalSupervisorFixture) {
+	t.Helper()
+	// These positive status cases model closed journal DATA. Global historical
+	// fixtures keep unknown lifetime evidence for refusal and recovery tests.
+	recordClosedHistoricalCallbackLifetimeData(t, fixture.td)
+	requireSupervisorFixtureClosed(t, fixture.store, fixture.td)
+}
+
+func requireSupervisorFixtureClosed(t *testing.T, store *taskdir.Store, td *taskdir.TaskDir) {
+	t.Helper()
+	evidence, err := taskdir.LoadLifetimeEvidenceContext(t.Context(), td)
+	if err != nil {
+		t.Fatal(err)
+	}
+	closure, err := task.ResolveLifetimeClosure(evidence)
+	if err != nil || !closure.Closed() {
+		t.Fatalf("fixture lifetime DATA is not closed: closure=%+v err=%v", closure, err)
+	}
+	observed, err := store.ReadTaskExecutionClosureContext(t.Context(), td.TaskID)
+	if err != nil || observed.Proof == nil {
+		t.Fatalf("fixture closure DATA has no canonical observation: observation=%+v err=%v", observed, err)
 	}
 }
 

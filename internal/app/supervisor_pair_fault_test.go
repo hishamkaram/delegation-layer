@@ -409,8 +409,9 @@ func TestSupervisorStatusDoesNotMistakeEndpointForCompleteAdmission(t *testing.T
 }
 
 func TestSupervisorStatusKeepsConfigDriftMigrationGuidance(t *testing.T) {
-	f := newPublicContinuationFixture(t)
-	path := f.client.Binding().ConfigPath
+	fixture := newHistoricalInstallationMigrationFixture(t, false)
+	prepareClosedHistoricalStatusFixture(t, fixture)
+	path := fixture.predecessor.ConfigPath
 	before := readSupervisorProbeTestFile(t, path)
 	t.Cleanup(func() {
 		if err := os.WriteFile(path, before, 0o600); err != nil {
@@ -420,7 +421,7 @@ func TestSupervisorStatusKeepsConfigDriftMigrationGuidance(t *testing.T) {
 	if err := os.WriteFile(path, append(before, '\n'), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	result := supervisorStatus(f.owner.root, f.deps, newSupervisorCommandResponse("status"))
+	result := supervisorStatus(fixture.root, fixture.dependencies(), newSupervisorCommandResponse("status"))
 	control := result.response.SupervisorControl
 	if result.code != 0 || result.err != nil || control.State != "legacy_present" || control.NextAction != "run_supervisor_migrate" {
 		t.Fatalf("configuration drift lost migration guidance: code=%d control=%+v err=%v", result.code, control, result.err)

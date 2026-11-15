@@ -63,7 +63,8 @@ func TestExternalInspectionHandoffPublicConsumersPreserveActiveWork(t *testing.T
 	schedulingPath := privateOrdinarySchedulingTestPath(store.Root)
 	schedulingBytes := readSupervisorProbeTestFile(t, schedulingPath)
 	after := supervisorCommand(Arguments{Root: store.Root, SupervisorAction: "status"}, deps)
-	assertHandoffSupervisorResult(t, after, "migrated", "none")
+	assertHandoffSupervisorResult(t, after, "migrated", "wait_for_legacy_work")
+	assertActiveExternalInspectionBlocksMaintenance(t, after.response.SupervisorControl, requestBefore.TaskID)
 	assertSupervisorProbeTestFile(t, schedulingPath, schedulingBytes)
 	assertExternalHandoffHead(t, store, legacy, current.Binding())
 	assertSupervisorProbeTestFile(t, requestPath, requestBytes)
@@ -74,6 +75,17 @@ func TestExternalInspectionHandoffPublicConsumersPreserveActiveWork(t *testing.T
 		t.Fatal("routing handoff invoked a destructive supervisor control")
 	}
 	finishExternalHandoffInspection(t, store, requestBefore)
+}
+
+func assertActiveExternalInspectionBlocksMaintenance(t *testing.T, control *SupervisorControlResponse, id string) {
+	t.Helper()
+	if control.ObservedAt == "" || control.MigrationReadiness != "blocked" || control.ActiveWork != "none" || control.FirstBlocker == nil {
+		t.Fatalf("status did not distinguish the active external inspection from the empty private queue: %+v", control)
+	}
+	blocker := control.FirstBlocker
+	if blocker.Kind != "inspection" || blocker.OperationID != id || blocker.ReasonCode != "runtime_closure_unproven" || blocker.NextAction != "wait_for_legacy_work" {
+		t.Fatalf("status lost the exact active external inspection: %+v", blocker)
+	}
 }
 
 func TestExternalInspectionHandoffKeepsCommittedReportWhenAdmissionFails(t *testing.T) {
