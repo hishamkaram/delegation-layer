@@ -493,7 +493,11 @@ func preparePrivateUpgradePredecessor(ctx context.Context, root taskdir.RootPin,
 	if alias, found, readErr := readValidatedPrivateRecoveryAlias(root.Root()); readErr != nil {
 		return nil, readErr
 	} else if found && alias.matches(drain.Predecessor) {
-		client, err = bindPrivateRecoveryTransport(ctx, alias.record, drain.Predecessor, selected, drain.Predecessor.DaemonExecutable, options)
+		daemon, daemonErr := selectRecoveryDaemon(drain.Predecessor, filepath.Join(filepath.Dir(selected), "pueued"))
+		if daemonErr != nil {
+			return nil, daemonErr
+		}
+		client, err = bindPrivateRecoveryTransport(ctx, alias.record, drain.Predecessor, selected, daemon, options)
 	} else {
 		client, err = NewClient(drain.Predecessor, options)
 	}
