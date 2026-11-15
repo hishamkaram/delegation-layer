@@ -620,6 +620,8 @@ def prove_live_package_removal(
         inputs = {name: (original_directory / name).read_bytes()
                   for name in ("task.json", "meta.json", "submit.json", "supervisor.ref.json")}
         authority = _warm_authority_records(state)
+        with private_fixture_transition(state):
+            predecessor_pid = private_shutdown_evidence(config)[0]
         remove_old_package()
         require(not old_libexec.exists() and not old_delegate.exists(), "live old package was not removed")
         original_cohort.assert_live()
@@ -641,7 +643,8 @@ def prove_live_package_removal(
                 and runtime.get("daemon_executable") == str(client.parent / "pueued"),
                 "live dispatch did not select the current installed pair")
         with private_fixture_transition(state):
-            predecessor_pid = private_shutdown_evidence(config)[0]
+            require(private_shutdown_evidence(config)[0] == predecessor_pid,
+                    "warm recovery replaced the original daemon before draining")
         operation_id = None
         for attempt in range(2):
             prepared = run_json(
@@ -658,6 +661,9 @@ def prove_live_package_removal(
                     "live tasks did not block the explicit upgrade drain")
             original_cohort.assert_live()
             fresh_cohort.assert_live()
+            with private_fixture_transition(state):
+                require(private_shutdown_evidence(config)[0] == predecessor_pid,
+                        "upgrade drain replaced the original daemon before task closure")
         require(scheduling_path.read_bytes() == scheduling_before,
                 "draining ensure-owner changed the runtime scheduling receipt")
         original_cohort.assert_live()

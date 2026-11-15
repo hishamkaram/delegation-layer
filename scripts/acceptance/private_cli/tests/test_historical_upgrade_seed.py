@@ -196,10 +196,15 @@ class InstalledUpgradeRecordTests(unittest.TestCase):
                                            "status": {"Running": {}}}
                               for index, response in enumerate(responses, start=1)}}
 
+        def daemon_evidence(_config):
+            changed = (fault == "daemon replaced" and not old_delegate.exists()
+                       or fault == "drain replaced" and bool(ensure_calls))
+            return (54321 if changed else 12345, None, None)
+
         with patch.object(upgrade, "run_json", side_effect=ensure), \
                 patch.object(upgrade, "_upgrade_live_leases", return_value=[{"owned": "lease"}]), \
                 patch.object(upgrade.LiveFIFOLeaseCohort, "acquire", side_effect=cohorts), \
-                patch.object(upgrade, "private_shutdown_evidence", return_value=(12345, None, None)), \
+                patch.object(upgrade, "private_shutdown_evidence", side_effect=daemon_evidence), \
                 patch.object(upgrade, "private_daemon_process_gone", return_value=True) as predecessor_gone, \
                 patch.object(upgrade, "pueue_snapshot", side_effect=queue):
             options = dict(brief=self.root / "brief", capture_root=None, client=client, collect=collect,
@@ -210,7 +215,9 @@ class InstalledUpgradeRecordTests(unittest.TestCase):
                            waiter_directory=self.root / "waiters")
             if fault:
                 reason = {"not ready": "omitted supervisor control", "provenance": "changed daemon provenance",
-                          "operation": "replaced its operation", "premature completion": "did not block"}[fault]
+                          "operation": "replaced its operation", "premature completion": "did not block",
+                          "daemon replaced": "replaced the original daemon",
+                          "drain replaced": "replaced the original daemon"}[fault]
                 with self.assertRaisesRegex(RuntimeError, reason):
                     upgrade.prove_live_package_removal(**options)
                 self.assertTrue(gate.exists(), "unproven task closure removed its release gate")
@@ -248,6 +255,12 @@ class InstalledUpgradeRecordTests(unittest.TestCase):
 
     def test_live_package_removal_rejects_completion_while_tasks_are_live(self):
         self._warm_removal_case("premature completion")
+
+    def test_live_package_removal_detects_unrecorded_warm_daemon_replacement(self):
+        self._warm_removal_case("daemon replaced")
+
+    def test_live_package_removal_detects_unrecorded_drain_daemon_replacement(self):
+        self._warm_removal_case("drain replaced")
 
     def pending(self, *, binding=None, shutdown=False, proposal_digest=None, source=None, group_directory=None,
                 legacy_pid=0, legacy_process_start=""):
