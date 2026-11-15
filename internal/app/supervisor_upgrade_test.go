@@ -153,6 +153,29 @@ func TestSupervisorUpgradePrepareProjectionKeepsExactOperation(t *testing.T) {
 	}
 }
 
+func TestSupervisorUpgradeFailureDiagnosticsPreserveTypedCondition(t *testing.T) {
+	for _, fixture := range []struct {
+		condition infrastructure.UpgradeCondition
+		message   string
+	}{
+		{infrastructure.UpgradeRefused, "supervisor upgrade was refused"},
+		{infrastructure.UpgradeUnsupported, "supervisor upgrade is unsupported"},
+		{infrastructure.UpgradeFault, "supervisor upgrade failed"},
+		{infrastructure.UpgradeTimeout, "supervisor upgrade timed out"},
+	} {
+		t.Run(string(fixture.condition), func(t *testing.T) {
+			outcome := infrastructure.UpgradeOutcome{Condition: fixture.condition, Preflight: infrastructure.UpgradePreflight{State: infrastructure.UpgradePreflightPassed}}
+			result := finishSupervisorUpgrade(Arguments{}, newSupervisorCommandResponse("ensure-owner"), outcome, nil)
+			if result.code != 1 || result.response.Error != fixture.message || result.err == nil || result.err.Error() != fixture.message {
+				t.Fatalf("typed failure was misreported: code=%d error=%q cause=%v", result.code, result.response.Error, result.err)
+			}
+			if result.response.SupervisorControl.NextAction != "stop_and_report" {
+				t.Fatal("failed upgrade advised continued mutation")
+			}
+		})
+	}
+}
+
 func writeBrokenSupervisorUpgradeFixture(t *testing.T, root, name string) {
 	t.Helper()
 	base := filepath.Join(root, ".supervisor")

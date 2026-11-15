@@ -188,15 +188,22 @@ func finishSupervisorUpgrade(a Arguments, response Response, outcome infrastruct
 		return failedSupervisorCause(response, "supervisor upgrade returned no verified observation", task.ErrEvidenceFault, 1)
 	}
 	control.State = "blocked"
-	if outcome.Condition == infrastructure.UpgradePending || outcome.Condition == infrastructure.UpgradeBusy {
+	switch outcome.Condition {
+	case infrastructure.UpgradePending, infrastructure.UpgradeBusy:
 		control.NextAction = "repeat_supervisor_ensure_owner"
 		if strings.HasPrefix(outcome.ReasonCode, "ordinary_migration_") {
 			control.NextAction = "run_supervisor_migrate"
 		}
 		return commandResult{response: response, code: 3}
-	}
-	if outcome.Condition != infrastructure.UpgradeOK {
+	case infrastructure.UpgradeRefused:
 		return failedSupervisor(response, "supervisor upgrade was refused", 1)
+	case infrastructure.UpgradeUnsupported:
+		return failedSupervisor(response, "supervisor upgrade is unsupported", 1)
+	case infrastructure.UpgradeFault:
+		return failedSupervisor(response, "supervisor upgrade failed", 1)
+	case infrastructure.UpgradeTimeout:
+		return failedSupervisor(response, "supervisor upgrade timed out", 1)
+	case infrastructure.UpgradeOK:
 	}
 	return finishSuccessfulSupervisorUpgrade(a, response, outcome)
 }
