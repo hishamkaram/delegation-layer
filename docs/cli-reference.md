@@ -527,8 +527,9 @@ This records `allow_supervisor_maintenance` only. Native execution remains
 unknown; it creates no accepted result, success, termination or continuation
 permission. Scheduler, resource, session, workspace, custody and deletion claims
 remain held. Status presents the administrative decision separately; collect
-stops with exit `1`. Wait stops with exit `1` when its any/all condition remains
-unmet; another genuinely ready task can satisfy `--any`. Settlement itself never
+stops with exit `1`. Wait stops with exit `1` when `--all` includes a settled
+member, or every member of `--any` is settled. `--any` keeps watching other
+pending members until genuine readiness or the deadline. Settlement itself never
 sets result readiness. A genuine later
 outcome takes precedence. Connected completed migration history lets the same
 permission remain usable for later maintenance without reconfirming it.

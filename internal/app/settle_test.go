@@ -42,9 +42,9 @@ func recordSettlementLifetime(t *testing.T, td *taskdir.TaskDir, placement *task
 		}
 	}()
 	deadline := time.Now().UTC().Add(time.Hour)
-	_, err = td.RecordLifetimeIntentContext(t.Context(), taskdir.LifetimeIntentFacts{ScopeKind: task.LifetimeScopeProcessGroup, Assurance: task.LifetimeAssuranceCooperative, ScopePlan: "pg:" + strings.Repeat("a", 32), BootID: boot, Deadline: deadline})
+	_, err = td.RecordLifetimeIntentContext(t.Context(), taskdir.LifetimeIntentFacts{ScopeKind: task.LifetimeScopeProcessGroup, Assurance: task.LifetimeAssuranceCooperative, ScopePlan: "pg:" + td.TaskID, BootID: boot, Deadline: deadline})
 	requireSettlementTest(t, err)
-	_, err = td.RecordLifetimeRegistrationContext(t.Context(), taskdir.LifetimeRegistrationFacts{ScopeKind: task.LifetimeScopeProcessGroup, Assurance: task.LifetimeAssuranceCooperative, ScopeID: "pg:" + strings.Repeat("a", 32), BootID: boot, Deadline: deadline, CustodyPlacement: placement})
+	_, err = td.RecordLifetimeRegistrationContext(t.Context(), taskdir.LifetimeRegistrationFacts{ScopeKind: task.LifetimeScopeProcessGroup, Assurance: task.LifetimeAssuranceCooperative, ScopeID: "pg:" + td.TaskID, BootID: boot, Deadline: deadline, CustodyPlacement: placement})
 	requireSettlementTest(t, err)
 	_, err = td.RecordLifetimeWorkerContext(t.Context(), taskdir.LifetimeWorkerFacts{PID: 1 << 30, ProcessStart: self.StartToken(), BootID: boot})
 	requireSettlementTest(t, err)
@@ -391,4 +391,116 @@ func assertMixedSettlementWaitTask(t *testing.T, item WaitTask, settled bool) {
 	if !item.Ready || item.Settlement != nil || item.Publication != "committed" {
 		t.Fatalf("genuine committed task lost readiness: %+v", item)
 	}
+}
+
+func TestSettlementMixedPendingWaitKeepsAnyUnsettledMember(t *testing.T) {
+	store, settled := settledObservationFixture(t)
+	pending, _ := newAppTaskInStore(t, store, waitFirstID, true, nil)
+	for _, test := range []struct {
+		name string
+		ids  []string
+		all  bool
+		code int
+	}{
+		{"any settled first", []string{settled.TaskID, pending.TaskID}, false, 3},
+		{"any pending first", []string{pending.TaskID, settled.TaskID}, false, 3},
+		{"all settled first", []string{settled.TaskID, pending.TaskID}, true, 1},
+		{"all pending first", []string{pending.TaskID, settled.TaskID}, true, 1},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			result := waitTasks(Arguments{Root: store.Root, WaitTaskIDs: test.ids, WaitAll: test.all}, storeDependencies{})
+			if result.code != test.code || result.response.Wait == nil || result.response.Wait.Satisfied {
+				t.Fatalf("settlement stopped an eligible remaining member: code=%d wait=%+v error=%v", result.code, result.response.Wait, result.err)
+			}
+			assertPendingSettlementWaitSummaries(t, result.response.Wait, test.ids, settled.TaskID)
+		})
+	}
+}
+
+func assertPendingSettlementWaitSummaries(t *testing.T, watch *WaitResponse, ids []string, settledID string) {
+	t.Helper()
+	if len(watch.Tasks) != len(ids) {
+		t.Fatalf("mixed pending wait dropped summaries: %+v", watch.Tasks)
+	}
+	for index, id := range ids {
+		item := watch.Tasks[index]
+		if item.TaskID != id {
+			t.Fatalf("mixed pending wait changed input order: %+v", watch.Tasks)
+		}
+		if id == settledID {
+			assertMixedSettlementWaitTask(t, item, true)
+			continue
+		}
+		if item.Ready || item.Settlement != nil || item.Publication != "pending" {
+			t.Fatalf("unpublished sealed member lost its pending state: %+v", item)
+		}
+	}
+}
+
+func TestSettlementAllMembersSettledStopsAny(t *testing.T) {
+	store, first := settledObservationFixture(t)
+	second, _ := newAppTaskInStore(t, store, waitFirstID, false, nil)
+	prepareSettlementAdmission(t, second)
+	recordSettlementLifetime(t, second, nil)
+	confirmSettlementForTest(t, second)
+	result := waitTasks(Arguments{Root: store.Root, WaitTaskIDs: []string{first.TaskID, second.TaskID}}, storeDependencies{})
+	if result.code != 1 || result.response.Wait == nil || result.response.Wait.Satisfied {
+		t.Fatalf("all-settled any-of kept watching: %+v", result)
+	}
+	for _, item := range result.response.Wait.Tasks {
+		assertMixedSettlementWaitTask(t, item, true)
+	}
+}
+
+// These immutable snapshots come from the real rooted reader before and after
+// canonical publication. The test owns only their delivery order, not Ready.
+type settlementPublicationSnapshots struct {
+	*taskdir.ReadOnlyStore
+	pendingID string
+	before    taskdir.TaskEvidence
+	after     taskdir.TaskEvidence
+	reads     int
+}
+
+func (r *settlementPublicationSnapshots) ReadTaskEvidence(ctx context.Context, id string) (taskdir.TaskEvidence, error) {
+	if err := ctx.Err(); err != nil {
+		return taskdir.TaskEvidence{TaskID: id}, err
+	}
+	if id != r.pendingID {
+		return r.ReadOnlyStore.ReadTaskEvidence(ctx, id)
+	}
+	r.reads++
+	if r.reads == 1 {
+		return r.before, nil
+	}
+	return r.after, nil
+}
+
+func TestSettlementAnyFollowsCanonicalPendingPublication(t *testing.T) {
+	store, settled := settledObservationFixture(t)
+	pending, _ := newAppTaskInStore(t, store, waitFirstID, true, nil)
+	reader, err := taskdir.OpenReadOnlyStoreContext(t.Context(), store.Root, NativePredicates())
+	requireSettlementTest(t, err)
+	t.Cleanup(func() { requireSettlementTest(t, reader.Close()) })
+	before, err := reader.ReadTaskEvidence(t.Context(), pending.TaskID)
+	requireSettlementTest(t, err)
+	if before.Inspection == nil || before.Inspection.Outcome != nil || before.Seal == nil {
+		t.Fatal("fixture did not start with genuine pending sealed evidence")
+	}
+	winner, cleanupErr, collectErr := pending.Collect(task.FixturePredicateRef())
+	requireSettlementTest(t, errors.Join(cleanupErr, collectErr))
+	if winner == nil || winner.Verdict != task.VerdictCommitted {
+		t.Fatal("fixture did not canonically commit its pending outcome")
+	}
+	after, err := reader.ReadTaskEvidence(t.Context(), pending.TaskID)
+	requireSettlementTest(t, err)
+	snapshots := &settlementPublicationSnapshots{ReadOnlyStore: reader, pendingID: pending.TaskID, before: before, after: after}
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	ids := []string{settled.TaskID, pending.TaskID}
+	result := watchWaitTasks(ctx, Arguments{WaitTaskIDs: ids, Watch: 5 * time.Second}, snapshots, newResponse("wait"), time.Nanosecond)
+	if result.code != 0 || result.response.Wait == nil || !result.response.Wait.Satisfied || snapshots.reads < 2 {
+		t.Fatalf("any-of stopped before real pending publication: code=%d reads=%d wait=%+v error=%v", result.code, snapshots.reads, result.response.Wait, result.err)
+	}
+	assertMixedSettlementWaitSummaries(t, result.response.Wait, ids, settled.TaskID)
 }

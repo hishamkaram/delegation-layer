@@ -202,10 +202,11 @@ func waitRoundFailure(ctx context.Context, watch time.Duration, response Respons
 }
 
 func waitAdministrativelySettled(watch *WaitResponse) bool {
+	settledCount := 0
 	for _, item := range watch.Tasks {
 		if item.Settlement != nil {
-			return true
+			settledCount++
 		}
 	}
-	return false
+	return settledCount > 0 && (watch.Mode == "all" || settledCount == len(watch.Tasks))
 }

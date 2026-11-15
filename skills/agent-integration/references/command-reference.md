@@ -301,9 +301,10 @@ collects or publishes anything.
 Exit `0` means the any/all condition was met. Exit `1` reports typed
 `task_not_found`, an observation fault, or
 [administrative settlement](result-handling.md#administrative-settlement), which
-stops watching when the any/all condition is unmet, without setting `ready`.
-Another genuinely ready task can satisfy `--any`; a settled member cannot
-satisfy `--all`. Exit `2` is invalid input and `3` is
+stops an unmet `--all` on any settled member, or `--any` when every member is
+settled, without setting `ready`. `--any` keeps watching other pending members;
+another genuinely ready task can satisfy it. A settled member cannot satisfy
+`--all`. Exit `2` is invalid input and `3` is
 watch expiry. A rejected task
 is ready data, not a successful provider answer. Preserve per-task status and
 failure fields; apply normal result handling after waiting.
