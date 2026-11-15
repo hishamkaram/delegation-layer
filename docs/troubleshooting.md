@@ -41,6 +41,20 @@ needs review; waiting for queue activity cannot supply missing closure proof.
 Keep the exact task ID and reported reason. A later `diagnostic_snapshot_at`
 describes the local diagnostic observation, separately from a resident error.
 
+For an eligible same-boot private ghost, see
+[human maintenance permission](cli-reference.md#human-maintenance-permission).
+It can unblock maintenance after explicit human confirmation; it cannot turn
+unknown execution into proven closure or release task/resource/schedule claims.
+An unproven external task remains a conservative maintenance blocker.
+
+A prepared installation upgrade remains fenced until its exact OP is completed
+explicitly. Use the saved `completion_command` from the new installation;
+ordinary `ensure-owner` does not authorize proactive completion. For an update
+already applied, reactive `ensure-owner` drains and resumes the same operation.
+Follow [installation upgrades](cli-reference.md#installation-upgrades), including
+quiescing writers outside Delegate's private admission path. Never clear the
+bootstrap journal or edit saved executable paths to bypass a blocker.
+
 For an installation mismatch, compare both client and daemon observations in
 `installation_binding`. File availability and path equality are metadata only.
 Neither a missing old keg nor a reachable endpoint establishes which executable

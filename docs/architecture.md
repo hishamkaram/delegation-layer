@@ -391,6 +391,12 @@ constrained predecessor-control path. Generic startup, repair and identity
 publication cannot erase the drain. Historical strict readers reject the new
 variant rather than clearing it.
 
+This cutoff covers participating private admissions. External/custom producers,
+including another configuration or root addressing the private endpoint, do not
+hold that lease. Operator maintenance requires those writers and their in-flight
+commands to be quiescent; root-wide assessment is a dated observation, not a
+global writer exclusion or an OS sandbox.
+
 The existing migration journal owns shutdown and successor launch progress.
 Its upgrade variant links to the drain, records accepted Start and the native
 birth captured before reaping, and requires predecessor Wait settlement before
@@ -404,6 +410,18 @@ engine, executable-content identity check or per-release task-history rewrite.
 If a crash leaves accepted Start without recorded birth, the handoff can remain
 fenced. Preserve its records and report the uncertainty; this protocol provides
 no forced reset that guesses whether a daemon launched.
+
+For an eligible same-boot cooperative task with an ended private queue row but
+missing closure proof, taskdir owns one immutable `operator-disposition.json`.
+It binds exact task/root/receipt/native-registration evidence and records the
+human's `allow_supervisor_maintenance` permission. Preparation is stateless;
+confirmation revalidates under existing bootstrap and task-owner exclusions.
+Only maintenance policy consumes this permission, with fresh canonical queue
+generation mapping through completed migration history. It never changes
+generic lifetime closure, accepted outcomes or resource/scheduler/session/
+workspace/custody/deletion eligibility. Status, collection and wait expose the
+administrative stop separately; genuine native terminal evidence takes
+precedence. Older readers ignore the sidecar conservatively.
 
 The ordinary private group has no fixed task-count cap: the caller chooses
 fan-out, subject to new-task pressure admission. Required provider inspections

@@ -40,7 +40,8 @@ input. Invalid requests keep exit `2` with scoped usage on the error stream.
 | `scheduler serve/status/stop/migrate`, `scheduler run` | [User-started host and compatibility runtime](../skills/agent-integration/references/command-reference.md#scheduler-runtime) |
 | `context`, `resolve`, `result read`, `origin` | [Guarded local connector contract](connector-contract.md) |
 | `gateway connect/status/doctor/serve/disconnect`, `gateway workspace`, `gateway service` | [Gateway login, workspace approvals and per-user service](gateway-connect.md) |
-| `supervisor status`, `supervisor migrate`, `supervisor restart` | [Operator recovery](#supervisor-recovery) |
+| `supervisor status/ensure-owner/migrate/restart` | [Operator recovery](#supervisor-recovery) |
+| `settle TASK --prepare/--confirm` | [Human maintenance permission](#human-maintenance-permission) |
 
 Remote handles use the supported controls in the [remote workflow](remote-delegation.md#observe-reconnect-and-collect).
 A local command in this index does not imply support for `remote:ID`.
@@ -300,6 +301,71 @@ See [required options](../skills/agent-integration/references/command-reference.
 
 ## Supervisor recovery
 
+### Installation upgrades
+
+Use the same state root throughout. Stop its scheduler and Gateway connector
+before upgrading; preserve their definitions, profile and credentials. Quiesce
+external/custom producers too, including any other configuration or state root
+that targets this private Pueue endpoint and commands already in flight. The
+private admission fence does not exclude arbitrary Pueue writers.
+
+For a planned update, run this from a persistent user context outside a Delegate
+task **before** replacing the installation:
+
+```sh
+delegate supervisor ensure-owner --prepare-upgrade --json
+```
+
+Check `delegate help supervisor ensure-owner` first. Older releases without
+`--prepare-upgrade` use the reactive procedure from the new CLI after updating.
+Check pinned connector service paths before preparation; keep an unsupported
+source-installed profile stopped until its supported reinstall is available.
+
+Keep the returned `supervisor_control.upgrade.operation_id`. Exit `3` means
+draining or another pending prerequisite; follow the exact blocker and resume
+the same preparation. `upgrade_prepared` with phase `awaiting_installation`
+means preparation finished. Run your normal installer, then execute the returned
+`completion_command` argv, using the new installation. For example:
+
+```sh
+delegate supervisor ensure-owner --complete-upgrade OP --refresh-owner --json
+```
+
+Replace `OP` with the exact returned identity. A proactive operation needs this
+explicit completion even when the installer leaves the same paths/version in
+place. Completion creates a fresh daemon generation. An unrelated ordinary
+`ensure-owner` cannot authorize it. Repeating an already completed OP returns
+its retained completion without another launch or readiness claim.
+
+If the installation was already replaced, ordinary
+`delegate supervisor ensure-owner --json` detects a different selected pair,
+creates or resumes one reactive operation, and fences new private admissions.
+It leaves admitted tasks running until maintenance is safe, then hands serving
+to the installed pair. Keep its operation identity across pending responses.
+An ordinary current-pair call without a pending operation does not restart a
+healthy daemon. Same-path replacement cannot be detected from path metadata;
+use proactive preparation for that case.
+
+`--refresh-owner` alone replaces only the serving helper when needed; it does
+not authorize a prepared installation or claim daemon execution readiness.
+Read `state`, `next_action`, `upgrade` and errors together: exit `0` can mean
+prepared, helper refreshed, or historical completion. Only a response that
+actually reports `owner_ready` confirms current admission preparation. Exit `3`
+is pending, `1` is a fault/refusal and `2` is invalid input. Do not repeat an
+uncertain mutation or replay a task that was created or may have been sent.
+Inspect the saved operation first after a lost acknowledgement. Resume only
+that operation through its reported maintenance guidance; an already recorded
+completion authorization is never replaced by a new OP. Do not repeatedly
+request helper refresh while following acknowledged pending progress.
+
+After verified completion, restart the scheduler and connector from the new
+installation. A Gateway profile pinned to a removed candidate executable needs
+an explicitly supported service reinstall; do not edit its credential or profile
+to hide that mismatch. Installation handoff does not rewrite task history,
+schedule definitions, provider configuration or native sessions.
+
+### Execution context and logical migration
+
 For an authorized change of a quiescent daemon's execution context, use
 [runtime restart](../skills/agent-integration/references/command-reference.md#supervisor-runtime-restart):
 inspect `supervisor status --runtime-restart`, retain its original startup token,
@@ -435,6 +501,41 @@ configuration migrations still require the explicit recovery command.
 For admission's narrow migration exception and retry precedence, use
 [task creation](../skills/agent-integration/references/result-handling.md#task-creation).
 General administration does not override an attempt's `stop_and_report`.
+
+### Human maintenance permission
+
+An ended private queue row without native lifetime closure can remain a blocker
+on the same boot. Inspect its exact `first_blocker.task_id`; a cancellation
+acknowledgement or elapsed time does not establish closure. For a cooperative
+task whose recorded worker and every launch are positively absent, an operator
+can grant permission for supervisor maintenance:
+
+```sh
+delegate settle TASK --prepare --json
+delegate settle TASK --confirm CHALLENGE --json
+```
+
+Prepare reads existing evidence without repairing it. Review the exact task,
+returned challenge and held claims before confirming. An agent must obtain the
+human's approval for that task and effect; a challenge is a freshness check,
+not proof of human identity. Confirm revalidates the ended row, root, receipts,
+same boot, process incarnations and free execution owners before a create-once
+write. Missing rows, live owners, unknown identities and conflicting evidence
+refuse. Repeating the same confirmed challenge returns the immutable winner.
+
+This records `allow_supervisor_maintenance` only. Native execution remains
+unknown; it creates no accepted result, success, termination or continuation
+permission. Scheduler, resource, session, workspace, custody and deletion claims
+remain held. Status presents the administrative decision separately; collect and
+wait stop with exit `1`, never successful result readiness. A genuine later
+outcome takes precedence. Connected completed migration history lets the same
+permission remain usable for later maintenance without reconfirming it.
+
+Return to the blocked maintenance command after confirmation. Settlement does
+not execute that command. An unproven task on an external supervisor can still
+block root-wide maintenance: this private permission does not authorize changes
+to its external queue. Previous-boot evidence uses existing explicit recovery;
+rebooting is not a promise of closure. Preserve evidence on refusal.
 
 ## Supervisor binding
 

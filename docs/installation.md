@@ -217,16 +217,21 @@ Approve existing workspace roots separately before remote task admission.
 
 Update a plugin through its host plugin manager. For a standard Skills install,
 use `npx skills update`. For the guided installer, rerun its original command;
-`--force` authorizes replacing existing skill files. Before any CLI replacement,
-follow the [scheduler stop-update-restart procedure](cli-reference.md#scheduler-upgrades),
-then update with the same installer you chose
-(`brew upgrade hishamkaram/tap/delegation-layer` for Homebrew).
+`--force` authorizes replacing existing skill files. Before CLI replacement,
+follow [installation upgrades](cli-reference.md#installation-upgrades): stop the
+scheduler and connector, quiesce producers, and prepare the supervisor upgrade.
+Keep its operation ID and completion argv. Update with the same installer
+(`brew upgrade hishamkaram/tap/delegation-layer` for Homebrew), then run the
+returned completion command from the new installation before restarting those
+producers. This also handles an installer that retains the same executable paths.
 Restart the harness and review changed hooks as required.
 
 Keep existing task state. Removing an old Homebrew keg must not require retaining
-its executables: the current installation can refresh a compatible live private
-supervisor through `delegate supervisor ensure-owner --json` when status requests
-it. Follow [supervisor recovery](cli-reference.md#supervisor-recovery); keeping an
+its executables: if an update already removed them, the current installation can
+drain and hand over a compatible live private supervisor through
+`delegate supervisor ensure-owner --json`. Admitted work keeps running while new
+private admissions are fenced. Follow the exact pending/blocker guidance in
+[supervisor recovery](cli-reference.md#supervisor-recovery); keeping an
 old keg or downgrading a migrated scheduler database is not the recovery path.
 For an explicit migration response, follow
 [result handling](../skills/agent-integration/references/result-handling.md#task-creation);

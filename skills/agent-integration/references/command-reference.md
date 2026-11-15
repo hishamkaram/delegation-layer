@@ -298,8 +298,11 @@ promise that later sealing is impossible. Running uncertainty and cancellation
 intent alone are not readiness. The command never launches, fences, repairs,
 collects or publishes anything.
 
-Exit `0` means the any/all condition was met, `1` is typed `task_not_found` or an
-observation fault, `2` is invalid input, and `3` is watch expiry. A rejected task
+Exit `0` means the any/all condition was met. Exit `1` reports typed
+`task_not_found`, an observation fault, or
+[administrative settlement](result-handling.md#administrative-settlement), which
+stops watching without setting `ready`. Exit `2` is invalid input and `3` is
+watch expiry. A rejected task
 is ready data, not a successful provider answer. Preserve per-task status and
 failure fields; apply normal result handling after waiting.
 
@@ -470,6 +473,54 @@ Missing task files and corrupt evidence are distinct; see
 for freshness, no-result states, response bounds, exit codes and recovery.
 
 ## Supervisor owner control
+
+Installation handoff uses a stable operation, separate from task execution:
+
+```sh
+delegate supervisor ensure-owner --json
+delegate supervisor ensure-owner --prepare-upgrade --json
+delegate supervisor ensure-owner --complete-upgrade OP --refresh-owner --json
+```
+
+Keep the exact root. Ordinary ensure starts/resumes a reactive drain for a
+different selected installation; a healthy current pair is reused. Proactive
+prepare precedes an installer, including same-path replacements, and requires
+its exact completion OP afterward. `--refresh-owner` alone refreshes the serving
+helper, not the daemon upgrade authorization. Read `supervisor_control.upgrade`
+(`operation_id`, `mode`, `phase`, optional `completed` and `completion_command`)
+with `state`, `next_action` and errors. A repeated completed OP is historical,
+not a fresh readiness check. Exit `0` includes prepared/helper/history responses;
+`3` is pending; `1` fault/refusal; `2` invalid input.
+
+Stop the selected root's scheduler/connector and quiesce external/custom writers,
+including aliases addressing its private endpoint from other roots, before
+maintenance. Private Drain fences participating private admissions only. Follow
+the [upgrade procedure](https://github.com/hishamkaram/delegation-layer/blob/main/docs/cli-reference.md#installation-upgrades)
+and preserve returned completion argv boundaries. Do not clear a fence, replay
+an uncertain task or infer closure from queue completion.
+
+### Maintenance-only settlement
+
+```sh
+delegate settle TASK_ID --prepare --json
+delegate settle TASK_ID --confirm CHALLENGE --json
+```
+
+Exactly one local task and one flag are required. Prepare is read-only and may
+observe the existing queue. Before confirm, obtain a human's approval of that
+exact task, returned challenge and maintenance-only effect. Never auto-confirm
+a real task. Confirm requires fresh, exact ended private queue and same-boot
+native absence evidence; unsupported/unknown/conflicting facts refuse.
+
+`settlement` separates `administrative_state`, `native_execution`, `permission`,
+`challenge`, optional `confirmed_at` and `held_claims`. The immutable permission
+allows supervisor maintenance only; scheduler/resource/session/workspace/custody/
+deletion claims stay held. No result, native closure, retry or continuation is
+created. A matching confirm retry returns the same winner. Follow
+[result handling](result-handling.md#administrative-settlement) for status,
+collection and wait decisions.
+
+### Serving owner release
 
 ```sh
 delegate supervisor stop-owner --json
