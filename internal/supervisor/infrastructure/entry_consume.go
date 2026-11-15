@@ -105,13 +105,20 @@ func (e *ownedResidentEntry) prepareRoot(ctx context.Context, invocation ownerIn
 		return err
 	}
 	e.operation = operation
+	if err = validateUpgradePreflightBirth(operation.Intent(), environment); err != nil {
+		return err
+	}
 	if err = validateRuntimeRestartBirth(operation.Intent(), environment); err != nil {
 		return err
 	}
 	if err = validateExecutingArtifacts(ctx, operation, host); err != nil {
 		return err
 	}
-	e.store, err = taskdir.OpenStoreWithPredicatesContext(ctx, invocation.root, predicate.Default())
+	if operation.Intent().Inputs.Initial.Kind == InitialUpgradePreflight {
+		e.store, err = taskdir.OpenExistingStoreMetadataContext(ctx, invocation.root, predicate.Default())
+	} else {
+		e.store, err = taskdir.OpenStoreWithPredicatesContext(ctx, invocation.root, predicate.Default())
+	}
 	if err != nil {
 		return err
 	}

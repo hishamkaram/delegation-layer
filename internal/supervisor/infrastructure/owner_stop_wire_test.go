@@ -159,7 +159,7 @@ func TestOwnerStopWireRejectsUnknownPreparationAndExecutableInputs(t *testing.T)
 	for _, field := range []string{`"runner":"/untrusted/program"`, `"arguments":["--untrusted"]`, `"protocol":3`, `"stop_protocol":1`, `"environment":[]`} {
 		input := append([]byte{'{'}, data[1:]...)
 		input = append(input[:len(input)-1], []byte(","+field+"}\n")...)
-		_, stop, readErr := readOwnerControlFrame(bufio.NewReader(bytes.NewReader(input)))
+		_, stop, _, readErr := readOwnerControlFrame(bufio.NewReader(bytes.NewReader(input)))
 		if readErr == nil || stop != (ownerStopRequest{}) {
 			t.Fatalf("stop accepted unknown/duplicate field %s: %v", field, readErr)
 		}

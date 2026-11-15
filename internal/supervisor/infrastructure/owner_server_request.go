@@ -25,7 +25,7 @@ func (s *ownerServer) handleConnection(parent context.Context, connection *net.U
 		s.connectionFault(err)
 		return
 	}
-	request, stop, err := readOwnerControlFrame(bufio.NewReader(connection))
+	request, stop, upgrade, err := readOwnerControlFrame(bufio.NewReader(connection))
 	if err != nil {
 		if errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF) {
 			return
@@ -35,6 +35,10 @@ func (s *ownerServer) handleConnection(parent context.Context, connection *net.U
 	}
 	if stop.StopProtocol != 0 {
 		s.handleStopConnection(parent, connection, stop)
+		return
+	}
+	if upgrade.Protocol != 0 {
+		s.handleUpgradeConnection(parent, connection, upgrade)
 		return
 	}
 	// This request owns its finite wire deadline. Socket loss does not cancel

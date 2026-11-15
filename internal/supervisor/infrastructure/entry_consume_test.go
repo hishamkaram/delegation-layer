@@ -256,6 +256,9 @@ func changeComponentIntent(t *testing.T, kind string, intent *StartupIntent, jou
 	case "expired":
 		intent.Deadline = time.Now().UTC().Add(-time.Second).Format(time.RFC3339Nano)
 		intent.AcceptedAt = time.Now().UTC().Add(-time.Hour).Format(time.RFC3339Nano)
+	case "upgrade-preflight":
+		intent.Inputs.Initial = InitialOperation{Kind: InitialUpgradePreflight}
+		intent.Inputs.RuntimeProducer = producerOutside
 
 	}
 	refreshIntentDigest(t, intent)
@@ -428,6 +431,25 @@ func TestOwnerEntryConsumesNativeInheritedLease(t *testing.T) {
 	}
 	if _, err = os.Lstat(ownerEndpointPath(fixture.root, fixture.intent.Sequence)); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("child left endpoint: %v", err)
+	}
+}
+
+func TestUpgradePreflightEntryPublishesUsingExistingMetadataWithoutProbe(t *testing.T) {
+	fixture := newComponentEntryFixture(t, "upgrade-preflight")
+	probe := filepath.Join(fixture.root, ".probe")
+	if err := os.Remove(probe); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(probe, []byte("no filesystem probe before v5"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runComponentEntryChild(t, fixture, "success", componentArguments(t, fixture), nil)
+	if _, err := fixture.journal.readPublication(t.Context(), fixture.reference); err != nil {
+		t.Fatalf("preflight child failed to publish ordinary resident startup: %v", err)
+	}
+	data, err := os.ReadFile(probe)
+	if err != nil || string(data) != "no filesystem probe before v5" {
+		t.Fatalf("preflight child mutated the forbidden probe path: %q %v", data, err)
 	}
 }
 

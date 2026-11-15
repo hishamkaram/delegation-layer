@@ -36,6 +36,9 @@ func (s *ownerServer) checkInitialRequest(work acceptedOwnerWork) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if work.request.InitialResultFor != (StartupReference{}) && !s.matchesInitial(work) {
+		if s.entry.operation.Intent().Inputs.Initial.Kind == InitialUpgradePreflight {
+			return ErrOwnerIncompatible
+		}
 		return ErrIdentity
 	}
 	if s.runtimeFrom != (StartupReference{}) && work.request.Action != ownerStatus && work.request.Action != ownerRuntimeRestartPreflight && (work.request.Action != ownerRuntimeRestart || work.request.RestartFrom != s.runtimeFrom) {

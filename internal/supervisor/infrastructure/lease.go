@@ -31,6 +31,15 @@ type Lease struct {
 // The caller supplies an existing, protected private parent directory and keeps
 // that directory stable. This operation creates only the lock file.
 func TryAcquireLease(ctx context.Context, path string) (*Lease, bool, error) {
+	return tryAcquireLease(ctx, path, true)
+}
+
+// Preflight may borrow an existing instance inode, never repair a missing one.
+func tryAcquireExistingLease(ctx context.Context, path string) (*Lease, bool, error) {
+	return tryAcquireLease(ctx, path, false)
+}
+
+func tryAcquireLease(ctx context.Context, path string, create bool) (*Lease, bool, error) {
 	if ctx == nil {
 		return nil, false, os.ErrInvalid
 	}
@@ -39,6 +48,9 @@ func TryAcquireLease(ctx context.Context, path string) (*Lease, bool, error) {
 	}
 	if err := validateParent(path); err != nil {
 		return nil, false, err
+	}
+	if !create {
+		return acquireExistingLeaseFile(ctx, path)
 	}
 	lock, err := taskdir.OpenLockFileContext(ctx, path, taskdir.LockLevelNone)
 	if err != nil {
@@ -57,6 +69,29 @@ func TryAcquireLease(ctx context.Context, path string) (*Lease, bool, error) {
 	}
 	lease, err := AdoptInheritedLease(file, path)
 	return lease, err == nil, err
+}
+
+func acquireExistingLeaseFile(ctx context.Context, path string) (*Lease, bool, error) {
+	fd, err := unix.Open(path, unix.O_RDWR|unix.O_CLOEXEC|unix.O_NOFOLLOW|unix.O_NONBLOCK, 0)
+	if err != nil {
+		return nil, false, err
+	}
+	file := os.NewFile(uintptr(fd), path)
+	lease, err := adoptLease(file, path)
+	if err != nil {
+		return nil, false, errors.Join(err, file.Close())
+	}
+	if err = ctx.Err(); err == nil {
+		err = unix.Flock(fd, unix.LOCK_EX|unix.LOCK_NB)
+	}
+	if err != nil {
+		closeErr := lease.Close()
+		if (errors.Is(err, unix.EWOULDBLOCK) || errors.Is(err, unix.EAGAIN)) && closeErr == nil {
+			return nil, false, nil
+		}
+		return nil, false, errors.Join(err, closeErr)
+	}
+	return lease, true, nil
 }
 
 // AdoptInheritedLease consumes file, including on failure. The fixed trusted

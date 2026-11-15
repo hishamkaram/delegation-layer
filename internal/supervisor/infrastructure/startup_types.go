@@ -56,7 +56,7 @@ type StartupInputs struct {
 }
 
 func (i StartupInputs) Validate() error {
-	if i.Initial.Kind == InitialRuntimeRestart {
+	if i.Initial.Kind == InitialRuntimeRestart || i.Initial.Kind == InitialUpgradePreflight {
 		if i.RuntimeProducer != producerOutside {
 			return ErrIdentity
 		}

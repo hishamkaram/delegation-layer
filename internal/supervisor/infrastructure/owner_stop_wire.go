@@ -79,21 +79,26 @@ func (r ownerStopRequest) authenticationRequest() ownerRequest {
 	return ownerRequest{Protocol: ownerProtocolVersion, RootID: r.RootID, Owner: r.Owner, PublicationSHA256: r.PublicationSHA256, Client: r.Client, Deadline: r.Deadline, Action: ownerStatus}
 }
 
-func readOwnerControlFrame(input *bufio.Reader) (ownerRequest, ownerStopRequest, error) {
+func readOwnerControlFrame(input *bufio.Reader) (ownerRequest, ownerStopRequest, ownerUpgradeRequest, error) {
 	data, err := readOwnerFrameBytes(input)
 	if err != nil {
-		return ownerRequest{}, ownerStopRequest{}, err
+		return ownerRequest{}, ownerStopRequest{}, ownerUpgradeRequest{}, err
 	}
 	var selector struct {
 		StopProtocol int `json:"stop_protocol"`
+		Protocol     int `json:"protocol"`
 	}
 	if err = json.Unmarshal(data, &selector); err != nil {
-		return ownerRequest{}, ownerStopRequest{}, invalidOwnerFrame(err)
+		return ownerRequest{}, ownerStopRequest{}, ownerUpgradeRequest{}, invalidOwnerFrame(err)
 	}
 	if selector.StopProtocol != 0 {
 		stop, decodeErr := decodeOwnerFrame[ownerStopRequest](data)
-		return ownerRequest{}, stop, decodeErr
+		return ownerRequest{}, stop, ownerUpgradeRequest{}, decodeErr
+	}
+	if selector.Protocol == ownerUpgradeProtocolVersion {
+		upgrade, decodeErr := decodeOwnerFrame[ownerUpgradeRequest](data)
+		return ownerRequest{}, ownerStopRequest{}, upgrade, decodeErr
 	}
 	request, err := decodeOwnerFrame[ownerRequest](data)
-	return request, ownerStopRequest{}, err
+	return request, ownerStopRequest{}, ownerUpgradeRequest{}, err
 }
