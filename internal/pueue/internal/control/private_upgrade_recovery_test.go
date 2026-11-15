@@ -359,3 +359,228 @@ func TestUpgradeDurablePredecessorClosureSurvivesSuccessorCustody(t *testing.T) 
 		t.Fatal(err)
 	}
 }
+
+type upgradeAcceptanceFaultGuard struct {
+	base            string
+	mode            string
+	acceptanceFault error
+	rollbackFault   error
+	injected        bool
+	afterAcceptance func() error
+}
+
+func (g *upgradeAcceptanceFaultGuard) GuardPrivateGenerationCommit(_ context.Context, _ string, write func() error) error {
+	before, found, err := loadPrivateMigrationRecord(g.base)
+	if err != nil || !found {
+		return errors.Join(ErrBinding, err)
+	}
+	if g.mode == "prewrite" && !g.injected {
+		g.injected = true
+		return g.acceptanceFault
+	}
+	if g.injected && before.UpgradeGeneration.AcceptedStart {
+		switch g.mode {
+		case "rollback-fault":
+			return g.rollbackFault
+		case "revoked":
+			return ErrInfrastructureOwnerRequired
+		}
+	}
+	return g.afterWrite(before, write())
+}
+
+func (g *upgradeAcceptanceFaultGuard) afterWrite(before privateMigrationRecord, writeErr error) error {
+	after, found, readErr := loadPrivateMigrationRecord(g.base)
+	if readErr != nil || !found {
+		return errors.Join(writeErr, ErrBinding, readErr)
+	}
+	if !g.injected && !before.UpgradeGeneration.AcceptedStart && after.UpgradeGeneration.AcceptedStart {
+		g.injected = true
+		if g.afterAcceptance != nil {
+			return errors.Join(writeErr, g.acceptanceFault, g.afterAcceptance())
+		}
+		if g.mode == "revoked" {
+			return errors.Join(writeErr, g.acceptanceFault, ErrInfrastructureOwnerRequired)
+		}
+		return errors.Join(writeErr, g.acceptanceFault)
+	}
+	return writeErr
+}
+
+func TestUpgradeAcceptanceWriteFaultRetainsOnlyUnknownStart(t *testing.T) {
+	for _, test := range []struct {
+		name          string
+		accepted      bool
+		retry         bool
+		rollbackFault bool
+	}{
+		{"prewrite", false, true, false},
+		{"postcommit", false, true, false},
+		{"rollback-fault", true, false, true},
+		{"revoked", true, false, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			testUpgradeAcceptanceWriteFault(t, test.name, test.accepted, test.retry, test.rollbackFault)
+		})
+	}
+}
+
+func testUpgradeAcceptanceWriteFault(t *testing.T, mode string, wantAccepted, retry, wantRollbackFault bool) {
+	t.Helper()
+	f, pin, pending := upgradeMigrationStorageFixture(t)
+	writeExecutable(t, pending.UpgradeGeneration.Target.DaemonExecutable, "#!/bin/sh\nexit 0\n")
+	guard := &upgradeAcceptanceFaultGuard{base: f.base, mode: mode, acceptanceFault: errors.New("acceptance-specific postcommit fault"), rollbackFault: errors.New("unstarted acceptance rollback refused")}
+	options := f.client.options
+	options.PrivateGenerationGuard = guard
+	client, owner := newUpgradeStartFixtureClient(t, pending.UpgradeGeneration.Target, options)
+	paths := []string{client.Binding().ConfigPath, privateBootstrapRecordPath(f.root), privateSupervisorBindingPath(f.root), privateDaemonIdentityPath(f.base), privateIdentityPublicationPath(f.root)}
+	before := snapshotPrivateTestFiles(t, paths)
+	err := WithExistingBootstrapLockContext(t.Context(), f.root, func(ctx context.Context) error {
+		_, startErr := client.startPrivateUpgradeSuccessor(ctx, pin, f.base, pending)
+		assertUpgradeAcceptanceFault(t, guard, owner, startErr, wantRollbackFault)
+		current, found, readErr := loadPrivateMigrationRecord(f.base)
+		if readErr != nil || !found {
+			return errors.Join(ErrBinding, readErr)
+		}
+		if current.UpgradeGeneration.AcceptedStart != wantAccepted {
+			t.Fatalf("known no-child acceptance was stranded: accepted=%t want=%t", current.UpgradeGeneration.AcceptedStart, wantAccepted)
+		}
+		want := pending
+		want.UpgradeGeneration.AcceptedStart = wantAccepted
+		if current != want {
+			t.Fatal("acceptance settlement changed operation, target, predecessor or shutdown proof")
+		}
+		for _, path := range paths {
+			data, present := before[path]
+			assertPrivateTestFileUnchanged(t, path, data, present)
+		}
+		if retry {
+			assertUpgradeAcceptanceExplicitRetry(t, ctx, client, owner, pin, f.base, current)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func assertUpgradeAcceptanceFault(t *testing.T, guard *upgradeAcceptanceFaultGuard, owner *upgradeNativeWaitOwner, err error, wantRollbackFault bool) {
+	t.Helper()
+	if !errors.Is(err, guard.acceptanceFault) || !guard.injected || len(owner.starts) != 0 {
+		t.Fatalf("failed acceptance reached Start or hid fault: starts=%d injected=%t err=%v", len(owner.starts), guard.injected, err)
+	}
+	if wantRollbackFault && !errors.Is(err, guard.rollbackFault) {
+		t.Fatalf("acceptance error lost rollback fault: %v", err)
+	}
+	if guard.mode == "revoked" && !errors.Is(err, ErrInfrastructureOwnerRequired) {
+		t.Fatalf("revoked grant was hidden: %v", err)
+	}
+}
+
+func TestUpgradeAcceptanceFaultNeverResetsUnreadableOrConflictingWinner(t *testing.T) {
+	for _, mode := range []string{"unreadable", "conflicting"} {
+		t.Run(mode, func(t *testing.T) { testUpgradeAcceptanceUnknownWinner(t, mode) })
+	}
+}
+
+func testUpgradeAcceptanceUnknownWinner(t *testing.T, mode string) {
+	t.Helper()
+	f, pin, pending := upgradeMigrationStorageFixture(t)
+	writeExecutable(t, pending.UpgradeGeneration.Target.DaemonExecutable, "#!/bin/sh\nexit 0\n")
+	fault := errors.New("acceptance landed before canonical winner fault")
+	guard := &upgradeAcceptanceFaultGuard{base: f.base, mode: mode, acceptanceFault: fault}
+	guard.afterAcceptance = func() error { return injectUpgradeAcceptanceWinnerFault(t, f.base, mode) }
+	options := f.client.options
+	options.PrivateGenerationGuard = guard
+	client, owner := newUpgradeStartFixtureClient(t, pending.UpgradeGeneration.Target, options)
+	err := WithExistingBootstrapLockContext(t.Context(), f.root, func(ctx context.Context) error {
+		_, startErr := client.startPrivateUpgradeSuccessor(ctx, pin, f.base, pending)
+		return startErr
+	})
+	if !errors.Is(err, fault) || !errors.Is(err, ErrBinding) || len(owner.starts) != 0 {
+		t.Fatalf("unknown winner gained reset/Start authority or lost fault: starts=%d err=%v", len(owner.starts), err)
+	}
+	assertUpgradeAcceptanceUnknownWinnerRetained(t, f.base, mode, pending)
+}
+
+func assertUpgradeAcceptanceUnknownWinnerRetained(t *testing.T, base, mode string, pending privateMigrationRecord) {
+	t.Helper()
+	if mode == "unreadable" {
+		info, err := os.Stat(privateMigrationRecordPath(base))
+		if err != nil || !info.IsDir() {
+			t.Fatalf("settlement replaced unreadable winner: %v", err)
+		}
+		return
+	}
+	winner, found, err := loadPrivateMigrationRecord(base)
+	pending.UpgradeGeneration.AcceptedStart = true
+	pending.LegacyProcessStart += "-conflicting-owner"
+	if err != nil || !found || winner != pending {
+		t.Fatalf("settlement changed conflicting winner: found=%t err=%v", found, err)
+	}
+}
+
+func injectUpgradeAcceptanceWinnerFault(t *testing.T, base, mode string) error {
+	t.Helper()
+	path := privateMigrationRecordPath(base)
+	if mode == "unreadable" {
+		backup := filepath.Join(base, "acceptance-winner-before-unreadable.json")
+		if err := os.Rename(path, backup); err != nil {
+			return err
+		}
+		t.Cleanup(func() {
+			removeErr := os.Remove(path)
+			if errors.Is(removeErr, os.ErrNotExist) {
+				removeErr = nil
+			}
+			if err := errors.Join(removeErr, os.Rename(backup, path)); err != nil {
+				t.Error(err)
+			}
+		})
+		return os.Mkdir(path, 0o700)
+	}
+	winner, found, err := loadPrivateMigrationRecord(base)
+	if err != nil || !found {
+		return errors.Join(ErrBinding, err)
+	}
+	conflicting := winner
+	conflicting.LegacyProcessStart += "-conflicting-owner"
+	return replacePrivateMigrationRecord(base, winner, conflicting)
+}
+
+func assertUpgradeAcceptanceExplicitRetry(t *testing.T, ctx context.Context, client *Client, owner *upgradeNativeWaitOwner, pin taskdir.RootPin, base string, pending privateMigrationRecord) {
+	t.Helper()
+	client.options.PrivateGenerationGuard = allowPrivateGenerationForTest{}
+	started, err := client.startPrivateUpgradeSuccessor(ctx, pin, base, pending)
+	if err != nil || !started.UpgradeGeneration.AcceptedStart || started.UpgradeGeneration.SuccessorPID <= 0 || len(owner.starts) != 1 {
+		t.Fatalf("explicit retry did not own one Start/birth: starts=%d err=%v", len(owner.starts), err)
+	}
+	if _, err = client.startPrivateUpgradeSuccessor(ctx, pin, base, started); err == nil || len(owner.starts) != 1 {
+		t.Fatalf("accepted retry replayed Start: starts=%d err=%v", len(owner.starts), err)
+	}
+}
+
+func TestUpgradeStalePreAcceptanceCannotResetCrashAcceptance(t *testing.T) {
+	f, pin, pending := upgradeMigrationStorageFixture(t)
+	writeExecutable(t, pending.UpgradeGeneration.Target.DaemonExecutable, "#!/bin/sh\nexit 0\n")
+	client, owner := newUpgradeStartFixtureClient(t, pending.UpgradeGeneration.Target, f.client.options)
+	unknown := pending
+	unknown.UpgradeGeneration.AcceptedStart = true
+	err := WithExistingBootstrapLockContext(t.Context(), f.root, func(ctx context.Context) error {
+		if writeErr := replacePrivateMigrationRecordContext(ctx, f.base, pending, unknown, f.client.options.PrivateGenerationGuard); writeErr != nil {
+			return writeErr
+		}
+		_, startErr := client.startPrivateUpgradeSuccessor(ctx, pin, f.base, pending)
+		if startErr == nil || len(owner.starts) != 0 {
+			t.Fatalf("stale pre-acceptance launched a child: starts=%d err=%v", len(owner.starts), startErr)
+		}
+		winner, found, readErr := loadPrivateMigrationRecord(f.base)
+		if readErr != nil || !found || winner != unknown {
+			t.Fatalf("stale live call erased prior unknown acceptance: found=%t err=%v", found, readErr)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}

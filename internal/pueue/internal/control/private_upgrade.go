@@ -896,13 +896,16 @@ func (c *Client) startPrivateUpgradeSuccessor(ctx context.Context, root taskdir.
 	if _, ok := c.options.DaemonWaitOwner.(DaemonWaitSettlementOwner); !ok {
 		return pending, ErrInfrastructureOwnerRequired
 	}
+	if err := c.requirePrivateUpgradePreAcceptance(ctx, root, pending); err != nil {
+		return pending, err
+	}
 	if err := c.preparePrivateDaemonStart(ctx, root.Root()); err != nil {
 		return pending, fmt.Errorf("prepare accepted upgrade successor: %w", err)
 	}
 	accepted := pending
 	accepted.UpgradeGeneration.AcceptedStart = true
 	if err := replacePrivateMigrationRecordContext(ctx, base, pending, accepted, c.options.PrivateGenerationGuard); err != nil {
-		return pending, err
+		return pending, c.settlePrivateUpgradeAcceptanceFault(context.WithoutCancel(ctx), root, pending, accepted, err)
 	}
 	scope := &privateUpgradeStart{root: root, record: accepted}
 	started, startErr := startDaemonWithAuthorization(ctx, root.Root(), c.runtimeBinding.DaemonExecutable, c.binding.ConfigPath, base, c.options, scope)
@@ -920,8 +923,53 @@ func (c *Client) startPrivateUpgradeSuccessor(ctx context.Context, root taskdir.
 	return accepted, errors.Join(upgradePending("successor_birth_unknown", ErrUnknown), startErr)
 }
 
-// This rollback consumes only the live canonical Start result. Generic
-// progress replacement cannot remove acceptance, including after a crash.
+func (c *Client) requirePrivateUpgradePreAcceptance(ctx context.Context, root taskdir.RootPin, expected privateMigrationRecord) error {
+	if err := requirePrivateUpgradeAuthority(ctx, root, c.options); err != nil {
+		return err
+	}
+	if !expected.LegacyStopped {
+		return ErrBinding
+	}
+	if err := validatePrivateUpgradeMigration(ctx, root, expected); err != nil {
+		return err
+	}
+	current, found, err := loadPrivateMigrationRecord(filepath.Join(root.Root(), privateSupervisorDirectory))
+	if err != nil || !found || current != expected {
+		return errors.Join(ErrBinding, err)
+	}
+	return nil
+}
+
+// Only the still-live caller before canonical Start can enter this settlement.
+// EX protects the exact pre-acceptance snapshot from another legitimate writer.
+// Reading/resetting after guard return avoids nesting the resident commit lock.
+func (c *Client) settlePrivateUpgradeAcceptanceFault(ctx context.Context, root taskdir.RootPin, before, accepted privateMigrationRecord, writeErr error) error {
+	if err := requireRuntimeRestartBootstrapEX(ctx, root.Root()); err != nil {
+		return errors.Join(writeErr, err)
+	}
+	if err := checkPrivateUpgradeRoot(ctx, root); err != nil {
+		return errors.Join(writeErr, err)
+	}
+	base := filepath.Join(root.Root(), privateSupervisorDirectory)
+	winner, found, readErr := loadPrivateMigrationRecord(base)
+	if readErr != nil || !found {
+		return errors.Join(writeErr, readErr, ErrBinding)
+	}
+	if winner == before {
+		return writeErr
+	}
+	if winner != accepted {
+		return errors.Join(writeErr, ErrBinding)
+	}
+	// Known for this exact live path: the canonical starter was never invoked.
+	neverInvoked := privateDaemonStart{}
+	rollbackErr := c.releasePrivateUpgradeUnstarted(ctx, root, base, accepted, before, neverInvoked)
+	return errors.Join(writeErr, rollbackErr)
+}
+
+// This rollback consumes only live proof that canonical Start was not invoked
+// or definitively did not launch. Generic progress replacement cannot remove
+// acceptance, including after a crash.
 func (c *Client) releasePrivateUpgradeUnstarted(ctx context.Context, root taskdir.RootPin, base string, expected, replacement privateMigrationRecord, started privateDaemonStart) error {
 	if started.done != nil || started.attempted && !started.notStarted {
 		return ErrBinding
