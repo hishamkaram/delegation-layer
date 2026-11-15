@@ -675,8 +675,12 @@ def prove_proactive_same_pair_upgrade(delegate, env, state, config, receipts, *,
     require(repeated_report.get("completed") is True
             and repeated_control.get("next_action") == "inspect_supervisor_status"
             and _warm_authority_records(state) == completed_authority
-            and snapshot(state / "infrastructure") == owner_history,
+            and snapshot(state / "infrastructure") == owner_history
+            and not fence.exists(),
             "historical completion repeated an upgrade or owner rotation")
+    with private_fixture_transition(state):
+        require(private_shutdown_evidence(config)[0] == successor_pid,
+                "historical completion replaced the current daemon")
     return {"operation_id": operation_id, "same_pair_noop_installation": True,
             "unrelated_ensure_preserved_fence": True, "fresh_daemon": True,
             "predecessor_native_pid_absent": True, "historical_repeat_no_effect": True}

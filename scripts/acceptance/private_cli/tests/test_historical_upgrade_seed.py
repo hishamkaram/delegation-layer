@@ -271,6 +271,7 @@ class InstalledUpgradeRecordTests(unittest.TestCase):
         fence = self.supervisor / "bootstrap.pending"
         arguments = ["--root", str(self.state), "supervisor", "ensure-owner"]
         completed = False
+        historical_pid = 18002
         calls = []
 
         def response(next_action, *, complete=False):
@@ -285,7 +286,7 @@ class InstalledUpgradeRecordTests(unittest.TestCase):
                     "state": "migrated" if complete else "upgrade_prepared"}}
 
         def run_control(_delegate, _env, actual, **_options):
-            nonlocal completed
+            nonlocal completed, historical_pid
             calls.append(actual)
             if actual[-2:] == ["status", "--json"]:
                 self.assertFalse(completed)
@@ -301,6 +302,10 @@ class InstalledUpgradeRecordTests(unittest.TestCase):
                 if completed:
                     if fault == "historical effect":
                         (journal / "unexpected-new-owner.json").write_text("new owner effect\n")
+                    elif fault == "historical drain":
+                        fence.write_text("unexpected new drain\n")
+                    elif fault == "historical daemon":
+                        historical_pid = 18003
                     return response("inspect_supervisor_status", complete=True)
                 if fault == "preflight pending":
                     self.assertNotIn("--refresh-owner", actual)
@@ -318,11 +323,13 @@ class InstalledUpgradeRecordTests(unittest.TestCase):
 
         with patch.object(upgrade, "run_json", side_effect=run_control), \
                 patch.object(upgrade, "private_shutdown_evidence", side_effect=lambda _config: (
-                    18002 if completed else 18001, None, None)), \
+                    historical_pid if completed else 18001, None, None)), \
                 patch.object(upgrade, "private_daemon_process_gone", return_value=True) as absent:
             if fault and fault != "preflight pending":
                 reason = {"ensure authorizes": "ordinary ensure authorized or advanced",
-                          "historical effect": "historical completion repeated"}[fault]
+                          "historical effect": "historical completion repeated",
+                          "historical drain": "historical completion repeated",
+                          "historical daemon": "historical completion replaced"}[fault]
                 with self.assertRaisesRegex(RuntimeError, reason):
                     upgrade.prove_proactive_same_pair_upgrade(self.root / "delegate", {}, self.state, config,
                                                               self.root, capture_root=None)
@@ -346,6 +353,12 @@ class InstalledUpgradeRecordTests(unittest.TestCase):
 
     def test_proactive_upgrade_detects_historical_owner_effect(self):
         self._proactive_upgrade_case("historical effect")
+
+    def test_proactive_upgrade_detects_historical_new_drain(self):
+        self._proactive_upgrade_case("historical drain")
+
+    def test_proactive_upgrade_detects_historical_daemon_replacement(self):
+        self._proactive_upgrade_case("historical daemon")
 
     def test_proactive_upgrade_waits_for_preflight_without_repeating_owner_refresh(self):
         self._proactive_upgrade_case("preflight pending")
