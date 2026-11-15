@@ -305,6 +305,11 @@ func observeDispatchedPrivateMigrationShutdown(ctx context.Context, base string,
 		}
 	}
 	if err := observer.waitPrivateMigrationClosed(ctx, base, pending); err != nil {
+		// The validated upgrade owner classifies its Wait result. Adding the
+		// ordinary migration-required leaf would change that error authority.
+		if pending.UpgradeGeneration.OperationID != "" {
+			return pending, err
+		}
 		return pending, fmt.Errorf("%w: wait for dispatched predecessor shutdown: %w", ErrPrivateSupervisorMigrationRequired, err)
 	}
 	stopped := pending
@@ -530,6 +535,9 @@ func dispatchPrivateMigrationShutdown(ctx context.Context, base string, legacy *
 		}
 	}
 	if err := legacy.waitPrivateMigrationClosed(ctx, base, pending); err != nil {
+		if pending.UpgradeGeneration.OperationID != "" {
+			return pending, pending.LegacyShutdownDispatched, err
+		}
 		return pending, pending.LegacyShutdownDispatched, fmt.Errorf("%w: wait for previous private supervisor: %w", ErrPrivateSupervisorMigrationRequired, err)
 	}
 	stopped := pending

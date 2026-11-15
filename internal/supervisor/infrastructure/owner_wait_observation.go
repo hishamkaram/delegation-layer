@@ -11,6 +11,19 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 )
 
+// historicalDaemonWaitPendingError preserves the existing pending cause while
+// identifying the one positively observed historical-custodian origin. It lends
+// no Wait handle or closure knowledge to the bool settlement port.
+type historicalDaemonWaitPendingError struct{ cause error }
+
+func (e *historicalDaemonWaitPendingError) Error() string              { return e.cause.Error() }
+func (e *historicalDaemonWaitPendingError) Unwrap() error              { return e.cause }
+func (*historicalDaemonWaitPendingError) HistoricalDaemonWaitPending() {}
+
+func newHistoricalDaemonWaitPending() error {
+	return &historicalDaemonWaitPendingError{cause: ErrOwnerPending}
+}
+
 // ObserveDaemonWait lends only completion knowledge. Exact registered birth/done
 // is authoritative for this resident. A missing/pruned entry is never closure:
 // only exhaustive canonical history may establish that no live custodian remains.
@@ -129,22 +142,20 @@ func observeHistoricalCustodians(ctx context.Context, journal *intentJournal, re
 	if err != nil {
 		return err
 	}
-	pending := false
+	var pending error
 	for sequence := uint64(1); sequence <= current.Sequence; sequence++ {
 		if err = observeHistoricalCustodian(ctx, journal, reader, pin, current, sequence, boot); err != nil {
-			// Defer only expected pending causes. Joined reader or cleanup faults
-			// retain their full graph rather than becoming a pending-only result.
-			if !retainsResidentCleanup(err) && task.AllErrorCauses(err, func(cause error) bool { return errors.Is(cause, ErrOwnerPending) }) {
-				pending = true
+			// Continue only this native-present origin. Every historian keeps its
+			// own tag; a later independent fault retains the complete graph.
+			var origin *historicalDaemonWaitPendingError
+			if errors.As(err, &origin) && err == origin {
+				pending = errors.Join(pending, err)
 				continue
 			}
-			return err
+			return errors.Join(pending, err)
 		}
 	}
-	if pending {
-		return ErrOwnerPending
-	}
-	return ctx.Err()
+	return errors.Join(pending, ctx.Err())
 }
 
 func validateWaitHistoryInventory(names []string, latest uint64) error {
@@ -232,7 +243,7 @@ func observeHistoricalCustodianProcess(ctx context.Context, evidence settlementE
 	if present {
 		// Serving release is deliberately not native exit. There is no durable
 		// daemon-to-owner link, so even an older live assumption stays unknown.
-		return ErrOwnerPending
+		return newHistoricalDaemonWaitPending()
 	}
 	return ctx.Err()
 }

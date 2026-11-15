@@ -67,7 +67,7 @@ func TestObserveDaemonWaitUnfinishedBirthAndFaultNeverMeanUnowned(t *testing.T) 
 				t.Fatal(err)
 			}
 			owned, closed, err := f.server.waits.ObserveDaemonWait(t.Context(), f.root, expected)
-			if err == nil || owned || closed || kind == "fault" && !errors.Is(err, fault) {
+			if err == nil || owned || closed || kind == "fault" && !errors.Is(err, fault) || historicalWaitOriginCount(err) != 0 {
 				t.Fatalf("uncertain birth became known-unowned: owned=%t closed=%t err=%v", owned, closed, err)
 			}
 		})
@@ -79,6 +79,11 @@ func TestObserveDaemonWaitUnfinishedBirthAndFaultNeverMeanUnowned(t *testing.T) 
 // incarnation (or a fenced unassumed attempt); no child or daemon is launched.
 // The current third attempt is published with actual self/native socket facts.
 func waitHistoryFixture(t *testing.T, unassumed bool) *ownerServerFixture {
+	t.Helper()
+	return waitHistoryFixtureWithSecond(t, unassumed, false)
+}
+
+func waitHistoryFixtureWithSecond(t *testing.T, unassumed, liveSecond bool) *ownerServerFixture {
 	t.Helper()
 	f := newOwnerServerFixture(t, &ownerServerTestHost{})
 	original := f.entry.operation.Intent()
@@ -112,7 +117,7 @@ func waitHistoryFixture(t *testing.T, unassumed bool) *ownerServerFixture {
 		second.Deadline = time.Now().Add(-time.Hour).UTC().Format(time.RFC3339Nano)
 	}
 	requireJournalPut(t, j, f.entry.lease, second)
-	writeWaitHistorySecond(t, f, second, unassumed)
+	writeWaitHistorySecond(t, f, second, unassumed, liveSecond)
 	third := original
 	third.Sequence, third.Epoch = 3, "cccccccccccccccccccccccccccccccc"
 	requireJournalPut(t, j, f.entry.lease, third)
@@ -134,7 +139,7 @@ func waitHistoryFixture(t *testing.T, unassumed bool) *ownerServerFixture {
 	return f
 }
 
-func writeWaitHistorySecond(t *testing.T, f *ownerServerFixture, intent StartupIntent, unassumed bool) {
+func writeWaitHistorySecond(t *testing.T, f *ownerServerFixture, intent StartupIntent, unassumed, liveSecond bool) {
 	t.Helper()
 	j := f.entry.journal
 	reference, err := ReferenceStartup(intent)
@@ -145,7 +150,9 @@ func writeWaitHistorySecond(t *testing.T, f *ownerServerFixture, intent StartupI
 	reason := settlementUnassumedExpired
 	if !unassumed {
 		assumption, publication := evidenceForIntent(t, intent)
-		assumption.Process.StartToken = "known-absent-historical-incarnation"
+		if !liveSecond {
+			assumption.Process.StartToken = "known-absent-historical-incarnation"
+		}
 		publication.AssumptionSHA256, err = assumption.Digest(intent)
 		if err != nil {
 			t.Fatal(err)
@@ -185,7 +192,7 @@ func TestObserveDaemonWaitChecksAllRotationsBeyondImmediateRetiredOwner(t *testi
 			t.Fatal(err)
 		}
 		owned, closed, err := f.server.waits.ObserveDaemonWait(t.Context(), f.root, expected)
-		if !errors.Is(err, ErrOwnerPending) || owned || closed {
+		if !errors.Is(err, ErrOwnerPending) || owned || closed || historicalWaitOriginCount(err) != 1 {
 			t.Fatalf("older live owner was lost behind absent/unassumed immediate owner: owned=%t closed=%t err=%v", owned, closed, err)
 		}
 		if !maps.Equal(before, producerBudgetTree(t, f.root)) {
@@ -207,8 +214,13 @@ func TestObserveDaemonWaitHistoryFaultCannotGrantNativeFallback(t *testing.T) {
 				t.Fatal(err)
 			}
 			owned, closed, err := f.server.waits.ObserveDaemonWait(t.Context(), f.root, expected)
-			if err == nil || errors.Is(err, ErrOwnerPending) || owned || closed {
-				t.Fatalf("history fault became unowned/pending-only: owned=%t closed=%t err=%v", owned, closed, err)
+			origins := 0
+			if damaged == settlementName(2) {
+				// This fault is reached only after the older live custodian.
+				origins = 1
+			}
+			if !errors.Is(err, task.ErrEvidenceFault) || historicalWaitOriginCount(err) != origins || owned || closed {
+				t.Fatalf("history fault lost evidence/origin or granted fallback: owned=%t closed=%t origins=%d want=%d err=%v", owned, closed, historicalWaitOriginCount(err), origins, err)
 			}
 		})
 	}
@@ -354,5 +366,63 @@ func TestObserveDaemonWaitPendingCannotDiscardRetainedReaderOwner(t *testing.T) 
 	var observed *retainedPreparationTestError
 	if !errors.As(err, &observed) || observed != retained || !errors.Is(err, ErrOwnerPending) {
 		t.Fatalf("pending discarded a retained history cleanup owner: %v", err)
+	}
+}
+
+// A marker is an error-graph node, not an independent leaf or Wait handle.
+func historicalWaitOriginCount(err error) int {
+	if err == nil {
+		return 0
+	}
+	if _, marked := err.(interface{ HistoricalDaemonWaitPending() }); marked {
+		return 1
+	}
+	if joined, ok := err.(interface{ Unwrap() []error }); ok {
+		count := 0
+		for _, child := range joined.Unwrap() {
+			count += historicalWaitOriginCount(child)
+		}
+		return count
+	}
+	return historicalWaitOriginCount(errors.Unwrap(err))
+}
+
+func TestObserveDaemonWaitPreservesEveryHistoricalPendingOrigin(t *testing.T) {
+	f := waitHistoryFixtureWithSecond(t, false, true)
+	before := producerBudgetTree(t, f.root)
+	expected, err := lifetime.NewProcessRef(101, "predecessor-birth")
+	if err != nil {
+		t.Fatal(err)
+	}
+	owned, closed, err := f.server.waits.ObserveDaemonWait(t.Context(), f.root, expected)
+	if !errors.Is(err, ErrOwnerPending) || owned || closed || historicalWaitOriginCount(err) != 2 {
+		t.Fatalf("separate native-present historians lost their origin: owned=%t closed=%t origins=%d err=%v", owned, closed, historicalWaitOriginCount(err), err)
+	}
+	if !task.AllErrorCauses(err, func(cause error) bool { return errors.Is(cause, ErrOwnerPending) }) {
+		t.Fatalf("origin marker changed pending leaf graph: %v", err)
+	}
+	if !maps.Equal(before, producerBudgetTree(t, f.root)) {
+		t.Fatal("historical pending observation changed records")
+	}
+}
+
+func TestObserveDaemonWaitLaterFaultRetainsHistoricalPendingOrigin(t *testing.T) {
+	f := waitHistoryFixture(t, false)
+	// Absence is captured before inventory enumeration. The complete scan must
+	// still reject a missing later settlement after observing the live old owner.
+	if err := os.Remove(filepath.Join(f.root, "infrastructure", settlementName(2))); err != nil {
+		t.Fatal(err)
+	}
+	before := producerBudgetTree(t, f.root)
+	expected, err := lifetime.NewProcessRef(101, "predecessor-birth")
+	if err != nil {
+		t.Fatal(err)
+	}
+	owned, closed, err := f.server.waits.ObserveDaemonWait(t.Context(), f.root, expected)
+	if !errors.Is(err, task.ErrEvidenceFault) || !errors.Is(err, ErrOwnerPending) || historicalWaitOriginCount(err) != 1 || owned || closed {
+		t.Fatalf("later fault discarded origin or granted native fallback: owned=%t closed=%t origins=%d err=%v", owned, closed, historicalWaitOriginCount(err), err)
+	}
+	if !maps.Equal(before, producerBudgetTree(t, f.root)) {
+		t.Fatal("faulting historical observation changed records")
 	}
 }

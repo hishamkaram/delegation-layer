@@ -223,7 +223,7 @@ func upgradeOutcome(observed pueue.PrivateUpgradeObservation, cause error) (infr
 		outcome.Condition = infrastructure.UpgradeFault
 		return outcome, errors.Join(cause, outcome.Validate())
 	}
-	if supervisor.MaintenanceBusy(cause) || pureUpgradePending(cause) {
+	if supervisor.MaintenanceBusy(cause) || pureUpgradePending(cause) || pureHistoricalDaemonWaitPending(cause) {
 		outcome.Condition = infrastructure.UpgradePending
 		return outcome, outcome.Validate()
 	}
@@ -242,4 +242,53 @@ func pureUpgradePending(cause error) bool {
 	return errors.Is(cause, pueue.ErrPrivateUpgradePending) && !taskdir.CleanupFault(cause) && task.AllErrorCauses(cause, func(err error) bool {
 		return errors.Is(err, pueue.ErrPrivateUpgradePending) || errors.Is(err, pueue.ErrUnknown)
 	})
+}
+
+// Infrastructure alone marks a validated native-present historical custodian.
+// The application reads that origin without changing the Wait settlement port.
+type historicalDaemonWaitPending interface {
+	HistoricalDaemonWaitPending()
+}
+
+func pureHistoricalDaemonWaitPending(cause error) bool {
+	return !taskdir.CleanupFault(cause) && historicalDaemonWaitPendingBranch(cause)
+}
+
+func historicalDaemonWaitPendingBranch(cause error) bool {
+	if cause == nil {
+		return false
+	}
+	if _, marked := cause.(historicalDaemonWaitPending); marked {
+		return singleOwnerPendingCause(errors.Unwrap(cause))
+	}
+	if joined, ok := cause.(interface{ Unwrap() []error }); ok {
+		children := joined.Unwrap()
+		if len(children) == 0 {
+			return false
+		}
+		for _, child := range children {
+			// Each independent branch needs its own origin. An untagged
+			// pending or migration-required fault cannot borrow a sibling tag.
+			if !historicalDaemonWaitPendingBranch(child) {
+				return false
+			}
+		}
+		return true
+	}
+	return historicalDaemonWaitPendingBranch(errors.Unwrap(cause))
+}
+
+func singleOwnerPendingCause(cause error) bool {
+	if cause == nil {
+		return false
+	}
+	// The origin wraps one cause. A marked joined graph could otherwise lend
+	// the tag to an independent, untagged branch with the same sentinel leaf.
+	if _, joined := cause.(interface{ Unwrap() []error }); joined {
+		return false
+	}
+	if child := errors.Unwrap(cause); child != nil {
+		return singleOwnerPendingCause(child)
+	}
+	return errors.Is(cause, infrastructure.ErrOwnerPending)
 }
