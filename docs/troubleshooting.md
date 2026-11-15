@@ -34,6 +34,18 @@ Delegate administration. Preserve the root and recorded bindings. Report
 conflicts, unreadable state, or unknown endpoint ownership without editing
 records, deleting state, running process searches, or operating Pueue directly.
 
+If status reports `active_work: "none"` but migration is blocked, inspect
+`migration_readiness` and `first_blocker`. Queue completion alone does not prove
+native execution closed. `human_review_task` identifies a task whose evidence
+needs review; waiting for queue activity cannot supply missing closure proof.
+Keep the exact task ID and reported reason. A later `diagnostic_snapshot_at`
+describes the local diagnostic observation, separately from a resident error.
+
+For an installation mismatch, compare both client and daemon observations in
+`installation_binding`. File availability and path equality are metadata only.
+Neither a missing old keg nor a reachable endpoint establishes which executable
+image is running. Follow the explicit recovery action without editing bindings.
+
 An extremely deep root can exceed the host's Unix socket path limit even with
 Delegate's compact socket name. Cold owner routing checks this byte budget
 before accepting a startup or launching its child, and the child checks it again.

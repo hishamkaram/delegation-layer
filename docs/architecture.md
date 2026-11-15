@@ -381,6 +381,27 @@ requires its recorded authorization; custom or ambiguous workers are not silentl
 rewritten. Public recovery instructions live in
 [result handling](../skills/agent-integration/references/result-handling.md).
 
+Installation handoff uses a `drain_v1` variant in that same bootstrap journal.
+It owns the exact root and predecessor, stable operation identity, preparation
+mode, completion authorization and once-selected installed pair. Committing it
+under bootstrap EX is the admission cutoff. Existing workers retain their
+original records and lifetime owners; new submission and staged replay are
+fenced. Saved-task reads and exact authorized cancellation have a separate,
+constrained predecessor-control path. Generic startup, repair and identity
+publication cannot erase the drain. Historical strict readers reject the new
+variant rather than clearing it.
+
+The existing migration journal owns shutdown and successor launch progress.
+Its upgrade variant links to the drain, records accepted Start and the native
+birth captured before reaping, and requires predecessor Wait settlement before
+publication. A live custodian's actual Wait must complete. Native absence is a
+fallback only after proving no live custodian can hold that Wait; endpoint loss
+alone proves neither. Even an equal installed pair requires a fresh daemon generation.
+Such same-pair events remain completion history without becoming installation
+lineage edges. Repeating a completed operation reads its original winner;
+an uncertain Start or birth cannot authorize another launch. This adds no task
+engine, executable-content identity check or per-release task-history rewrite.
+
 The ordinary private group has no fixed task-count cap: the caller chooses
 fan-out, subject to new-task pressure admission. Required provider inspections
 and model discovery have their own single-slot inspection group and finite

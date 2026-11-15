@@ -80,6 +80,7 @@ JSON has `schema_version: 1`, `command: "doctor"`, `root`, `installation`,
 | `installation` | `scope: installation_bundle`, `verification: filesystem_metadata`, `compatibility: not_checked`; reports paths/statuses for `delegate`, `delegate_run`, `pueue`, `pueued`. |
 | Installation/role statuses | Installation: `observed`, `blocked`, `observation_incomplete`; roles: `available`, `missing`, `unusable`, `observation_incomplete`. |
 | `supervisor.binding` | `not_initialized`, `present`, `binding_absent`, or `observation_incomplete`; persisted binding observation only. Absence does not prove an existing root is unused. |
+| `supervisor.installation_binding` | Compares recorded client and daemon paths with the loaded bundle. `scope: loaded_bundle`, `verification: filesystem_metadata`; relation is `current`, `different`, `unknown`, or `not_initialized`. Each role reports selected and recorded availability separately. This does not establish the running daemon's installation. |
 | `supervisor.liveness`, `active_work` | Always `not_checked`, `unknown`. |
 | `scheduler` | `verification: read_only`; compatibility is `absent`, `compatible`, `migration_required`, `newer_schema`, `incompatible`, or `observation_incomplete`, with its own bounded `issues`. It never creates/migrates storage or recovers a journal. Scheduler advisories do not change top-level issues or exits. |
 | `provider` | ID, executable and `static_ready`, `blocked`, or `observation_incomplete`; `verification: static_preflight`, `authentication: unknown`. |

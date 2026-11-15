@@ -366,8 +366,26 @@ delegate supervisor status --json
 delegate supervisor migrate --json
 ```
 
-`supervisor_migration_blocked` or `wait_for_legacy_work` means migration must
-wait for existing work; it is not a completed migration.
+`supervisor_migration_blocked` means migration was refused. Follow its exact
+reason and next action. `wait_for_legacy_work` asks you to let existing work
+finish; a refusal with another action is not an instruction to keep waiting.
+
+Read `active_work` and `migration_readiness` separately. An ended queue row can
+still lack native closure, so `active_work: "none"` does not make migration safe.
+`first_blocker` identifies the bounded reason and exact task when known. Follow
+its `next_action`; `human_review_task` requires inspecting that task rather than
+waiting for more queue activity or launching replacement work. Unknown queue
+state or unreadable evidence cannot establish a clear maintenance assessment.
+After a resident failure, `diagnostic_snapshot_at` identifies a later local
+observation; it does not replace the original error or prove its cause.
+
+`installation_binding` compares the selected runtime client and daemon with
+recorded provenance (`scope: "runtime_selected"`,
+`verification: "filesystem_metadata"`). Per-role availability is separate from
+path relation. Missing files do not prove a process exited, and a matching path
+does not prove which executable image a running daemon loaded. A compatible
+live endpoint can still advise `run_supervisor_ensure_owner` for an installation
+handoff.
 
 `supervisor status` is read-only. It reports whether the state root has an
 older inspection binding, whether that exact legacy endpoint is reachable, and
