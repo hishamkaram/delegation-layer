@@ -15,6 +15,7 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/supervisor/infrastructure"
 	supervisorfixture "github.com/hishamkaram/delegation-layer/internal/supervisor/testsupport"
 	"github.com/hishamkaram/delegation-layer/internal/task"
+	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 )
 
 func TestSupervisorUpgradeArgumentsAndCompletionArgv(t *testing.T) {
@@ -174,6 +175,120 @@ func TestSupervisorUpgradeFailureDiagnosticsPreserveTypedCondition(t *testing.T)
 			}
 		})
 	}
+}
+
+func TestSupervisorEnsureOwnerDrainingDiagnosticPreservesFailureGuidance(t *testing.T) {
+	fixture := prepareHistoricalObservationPhase(t, pueue.StateRunning)
+	for _, scenario := range []struct {
+		name      string
+		condition infrastructure.UpgradeCondition
+		cause     error
+		code      int
+		action    string
+	}{
+		{"pending", infrastructure.UpgradePending, nil, 3, "wait_for_legacy_work"},
+		{"busy", infrastructure.UpgradeBusy, nil, 3, "wait_for_legacy_work"},
+		{"fault", infrastructure.UpgradeFault, nil, 1, "stop_and_report"},
+		{"refused", infrastructure.UpgradeRefused, nil, 1, "stop_and_report"},
+		{"timeout", infrastructure.UpgradeTimeout, nil, 1, "stop_and_report"},
+		{"pending with cleanup fault", infrastructure.UpgradePending, errors.Join(pueue.ErrPrivateUpgradePending, os.ErrPermission), 1, "stop_and_report"},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			routing := &supervisorUpgradeReplyRouting{
+				componentPreparationRouting: componentPreparationRouting{test: t, owner: fixture.component, client: fixture.clientB, options: fixture.options},
+				outcome: infrastructure.UpgradeOutcome{Condition: scenario.condition, Preflight: infrastructure.UpgradePreflight{State: infrastructure.UpgradePreflightPassed}, Report: infrastructure.UpgradeReport{
+					OperationID: infrastructure.UpgradeOperationID("upgrade-v1:" + strings.Repeat("a", 32)), Mode: infrastructure.UpgradeReactive, Phase: infrastructure.UpgradeDraining, Predecessor: fixture.predecessor,
+				}},
+				cause: scenario.cause,
+			}
+			deps := fixture.dependencies()
+			deps.ownerRouting = routing
+			result := supervisorEnsureOwner(Arguments{Root: fixture.root}, deps)
+			control := result.response.SupervisorControl
+			if routing.calls != 1 || result.code != scenario.code || control.NextAction != scenario.action {
+				t.Fatalf("draining diagnostic changed original recovery action: calls=%d code=%d control=%+v err=%v cause=%v", routing.calls, result.code, control, result.err, errors.Unwrap(result.err))
+			}
+			if control.DiagnosticSnapshotAt == "" || control.ActiveWork != "present" || control.MigrationReadiness != "blocked" || control.FirstBlocker == nil || control.FirstBlocker.NextAction != "wait_for_legacy_work" {
+				t.Fatalf("original failure suppressed the later running-task diagnostic: %+v", control)
+			}
+			if scenario.cause != nil && (!errors.Is(result.err, os.ErrPermission) || !errors.Is(result.err, pueue.ErrPrivateUpgradePending)) {
+				t.Fatalf("diagnostic lost original cleanup fault: %v", result.err)
+			}
+		})
+	}
+}
+
+func TestSupervisorEnsureOwnerDrainingDiagnosticFailureRetainsBothCauses(t *testing.T) {
+	fixture := prepareHistoricalObservationPhase(t, pueue.StateRunning)
+	status := readSupervisorProbeTestFile(t, fixture.statusPath)
+	t.Cleanup(func() {
+		if err := os.WriteFile(fixture.statusPath, status, 0o600); err != nil {
+			t.Error(err)
+		}
+	})
+	if err := os.WriteFile(fixture.statusPath, []byte("{"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, cause := range []error{nil, os.ErrPermission} {
+		routing := &supervisorUpgradeReplyRouting{
+			componentPreparationRouting: componentPreparationRouting{test: t, owner: fixture.component, client: fixture.clientB, options: fixture.options},
+			outcome: infrastructure.UpgradeOutcome{Condition: infrastructure.UpgradePending, Preflight: infrastructure.UpgradePreflight{State: infrastructure.UpgradePreflightPassed}, Report: infrastructure.UpgradeReport{
+				OperationID: infrastructure.UpgradeOperationID("upgrade-v1:" + strings.Repeat("a", 32)), Mode: infrastructure.UpgradeReactive, Phase: infrastructure.UpgradeDraining, Predecessor: fixture.predecessor,
+			}},
+			cause: cause,
+		}
+		deps := fixture.dependencies()
+		deps.ownerRouting = routing
+		result := supervisorEnsureOwner(Arguments{Root: fixture.root}, deps)
+		if routing.calls != 1 || result.code != 1 || result.response.SupervisorControl.NextAction != "stop_and_report" {
+			t.Fatalf("failed diagnostic changed fail-stop guidance: %+v err=%v", result.response.SupervisorControl, result.err)
+		}
+		if !errors.Is(result.err, pueue.ErrUnknown) || cause != nil && !errors.Is(result.err, cause) {
+			t.Fatalf("diagnostic lost original or later observation fault: %v", result.err)
+		}
+	}
+}
+
+func TestSupervisorUpgradeStatusDiagnosticFailureStopsFurtherMaintenance(t *testing.T) {
+	fixture := prepareHistoricalObservationPhase(t, pueue.StateRunning)
+	supervisorfixture.WriteUpgradeDrain(t, fixture.store, fixture.predecessor)
+	healthy := supervisorStatus(fixture.root, fixture.dependencies(), newSupervisorCommandResponse("status"))
+	control := healthy.response.SupervisorControl
+	if healthy.code != 0 || healthy.err != nil || control.ActiveWork != "present" || control.NextAction != "wait_for_legacy_work" {
+		t.Fatalf("healthy draining status lost its observation semantics: %+v err=%v", control, healthy.err)
+	}
+	status := readSupervisorProbeTestFile(t, fixture.statusPath)
+	t.Cleanup(func() {
+		if err := os.WriteFile(fixture.statusPath, status, 0o600); err != nil {
+			t.Error(err)
+		}
+	})
+	if err := os.WriteFile(fixture.statusPath, []byte("{"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	failed := supervisorStatus(fixture.root, fixture.dependencies(), newSupervisorCommandResponse("status"))
+	control = failed.response.SupervisorControl
+	if failed.code != 1 || !errors.Is(failed.err, pueue.ErrBinding) || control.NextAction != "stop_and_report" || control.DiagnosticSnapshotAt == "" {
+		t.Fatalf("failed draining status invited more maintenance or lost its diagnostic: code=%d control=%+v err=%v", failed.code, control, failed.err)
+	}
+}
+
+type supervisorUpgradeReplyRouting struct {
+	componentPreparationRouting
+	outcome infrastructure.UpgradeOutcome
+	cause   error
+	calls   int
+}
+
+func (r *supervisorUpgradeReplyRouting) UpgradeOwn(ctx context.Context, store *taskdir.Store, selected infrastructure.LaunchContext, request infrastructure.UpgradeRequest, _ bool) (infrastructure.UpgradeOutcome, error) {
+	if err := ctx.Err(); err != nil {
+		return infrastructure.UpgradeOutcome{}, err
+	}
+	if selected.Root != store.Root || selected.RootID != store.RootID || request.Action != infrastructure.UpgradeEnsure {
+		return infrastructure.UpgradeOutcome{}, infrastructure.ErrIdentity
+	}
+	r.calls++
+	return r.outcome, r.cause
 }
 
 func writeBrokenSupervisorUpgradeFixture(t *testing.T, root, name string) {

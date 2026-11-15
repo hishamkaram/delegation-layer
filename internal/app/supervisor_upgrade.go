@@ -63,12 +63,20 @@ func supervisorEnsureOwner(a Arguments, deps Dependencies) (result commandResult
 	result = finishSupervisorUpgrade(a, response, outcome, err)
 	if outcome.Report.Phase == infrastructure.UpgradeDraining {
 		diagnostic := supervisorMaintenanceDiagnostic(ctx, store, deps, options)
-		attachSupervisorDiagnostic(result.response.SupervisorControl, diagnostic.response.SupervisorControl)
-		applyMaintenanceGuidance(result.response.SupervisorControl)
-		if diagnostic.err != nil {
-			result.code = 1
-			result.err = publicSupervisorError("supervisor upgrade diagnostic failed", errors.Join(result.err, diagnostic.err))
-		}
+		result = finishSupervisorUpgradeDiagnostic(result, diagnostic)
+	}
+	return result
+}
+
+func finishSupervisorUpgradeDiagnostic(result, diagnostic commandResult) commandResult {
+	control := result.response.SupervisorControl
+	attachSupervisorDiagnostic(control, diagnostic.response.SupervisorControl)
+	if diagnostic.err != nil {
+		result.code = 1
+		result.err = publicSupervisorError("supervisor upgrade diagnostic failed", errors.Join(result.err, diagnostic.err))
+		control.NextAction = "stop_and_report"
+	} else if result.code == 3 && result.err == nil {
+		applyMaintenanceGuidance(control)
 	}
 	return result
 }
@@ -127,10 +135,11 @@ func supervisorUpgradeStatus(ctx context.Context, store *taskdir.Store, deps Dep
 	}
 	diagnostic := supervisorMaintenanceDiagnostic(ctx, store, deps, options)
 	attachSupervisorDiagnostic(control, diagnostic.response.SupervisorControl)
-	applyMaintenanceGuidance(control)
 	if diagnostic.err != nil {
+		control.NextAction = "stop_and_report"
 		return failedSupervisorCause(response, "supervisor maintenance observation failed", diagnostic.err, 1)
 	}
+	applyMaintenanceGuidance(control)
 	return commandResult{response: response}
 }
 
