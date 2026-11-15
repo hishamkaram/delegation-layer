@@ -401,6 +401,9 @@ Such same-pair events remain completion history without becoming installation
 lineage edges. Repeating a completed operation reads its original winner;
 an uncertain Start or birth cannot authorize another launch. This adds no task
 engine, executable-content identity check or per-release task-history rewrite.
+If a crash leaves accepted Start without recorded birth, the handoff can remain
+fenced. Preserve its records and report the uncertainty; this protocol provides
+no forced reset that guesses whether a daemon launched.
 
 The ordinary private group has no fixed task-count cap: the caller chooses
 fan-out, subject to new-task pressure admission. Required provider inspections

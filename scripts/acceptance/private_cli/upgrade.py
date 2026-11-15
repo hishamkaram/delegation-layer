@@ -17,12 +17,15 @@ from scripts.acceptance.private_cli.installation import install_package_layout
 from scripts.acceptance.private_cli.installation import install_supervisor_pair
 import json
 import os
+import re
 import stat
 from scripts.acceptance.private_cli.supervisor import predecessor_closed
 from scripts.acceptance.private_cli.supervisor import capture_predecessor_shutdown_target
 from scripts.acceptance.private_cli.capacity.ownership import prove_lifetime_owner_cohort
 from scripts.acceptance.private_cli.supervisor import pueue_command
 from scripts.acceptance.private_cli.supervisor import pueue_snapshot
+from scripts.acceptance.private_cli.supervisor import private_daemon_process_gone
+from scripts.acceptance.private_cli.supervisor import private_shutdown_evidence
 from scripts.acceptance.private_cli.queue_policy import pueue_state
 from scripts.acceptance.evidence.files import read_json
 from scripts.acceptance.directories.policy import require
@@ -557,6 +560,46 @@ def _require_one_warm_queue_identity(state, response, client, config, env, captu
             "warm dispatch did not retain exactly one matching running queue identity")
 
 
+def _live_upgrade_report(response, operation_id=None):
+    control = response.get("supervisor_control")
+    require(isinstance(control, dict), "live upgrade omitted supervisor control")
+    report = control.get("upgrade")
+    require(isinstance(report, dict), "live upgrade omitted its committed operation")
+    actual = report.get("operation_id")
+    require(isinstance(actual, str) and re.fullmatch(r"upgrade-v1:[0-9a-f]{32}", actual) is not None,
+            "live upgrade has no valid operation identity")
+    require(operation_id is None or actual == operation_id, "live upgrade replaced its operation")
+    require(report.get("mode") == "reactive", "live upgrade changed its authorization mode")
+    return control, report
+
+
+def _complete_live_upgrade(delegate, env, state, receipts, operation_id, *, capture_root):
+    """Resume only acknowledged maintenance progress, never uncertain provider work."""
+    deadline = time.monotonic() + 120
+    attempt = 0
+
+    def complete():
+        nonlocal attempt
+        attempt += 1
+        response = run_json(
+            delegate, env, ["--root", str(state), "supervisor", "ensure-owner", "--json"],
+            expected=(0, 3), timeout=None, deadline=deadline,
+            receipt=receipts / ("upgrade-live-complete-%d.json" % attempt),
+            capture_root=capture_root, capture_response=True,
+        )
+        control, report = _live_upgrade_report(response, operation_id)
+        if report.get("completed") is True:
+            require(control.get("state") == "migrated" and control.get("next_action") == "retry_dispatch",
+                    "completed live handoff did not verify current admission readiness")
+            return report
+        require(report.get("phase") in ("draining", "authorized", "migrating")
+                and control.get("next_action") == "repeat_supervisor_ensure_owner",
+                "live handoff cannot resume its acknowledged pending phase")
+        return False
+
+    return wait_until(complete, timeout=120, description="explicit live installed-pair handoff")
+
+
 def prove_live_package_removal(
     *, brief, capture_root, client, collect, config, delegate, dispatch, env, gate,
     historical_directory, history, lease_nonce, old_delegate, old_libexec, receipts,
@@ -586,6 +629,8 @@ def prove_live_package_removal(
         fresh_specifications = _upgrade_live_leases(state, [fresh], waiter_directory, lease_nonce)
         fresh_cohort = LiveFIFOLeaseCohort.acquire(fresh_specifications, lease_nonce)
         cleanup.callback(fresh_cohort.close)
+        fresh_directory = state / "tasks" / fresh["task_id"]
+        fresh_inputs = {name: (fresh_directory / name).read_bytes() for name in inputs}
         original_cohort.assert_live()
         fresh_cohort.assert_live()
         scheduling_path = state / ".supervisor" / "ordinary-scheduling.json"
@@ -595,13 +640,26 @@ def prove_live_package_removal(
         require(isinstance(runtime, dict) and runtime.get("client_executable") == str(client)
                 and runtime.get("daemon_executable") == str(client.parent / "pueued"),
                 "live dispatch did not select the current installed pair")
-        prepared = run_json(
-            delegate, env, ["--root", str(state), "supervisor", "ensure-owner", "--json"],
-            receipt=receipts / "upgrade-live-ensure-owner.json", capture_root=capture_root, capture_response=True,
-        )
-        require(prepared.get("status") == "owner_ready", "removed-package owner did not become ready")
+        with private_fixture_transition(state):
+            predecessor_pid = private_shutdown_evidence(config)[0]
+        operation_id = None
+        for attempt in range(2):
+            prepared = run_json(
+                delegate, env, ["--root", str(state), "supervisor", "ensure-owner", "--json"],
+                expected=(3,), receipt=receipts / ("upgrade-live-drain-%d.json" % attempt),
+                capture_root=capture_root, capture_response=True,
+            )
+            control, report = _live_upgrade_report(prepared, operation_id)
+            operation_id = report["operation_id"]
+            require(report.get("phase") == "draining" and not report.get("completed", False)
+                    and control.get("active_work") == "present"
+                    and control.get("migration_readiness") == "blocked"
+                    and control.get("next_action") == "wait_for_legacy_work",
+                    "live tasks did not block the explicit upgrade drain")
+            original_cohort.assert_live()
+            fresh_cohort.assert_live()
         require(scheduling_path.read_bytes() == scheduling_before,
-                "already-ready ensure-owner changed the runtime scheduling receipt")
+                "draining ensure-owner changed the runtime scheduling receipt")
         original_cohort.assert_live()
         fresh_cohort.assert_live()
         _require_one_warm_queue_identity(state, fresh, client, config, env, capture_root)
@@ -614,16 +672,38 @@ def prove_live_package_removal(
                 "warm repair changed the original active task's immutable inputs")
         require(_warm_authority_records(state) == authority, "warm task completion changed daemon provenance or history")
         require(snapshot(historical_directory) == history, "warm task completion changed committed task history")
+        _complete_live_upgrade(delegate, env, state, receipts, operation_id, capture_root=capture_root)
+        predecessor_deadline = time.monotonic() + 30
+        wait_until(lambda: private_daemon_process_gone(predecessor_pid, predecessor_deadline,
+                                                     capture_root=capture_root),
+                   timeout=30, description="original removed-keg daemon PID absence")
+        observe_installed_package(state, client.parent)
+        require(_warm_authority_records(state) != authority,
+                "explicit handoff retained the deleted installation's published generation")
+        successor = dispatch(delegate, "upgrade-after-handoff", brief)
+        successor_meta = read_json(state / "tasks" / successor["task_id"] / "meta.json")
+        successor_binding = successor_meta.get("supervisor_config")
+        require(isinstance(successor_binding, dict)
+                and successor_binding.get("client_executable") == str(client)
+                and successor_binding.get("daemon_executable") == str(client.parent / "pueued"),
+                "post-handoff task did not record the installed pair")
+        collect(successor, "upgrade-after-handoff")
+        require(all((original_directory / name).read_bytes() == data for name, data in inputs.items())
+                and all((fresh_directory / name).read_bytes() == data for name, data in fresh_inputs.items()),
+                "explicit handoff changed an admitted task's immutable inputs")
+        require(snapshot(historical_directory) == history, "explicit handoff changed committed task history")
     visible = os.stat(gate, follow_symlinks=False)
     require(stat.S_ISREG(visible.st_mode) and visible.st_uid == os.getuid()
             and (visible.st_dev, visible.st_ino) == (gate_identity.st_dev, gate_identity.st_ino),
             "warm release gate was replaced before owned cleanup")
     gate.unlink()
     return {"original_task": original["task_id"], "fresh_task": fresh["task_id"],
+            "successor_task": successor["task_id"], "upgrade_operation_id": operation_id,
             "old_install_removed_while_active": True, "active_task_survived": True,
             "runtime_receipt_refreshed": True, "first_recovery_by_dispatch": True,
             "one_fresh_queue_identity": True,
-            "published_provenance_and_history_preserved": True}
+            "provenance_preserved_until_tasks_closed": True, "immutable_history_preserved": True,
+            "installed_pair_handoff_completed": True, "predecessor_native_pid_absent": True}
 
 
 def finish_upgrade_recovery(

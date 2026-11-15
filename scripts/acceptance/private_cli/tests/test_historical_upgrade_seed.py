@@ -113,13 +113,21 @@ class InstalledUpgradeRecordTests(unittest.TestCase):
         history = upgrade.snapshot(historical)
         original = "a" * 32
         fresh = "b" * 32
+        successor = "e" * 32
+        operation_id = "upgrade-v1:" + "f" * 32
         client = self.root / "current" / "libexec" / "pueue"
+        client.parent.mkdir(parents=True)
+        materialize_supervisor_pair(client.parent)
         gate = self.root / "release-gate"
         cohorts = [Mock(spec=["assert_live", "close"]), Mock(spec=["assert_live", "close"])]
         responses = []
+        ensure_calls = []
+        expected_exits = []
+        collect = Mock()
 
         def dispatch(binary, name, _brief):
-            task_id = original if name == "upgrade-live-original" else fresh
+            task_id = {"upgrade-live-original": original, "upgrade-live-fresh": fresh,
+                       "upgrade-after-handoff": successor}[name]
             if task_id == fresh:
                 self.assertEqual(binary, self.root / "candidate")
                 self.assertFalse(old_delegate.exists())
@@ -131,6 +139,12 @@ class InstalledUpgradeRecordTests(unittest.TestCase):
             directory.mkdir(parents=True)
             for record in ("task.json", "meta.json", "submit.json", "supervisor.ref.json"):
                 (directory / record).write_text("immutable original input: " + record)
+            if task_id == successor:
+                self.assertEqual(collect.call_count, 2, "successor admitted before old tasks closed")
+                self.assertEqual(len(ensure_calls), 3, "successor admitted before explicit handoff")
+                write_json(directory / "meta.json", {"supervisor_config": {
+                    "client_executable": str(client), "daemon_executable": str(client.parent / "pueued"),
+                }}, replace=True)
             write_json(directory / "supervisor.ref.json", {
                 "task_id": task_id, "label": "delegate-" + task_id, "numeric_task_id": len(responses) + 1,
             }, replace=True)
@@ -153,17 +167,40 @@ class InstalledUpgradeRecordTests(unittest.TestCase):
                 return {"status": "unknown"}
             if fault == "provenance":
                 (self.supervisor / "daemon.identity.json").write_text("changed provenance")
-            return {"status": "owner_ready"}
+            ensure_calls.append(arguments)
+            expected_exits.append(_kwargs.get("expected", (0,)))
+            if len(ensure_calls) <= 2:
+                self.assertEqual(collect.call_count, 0, "drain proof ran after task release")
+                report = {"operation_id": operation_id, "mode": "reactive", "phase": "draining"}
+                if fault == "operation" and len(ensure_calls) == 2:
+                    report["operation_id"] = "upgrade-v1:" + "0" * 32
+                if fault == "premature completion":
+                    report["completed"] = True
+                return {"supervisor_control": {"state": "blocked", "active_work": "present",
+                        "migration_readiness": "blocked", "next_action": "wait_for_legacy_work",
+                        "upgrade": report}}
+            self.assertEqual(collect.call_count, 2, "handoff attempted before task collection/closure")
+            current = {**self.binding, "client_executable": str(client),
+                       "daemon_executable": str(client.parent / "pueued")}
+            write_json(self.supervisor / "supervisor.identity.json", {"schema_version": 1, "binding": current},
+                       replace=True)
+            write_json(self.supervisor / "daemon.identity.json", {
+                "executable_identity": "installed-path-v1", "executable": str(client.parent / "pueued")},
+                       replace=True)
+            return {"supervisor_control": {"state": "migrated", "next_action": "retry_dispatch", "upgrade": {
+                "operation_id": operation_id, "mode": "reactive", "phase": "migrating", "completed": True,
+            }}}
 
         def queue(*_args, **_kwargs):
             return {"tasks": {str(index): {"id": index, "label": "delegate-" + response["task_id"],
                                            "status": {"Running": {}}}
                               for index, response in enumerate(responses, start=1)}}
 
-        collect = Mock()
         with patch.object(upgrade, "run_json", side_effect=ensure), \
                 patch.object(upgrade, "_upgrade_live_leases", return_value=[{"owned": "lease"}]), \
                 patch.object(upgrade.LiveFIFOLeaseCohort, "acquire", side_effect=cohorts), \
+                patch.object(upgrade, "private_shutdown_evidence", return_value=(12345, None, None)), \
+                patch.object(upgrade, "private_daemon_process_gone", return_value=True) as predecessor_gone, \
                 patch.object(upgrade, "pueue_snapshot", side_effect=queue):
             options = dict(brief=self.root / "brief", capture_root=None, client=client, collect=collect,
                            config=self.root / "config", delegate=self.root / "candidate", dispatch=dispatch,
@@ -172,7 +209,8 @@ class InstalledUpgradeRecordTests(unittest.TestCase):
                            receipts=self.root, remove_old_package=remove_old, state=self.state,
                            waiter_directory=self.root / "waiters")
             if fault:
-                reason = "did not become ready" if fault == "not ready" else "changed daemon provenance"
+                reason = {"not ready": "omitted supervisor control", "provenance": "changed daemon provenance",
+                          "operation": "replaced its operation", "premature completion": "did not block"}[fault]
                 with self.assertRaisesRegex(RuntimeError, reason):
                     upgrade.prove_live_package_removal(**options)
                 self.assertTrue(gate.exists(), "unproven task closure removed its release gate")
@@ -181,10 +219,16 @@ class InstalledUpgradeRecordTests(unittest.TestCase):
                 evidence = upgrade.prove_live_package_removal(**options)
                 self.assertEqual(evidence["original_task"], original)
                 self.assertEqual(evidence["fresh_task"], fresh)
+                self.assertEqual(evidence["successor_task"], successor)
+                self.assertEqual(evidence["upgrade_operation_id"], operation_id)
                 self.assertTrue(evidence["active_task_survived"])
                 self.assertTrue(evidence["first_recovery_by_dispatch"])
+                self.assertTrue(evidence["installed_pair_handoff_completed"])
+                self.assertTrue(evidence["predecessor_native_pid_absent"])
+                self.assertEqual(predecessor_gone.call_args.args[0], 12345)
                 self.assertFalse(gate.exists())
-                self.assertEqual(collect.call_count, 2)
+                self.assertEqual(collect.call_count, 3)
+                self.assertEqual(expected_exits, [(3,), (3,), (0, 3)])
                 self.assertGreaterEqual(cohorts[0].assert_live.call_count, 2)
                 self.assertEqual(upgrade.snapshot(historical), history)
             cohorts[0].close.assert_called_once()
@@ -198,6 +242,12 @@ class InstalledUpgradeRecordTests(unittest.TestCase):
 
     def test_live_package_removal_detects_daemon_provenance_rewrite(self):
         self._warm_removal_case("provenance")
+
+    def test_live_package_removal_rejects_operation_replacement(self):
+        self._warm_removal_case("operation")
+
+    def test_live_package_removal_rejects_completion_while_tasks_are_live(self):
+        self._warm_removal_case("premature completion")
 
     def pending(self, *, binding=None, shutdown=False, proposal_digest=None, source=None, group_directory=None,
                 legacy_pid=0, legacy_process_start=""):
