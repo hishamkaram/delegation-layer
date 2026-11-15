@@ -10,9 +10,11 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/hishamkaram/delegation-layer/internal/admission"
 	"github.com/hishamkaram/delegation-layer/internal/inspection"
+	"github.com/hishamkaram/delegation-layer/internal/lifetime"
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
 	"github.com/hishamkaram/delegation-layer/internal/supervisor"
 	"github.com/hishamkaram/delegation-layer/internal/supervisor/testsupport"
@@ -478,7 +480,16 @@ func TestPublicStoppedCallbackMigrationRefusesUnsafeRestore(t *testing.T) {
 			privateBefore := testsupport.CapturePairFaultWitness(t, filepath.Dir(fixture.predecessor.ConfigPath))
 			result := migratePairFault(t, fault, fixture.root, fixture.dependencies(), fixture.component)
 			control := result.response.SupervisorControl
-			if result.code == 0 || result.err == nil || control.State != "unavailable" || control.NextAction == "wait_for_legacy_work" {
+			wantState := "unavailable"
+			if fault == "foreign active" {
+				// The validated running row is a positive busy observation. A
+				// later unavailable diagnostic must retain that original report.
+				wantState = "blocked"
+				if control.ReasonCode != "active_work" {
+					t.Fatalf("foreign running row lost its busy reason: %+v", control)
+				}
+			}
+			if result.code == 0 || result.err == nil || control.State != wantState || control.NextAction != "stop_and_report" {
 				t.Fatalf("unsafe cold restore did not refuse before recovery: control=%+v err=%v", control, result.err)
 			}
 			testsupport.AssertPairFaultWitness(t, filepath.Dir(fixture.predecessor.ConfigPath), privateBefore)
@@ -1220,6 +1231,7 @@ func prepareCommittedHistoricalCallbackTask(t *testing.T, fixture *historicalSup
 		PrivateTerminalEventRunner: fixture.runner,
 	})
 	prepareHistoricalSupervisorTask(t, fixture, workspace)
+	recordClosedHistoricalCallbackLifetimeData(t, fixture.td)
 	outcome, err := sealFixtureEvidence(fixture.td, task.FixturePredicateRef(), "completed migration fixture\n", func() error { return nil })
 	if err != nil || outcome == nil || outcome.Verdict != task.VerdictCommitted {
 		t.Fatalf("commit original admitted task: outcome=%+v err=%v", outcome, err)
@@ -1261,8 +1273,78 @@ func writeCommittedHistoricalMigrationStatus(t *testing.T, fixture *historicalSu
 	if err != nil || len(snapshot.Jobs) != 1 || snapshot.Jobs[0].ID != fixture.receipt.NumericTaskID || snapshot.Jobs[0].State != pueue.StateEnded {
 		t.Fatalf("original committed task has no exact ended queue row: snapshot=%+v err=%v", snapshot, err)
 	}
+	evidence, err := taskdir.LoadLifetimeEvidenceContext(t.Context(), fixture.td)
+	if err != nil {
+		t.Fatal(err)
+	}
+	closure, err := task.ResolveLifetimeClosure(evidence)
+	if err != nil || !closure.Closed() {
+		t.Fatalf("committed callback fixture lifetime DATA is not closed: closure=%+v err=%v", closure, err)
+	}
+	observed, err := fixture.store.ReadTaskExecutionClosureContext(t.Context(), fixture.req.TaskID)
+	if err != nil || observed.Proof == nil {
+		t.Fatalf("committed callback fixture closure DATA could not be read: observation=%+v err=%v", observed, err)
+	}
 	if err = authorizePrivateMigrationQueue(t.Context(), fixture.root, fixture.predecessor, snapshot.Jobs); err != nil {
 		t.Fatalf("canonical policy rejected committed predecessor task: %v", err)
+	}
+}
+
+// recordClosedHistoricalCallbackLifetimeData builds synthetic completed journal
+// DATA before the fixture outcome fences new lifetime intent. It proves record
+// composition only: no worker, native scope or OS absence is observed or claimed.
+func recordClosedHistoricalCallbackLifetimeData(t *testing.T, td *taskdir.TaskDir) {
+	t.Helper()
+	plan, err := lifetime.NewPlan(lifetime.KindProcessGroup, lifetime.AssuranceCooperative, "pg:"+td.TaskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref, err := lifetime.NewRef(plan.Kind(), plan.Assurance(), plan.Identifier())
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner, err := td.AcquireLifetimeOwner(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if releaseErr := owner.Release(); releaseErr != nil {
+			t.Error(releaseErr)
+		}
+	}()
+	const (
+		fixturePID   = 1 << 30
+		fixtureBoot  = "synthetic-historical-callback-boot"
+		fixtureStart = "synthetic-historical-callback-worker"
+	)
+	deadline := time.Now().UTC().Add(time.Minute)
+	if _, err = td.RecordLifetimeIntentContext(t.Context(), taskdir.LifetimeIntentFacts{
+		ScopeKind: string(plan.Kind()), Assurance: string(plan.Assurance()), ScopePlan: plan.Identifier(), BootID: fixtureBoot, Deadline: deadline,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = td.RecordLifetimeRegistrationContext(t.Context(), taskdir.LifetimeRegistrationFacts{
+		ScopeKind: string(ref.Kind()), Assurance: string(ref.Assurance()), ScopeID: ref.Identifier(), BootID: fixtureBoot, Deadline: deadline,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = td.RecordLifetimeWorkerContext(t.Context(), taskdir.LifetimeWorkerFacts{
+		PID: fixturePID, ProcessStart: fixtureStart, BootID: fixtureBoot,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = td.RecordLifetimeTerminationContext(t.Context(), task.LifetimeTerminationCompleted); err != nil {
+		t.Fatal(err)
+	}
+	workerDigest, err := td.LifetimeWorkerDigestContext(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	exitCode := 0
+	if _, err = td.RecordLifetimeWorkerWaitContext(t.Context(), taskdir.LifetimeWorkerWaitFacts{
+		WorkerSHA256: workerDigest, ChildPID: fixturePID, Result: task.LifetimeWorkerWaitSuccess, ExitCode: &exitCode,
+	}); err != nil {
+		t.Fatal(err)
 	}
 }
 
