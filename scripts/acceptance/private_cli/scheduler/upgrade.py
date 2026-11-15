@@ -154,8 +154,8 @@ def observe_doctor(case: SchedulerCase, label: str, expected: str, *, supervisor
     response = case.command("doctor-" + label, ["doctor"], (0,) if supervisor_current else (2,))
     installation = json_object(response.get("installation"))
     roles = json_object(installation.get("roles"))
-    expected_roles = {"delegate": case.fixture.upgraded_install / "delegate",
-                      "delegate_run": case.fixture.upgraded_install / "delegate-run",
+    expected_roles = {"delegate": case.fixture.upgraded_delegate_binary,
+                      "delegate_run": case.fixture.upgraded_runner_binary,
                       "pueue": selected / "pueue", "pueued": selected / "pueued"}
     require(installation.get("scope") == "installation_bundle" and installation.get("verification") == "filesystem_metadata"
             and installation.get("compatibility") == "not_checked" and installation.get("status") == "observed"

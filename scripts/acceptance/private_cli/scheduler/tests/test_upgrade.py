@@ -251,8 +251,8 @@ class UpgradeSelectionTests(unittest.TestCase):
         return {
             "installation": {"scope": "installation_bundle", "verification": "filesystem_metadata",
                              "compatibility": "not_checked", "status": "observed", "roles": {
-                "delegate": {"path": str(self.fixture_case.fixture.upgraded_install / "delegate"), "status": "available"},
-                "delegate_run": {"path": str(self.fixture_case.fixture.upgraded_install / "delegate-run"), "status": "available"},
+                "delegate": {"path": str(self.fixture_case.fixture.upgraded_delegate_binary), "status": "available"},
+                "delegate_run": {"path": str(self.fixture_case.fixture.upgraded_runner_binary), "status": "available"},
                 "pueue": {"path": str(candidate / "pueue"), "status": "available"},
                 "pueued": {"path": str(candidate / "pueued"), "status": "available"}}},
             "supervisor": {"binding": "present", "liveness": "not_checked", "active_work": "unknown",
@@ -277,6 +277,26 @@ class UpgradeSelectionTests(unittest.TestCase):
             return response
         with patch.object(case, "command", side_effect=command):
             upgrade.observe_doctor(case, "before", "migration_required")
+
+    def test_doctor_requires_canonical_roles_instead_of_installation_links(self):
+        case = self.fixture_case.case(use_default=False)
+        case.upgraded = True
+        case.lifetime.upgraded_libexec = self.fixture_case.base / "new-libexec"
+        (case.fixture.state / ".scheduler").mkdir()
+        self.assertNotEqual(case.fixture.upgraded_delegate_binary, case.fixture.upgraded_install / "delegate")
+        self.assertNotEqual(case.fixture.upgraded_runner_binary, case.fixture.upgraded_install / "delegate-run")
+        response = self.doctor_response()
+        with patch.object(case, "command", return_value=response):
+            upgrade.observe_doctor(case, "canonical", "migration_required")
+        for role, linked_name in (("delegate", "delegate"), ("delegate_run", "delegate-run")):
+            linked = deepcopy(response)
+            observed_installation = upgrade.json_object(linked["installation"])
+            roles = upgrade.json_object(observed_installation["roles"])
+            roles[role] = {"path": str(case.fixture.upgraded_install / linked_name), "status": "available"}
+            observed_installation["roles"] = roles
+            linked["installation"] = observed_installation
+            with self.subTest(role=role), patch.object(case, "command", return_value=linked), self.assertRaisesRegex(RuntimeError, "selected candidate installation"):
+                upgrade.observe_doctor(case, "linked", "migration_required")
 
     def test_doctor_must_preserve_database_and_sidecars_and_keep_advisory_separate(self):
         case = self.fixture_case.case(use_default=False)
