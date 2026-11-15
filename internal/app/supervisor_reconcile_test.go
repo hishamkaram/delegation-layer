@@ -51,10 +51,18 @@ func TestSupervisorFailureReasonsPreserveCausesAndRedactPaths(t *testing.T) {
 	for _, reason := range []string{"identity_conflict", "transition_pending", "published_pair_unavailable_live", "predecessor_pair_unavailable", "historical_target_not_ready", "active_work", "observation_failed", "state_unreadable"} {
 		err := &pueue.PrivateRecoveryError{ReasonCode: reason, Err: cause}
 		failure := dispatchFailure(admission.WithStage("start-supervisor", errors.Join(pueue.ErrPrivateSupervisorMigrationRequired, err)), "not_created")
-		if failure.ReasonCode != reason {
+		wantReason := reason
+		if reason == "active_work" {
+			// A saved busy reason cannot hide this independent binding fault.
+			wantReason = ""
+		}
+		if failure.ReasonCode != wantReason {
 			t.Fatalf("reason lost: %+v", failure)
 		}
 		public := publicSupervisorError("Recovery failed.", err)
+		if reason == "active_work" && strings.Contains(public.Error(), "Wait for queued or running work") {
+			t.Fatalf("joined binding fault borrowed busy guidance: %v", public)
+		}
 		if !errors.Is(public, pueue.ErrBinding) || bytes.Contains([]byte(public.Error()), []byte("/private/user")) {
 			t.Fatalf("cause lost or private path exposed: %v", public)
 		}

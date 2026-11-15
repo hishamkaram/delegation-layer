@@ -2,6 +2,7 @@ package app
 
 import (
 	"errors"
+	"strings"
 
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
 	"github.com/hishamkaram/delegation-layer/internal/supervisor"
@@ -18,6 +19,9 @@ func (e *supervisorPublicError) Unwrap() error { return e.cause }
 
 func publicSupervisorError(message string, err error) error {
 	if detail := supervisorFailureDetail(supervisor.FailureReason(err)); detail != "" {
+		if !strings.HasSuffix(message, ".") {
+			message += "."
+		}
 		message += " " + detail
 	}
 	return &supervisorPublicError{message: message, cause: err}
