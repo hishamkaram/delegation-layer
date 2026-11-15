@@ -63,18 +63,21 @@ func TestAuthorizePrivateMigrationQueueOwnsTerminalEvidence(t *testing.T) {
 	store := newBareInspectionStore(t)
 	root := store.Root
 	rootID := store.RootID
-	if err := store.Close(); err != nil {
+	taskID := strings.Repeat("b", 32)
+	td, _ := newAppTaskInStoreWithSupervisorConfig(t, store, taskID, false, nil, pueue.PrivateConfigPath(root))
+	_, meta, err := td.PreparedRecords()
+	if err != nil {
 		t.Fatal(err)
 	}
-	taskID := strings.Repeat("b", 32)
-	if err := os.MkdirAll(filepath.Join(root, "tasks", taskID), 0o700); err != nil {
+	initializePrivateMigrationTestLifecycle(t, root)
+	if err = errors.Join(td.Close(), store.Close()); err != nil {
 		t.Fatal(err)
 	}
 	label := "delegate:" + rootID + ":" + taskID
-	if err := authorizePrivateMigrationQueue(context.Background(), root, task.SupervisorRef{}, []pueue.Job{{ID: 7, Label: &label, State: pueue.StateEnded}}); !errors.Is(err, pueue.ErrPrivateSupervisorMigrationRequired) {
+	if err := authorizePrivateMigrationQueue(t.Context(), root, meta.SupervisorConfig, []pueue.Job{{ID: 7, Label: &label, State: pueue.StateEnded}}); !errors.Is(err, pueue.ErrPrivateSupervisorMigrationRequired) {
 		t.Fatalf("ended task without terminal evidence was authorized: %v", err)
 	}
-	if err := authorizePrivateMigrationQueue(context.Background(), root, task.SupervisorRef{}, []pueue.Job{{ID: 7, Label: &label, State: pueue.StateRunning}}); !errors.Is(err, pueue.ErrPrivateSupervisorMigrationBusy) {
+	if err := authorizePrivateMigrationQueue(t.Context(), root, meta.SupervisorConfig, []pueue.Job{{ID: 7, Label: &label, State: pueue.StateRunning}}); !errors.Is(err, pueue.ErrPrivateSupervisorMigrationBusy) {
 		t.Fatalf("active migration work was not blocked: %v", err)
 	}
 }
