@@ -151,3 +151,25 @@ func TestUpgradeSubmissionGateFencesRetainedAliasAndTemporaryTransport(t *testin
 		})
 	}
 }
+
+func TestRetainedPrivateTransportCannotBypassRealSubmissionGate(t *testing.T) {
+	for _, kind := range []string{"alias", "temporary"} {
+		t.Run(kind, func(t *testing.T) {
+			f := newUpgradeRealGateFixture(t, kind)
+			if kind == "alias" {
+				complete, err := pueue.PrivateSupervisorMigrationComplete(f.owner.store.Root, f.client.Binding())
+				if err != nil || complete {
+					t.Fatalf("retained alias did not keep its generation incomplete: complete=%t err=%v", complete, err)
+				}
+				if _, err = SubmissionGate(f.owner.store.Root)(t.Context(), f.client.Binding()); !errors.Is(err, pueue.ErrPrivateSupervisorSubmissionIncomplete) {
+					t.Fatalf("logical gate did not refuse incomplete alias generation: %v", err)
+				}
+			}
+			permit, launch := prepareRealGateUpgradeSubmission(t, f)
+			_, err := f.client.SubmitWithGate(t.Context(), permit, launch, SubmissionGate(f.owner.store.Root))
+			if !errors.Is(err, pueue.ErrPrivateSupervisorSubmissionIncomplete) || f.adds.Load() != 0 || permit.IsConsumed() {
+				t.Fatalf("real gate admitted retained %s: adds=%d consumed=%t err=%v", kind, f.adds.Load(), permit.IsConsumed(), err)
+			}
+		})
+	}
+}

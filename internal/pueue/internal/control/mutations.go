@@ -36,6 +36,9 @@ func (c *Client) checkSubmissionGate(ctx context.Context, gate SubmissionGate) (
 		if record.DrainV1 != nil {
 			return SubmissionAuthorization{}, ErrPrivateUpgradePending
 		}
+		if c.runtimeBinding.ConfigPath != c.binding.ConfigPath {
+			return SubmissionAuthorization{}, ErrPrivateSupervisorSubmissionIncomplete
+		}
 	}
 	if gate == nil {
 		return SubmissionAuthorization{}, nil

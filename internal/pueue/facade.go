@@ -382,6 +382,19 @@ func PrivateSupervisorMigrationPending(stateRoot string) (bool, error) {
 	return control.PrivateSupervisorMigrationPending(stateRoot)
 }
 
+type PrivateMigrationPhase = control.PrivateMigrationPhase
+
+const (
+	PrivateMigrationAccepted                      = control.PrivateMigrationAccepted
+	PrivateMigrationPredecessorShutdownRequested  = control.PrivateMigrationPredecessorShutdownRequested
+	PrivateMigrationPredecessorShutdownDispatched = control.PrivateMigrationPredecessorShutdownDispatched
+	PrivateMigrationPredecessorStopped            = control.PrivateMigrationPredecessorStopped
+)
+
+func ObservePrivateMigrationPhase(stateRoot string) (PrivateMigrationPhase, bool, error) {
+	return control.ObservePrivateMigrationPhase(stateRoot)
+}
+
 func PrivateSupervisorMigrationComplete(stateRoot string, binding task.SupervisorRef) (bool, error) {
 	return control.PrivateSupervisorMigrationComplete(stateRoot, binding)
 }
