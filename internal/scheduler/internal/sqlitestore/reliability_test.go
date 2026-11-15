@@ -5,12 +5,14 @@ import (
 	"database/sql"
 	"errors"
 	"os"
+	"reflect"
 	"runtime"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/hishamkaram/delegation-layer/internal/scheduler/contract"
+	"github.com/hishamkaram/delegation-layer/internal/task"
 	"modernc.org/sqlite"
 )
 
@@ -142,55 +144,188 @@ func legacyDatabase(t *testing.T) string {
 	if _, err := conn.ExecContext(testContext(t), "INSERT INTO scheduler_metadata VALUES (1,?)", testRootID); err != nil {
 		t.Fatal(err)
 	}
-	d := testDefinition(testScheduleID)
-	request, err := contract.MarshalRequest(d.Request)
-	if err != nil {
+	for _, fixture := range []struct {
+		definition contract.Definition
+		state      string
+		cursor     int64
+	}{
+		{testDefinition(testScheduleID), "enabled", 1200},
+		{pausedLegacyDefinition(), "paused", 1400},
+	} {
+		d := fixture.definition
+		request, err := contract.MarshalRequest(d.Request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		digests, err := contract.DefinitionDigests(d)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err = conn.ExecContext(testContext(t), `INSERT INTO schedules VALUES (?,?,?,?,?,?,?,?,?,?)`, d.ScheduleID, d.CreatedAt.UnixNano(), d.Cron, d.Timezone, request, d.Brief, digests.BriefSHA256, digests.DefinitionSHA256, fixture.state, at(fixture.cursor).UnixNano()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := conn.ExecContext(testContext(t), `INSERT INTO occurrences VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`, testTaskID, testScheduleID, at(1100).UnixNano(), at(1101).UnixNano(), at(1102).UnixNano(), 2, 2, 2, strings.Repeat("a", 64), nil, at(1103).UnixNano(), "closed", strings.Repeat("b", 64)); err != nil {
 		t.Fatal(err)
 	}
-	digests, err := contract.DefinitionDigests(d)
-	if err != nil {
+	if _, err := conn.ExecContext(testContext(t), `INSERT INTO occurrences(task_id,schedule_id,due_unix_nanos,armed_at_unix_nanos,observed_at_unix_nanos,admission,liveness,publication,fault_code) VALUES (?,?,?,?,?,?,?,?,?)`, otherTaskID, testScheduleID, at(1200).UnixNano(), at(1201).UnixNano(), at(1202).UnixNano(), 2, 1, 0, "provider_unavailable"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = conn.ExecContext(testContext(t), `INSERT INTO schedules VALUES (?,?,?,?,?,?,?,?,?,?)`, d.ScheduleID, d.CreatedAt.UnixNano(), d.Cron, d.Timezone, request, d.Brief, digests.BriefSHA256, digests.DefinitionSHA256, "enabled", at(1200).UnixNano()); err != nil {
-		t.Fatal(err)
-	}
-	if _, err = conn.ExecContext(testContext(t), `INSERT INTO occurrences(task_id,schedule_id,due_unix_nanos,armed_at_unix_nanos) VALUES (?,?,?,?)`, testTaskID, testScheduleID, at(1100).UnixNano(), at(1100).UnixNano()); err != nil {
-		t.Fatal(err)
-	}
-	if _, err = conn.ExecContext(testContext(t), `INSERT INTO skip_spans VALUES (?,?,?,'missed_unavailable')`, testScheduleID, at(1100).UnixNano(), at(1200).UnixNano()); err != nil {
-		t.Fatal(err)
+	for _, span := range []struct {
+		schedule string
+		from, to int64
+		reason   string
+	}{
+		{testScheduleID, 1100, 1200, "missed_unavailable"},
+		{otherSchedule, 1200, 1400, "paused"},
+	} {
+		if _, err := conn.ExecContext(testContext(t), `INSERT INTO skip_spans VALUES (?,?,?,?)`, span.schedule, at(span.from).UnixNano(), at(span.to).UnixNano(), span.reason); err != nil {
+			t.Fatal(err)
+		}
 	}
 	rawExec(t, conn, "PRAGMA user_version = 1")
 	return root
 }
 
+func pausedLegacyDefinition() contract.Definition {
+	d := testDefinition(otherSchedule)
+	d.Cron = "*/15 * * * *"
+	d.Timezone = "UTC"
+	d.Brief = []byte("preserve paused explicit provider request")
+	d.Request.Auto = false
+	d.Request.Provider = "codex:review"
+	d.Request.Config.Model = "selected-model"
+	d.Request.Config.Effort = "high"
+	d.Request.Config.Budget = "2m"
+	return d
+}
+
+// Snapshot every v1 column, including canonical request/blob bytes and nullable
+// observation/release tuples. Schema is recorded independently of v2 objects.
+type legacySnapshot struct {
+	rows    map[string][]string
+	schema  []string
+	version int64
+}
+
+func snapshotLegacy(t *testing.T, conn *sql.Conn) legacySnapshot {
+	t.Helper()
+	snapshot := legacySnapshot{rows: make(map[string][]string), version: rawInt(t, conn, "PRAGMA user_version")}
+	for _, table := range []struct{ name, columns, order string }{
+		{"scheduler_metadata", "singleton,root_id", "singleton"},
+		{"schedules", "schedule_id,created_at_unix_nanos,cron,timezone,request_json,brief,brief_sha256,definition_sha256,state,cursor_unix_nanos", "schedule_id"},
+		{"occurrences", "task_id,schedule_id,due_unix_nanos,armed_at_unix_nanos,observed_at_unix_nanos,admission,liveness,publication,outcome_sha256,fault_code,released_at_unix_nanos,release_kind,release_ref", "task_id"},
+		{"skip_spans", "schedule_id,from_unix_nanos,to_unix_nanos,reason", "schedule_id,to_unix_nanos"},
+	} {
+		columns := strings.Split(table.columns, ",")
+		for i, column := range columns {
+			columns[i] = "quote(" + column + ")"
+		}
+		snapshot.rows[table.name] = legacyQuery(t, conn, "SELECT "+strings.Join(columns, " || '|' || ")+" FROM "+table.name+" ORDER BY "+table.order)
+	}
+	snapshot.schema = legacyQuery(t, conn, "SELECT type || '|' || name || '|' || coalesce(sql,'') FROM sqlite_schema ORDER BY type,name")
+	return snapshot
+}
+
+func legacyQuery(t *testing.T, conn *sql.Conn, query string) []string {
+	t.Helper()
+	rows, err := conn.QueryContext(testContext(t), query)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := rows.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
+	var values []string
+	for rows.Next() {
+		var value string
+		if err := rows.Scan(&value); err != nil {
+			t.Fatal(err)
+		}
+		values = append(values, value)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	return values
+}
+
 func TestV1MigrationPreservesChildrenAndMatchesFreshSchema(t *testing.T) {
 	root := legacyDatabase(t)
+	conn := rawConn(t, DatabasePath(root))
+	before := snapshotLegacy(t, conn)
 	if _, err := Open(testContext(t), root, testRootID); !errors.Is(err, contract.ErrMigrationRequired) {
 		t.Fatalf("legacy open repaired or misclassified: %v", err)
 	}
+	requireV1RootMismatchPreservesDatabase(t, root, conn)
 	if err := Initialize(testContext(t), root, testRootID); err != nil {
 		t.Fatal(err)
 	}
+	after := snapshotLegacy(t, conn)
+	if !reflect.DeepEqual(after.rows, before.rows) || after.version != schemaVersion {
+		t.Fatalf("migration changed legacy fields: before=%+v after=%+v", before, after)
+	}
+	freshRoot := newRoot(t)
+	if err := Initialize(testContext(t), freshRoot, testRootID); err != nil {
+		t.Fatal(err)
+	}
+	fresh := snapshotLegacy(t, rawConn(t, DatabasePath(freshRoot)))
+	if !reflect.DeepEqual(after.schema, fresh.schema) {
+		t.Fatalf("migrated schema differs from fresh current schema: migrated=%v fresh=%v", after.schema, fresh.schema)
+	}
 	s := openStore(t, root)
-	if _, err := s.GetSchedule(testContext(t), testScheduleID); err != nil {
-		t.Fatal(err)
+	for _, id := range []string{testScheduleID, otherSchedule} {
+		if _, err := s.GetSchedule(testContext(t), id); err != nil {
+			t.Fatal(err)
+		}
 	}
-	if _, err := s.GetOccurrence(testContext(t), testTaskID); err != nil {
-		t.Fatal(err)
-	}
-	conn := rawConn(t, DatabasePath(root))
-	if n := rawInt(t, conn, "SELECT count(*) FROM skip_spans"); n != 1 {
-		t.Fatalf("lost skip %d", n)
+	for _, id := range []string{testTaskID, otherTaskID} {
+		if _, err := s.GetOccurrence(testContext(t), id); err != nil {
+			t.Fatal(err)
+		}
 	}
 	if err := s.transact(testContext(t), s.currentGuard, func(ctx context.Context, tx *sql.Tx) error { return verifyObjectSet(ctx, tx, schemaObjects()) }); err != nil {
 		t.Fatal(err)
+	}
+	requireEmptyV2History(t, conn)
+	migrated := snapshotLegacy(t, conn)
+	if err := Initialize(testContext(t), root, testRootID); err != nil {
+		t.Fatalf("repeat migrated v1 initialize: %v", err)
+	}
+	if repeated := snapshotLegacy(t, conn); !reflect.DeepEqual(repeated, migrated) {
+		t.Fatalf("repeating migrated v1 initialize changed database: before=%+v after=%+v", migrated, repeated)
+	}
+	requireEmptyV2History(t, conn)
+}
+
+func requireV1RootMismatchPreservesDatabase(t *testing.T, root string, conn *sql.Conn) {
+	t.Helper()
+	before := snapshotLegacy(t, conn)
+	if err := Initialize(testContext(t), root, otherRootID); !errors.Is(err, task.ErrIdentityMismatch) {
+		t.Fatalf("v1 migration accepted wrong root: %v", err)
+	}
+	if refused := snapshotLegacy(t, conn); !reflect.DeepEqual(refused, before) {
+		t.Fatalf("wrong-root v1 migration changed legacy database: before=%+v after=%+v", before, refused)
+	}
+}
+
+func requireEmptyV2History(t *testing.T, conn *sql.Conn) {
+	t.Helper()
+	// These facts first exist in v2; migration must not invent reliability history.
+	for _, table := range []string{"schedule_hooks", "occurrence_attempts", "occurrence_results", "schedule_policy", "schedule_holds", "notification_attempts"} {
+		if n := rawInt(t, conn, "SELECT count(*) FROM "+table); n != 0 {
+			t.Fatalf("migration invented %s rows: %d", table, n)
+		}
 	}
 }
 
 func TestV1MigrationRollbackPreservesLegacyDatabase(t *testing.T) {
 	root := legacyDatabase(t)
 	path := DatabasePath(root)
+	conn := rawConn(t, path)
+	before := snapshotLegacy(t, conn)
 	connector, err := sqlite.NewConnector(databaseURI(path, runtime.GOOS))
 	if err != nil {
 		t.Fatal(err)
@@ -200,12 +335,8 @@ func TestV1MigrationRollbackPreservesLegacyDatabase(t *testing.T) {
 	if err := initializeWithConnector(testContext(t), fault, path, testRootID, runtime.GOOS, schemaObjects()); !errors.Is(err, errInjected) {
 		t.Fatalf("missing injected failure %v", err)
 	}
-	conn := rawConn(t, path)
-	if v := rawInt(t, conn, "PRAGMA user_version"); v != 1 {
-		t.Fatalf("partial migration version %d", v)
-	}
-	if n := rawInt(t, conn, "SELECT count(*) FROM skip_spans"); n != 1 {
-		t.Fatalf("rollback lost children %d", n)
+	if after := snapshotLegacy(t, conn); !reflect.DeepEqual(after, before) {
+		t.Fatalf("rollback changed legacy schema/fields: before=%+v after=%+v", before, after)
 	}
 }
 
