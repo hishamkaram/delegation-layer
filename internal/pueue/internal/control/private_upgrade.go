@@ -622,33 +622,13 @@ func upgradePending(reason string, cause error) error {
 }
 
 func preparePrivateUpgradePredecessor(ctx context.Context, root taskdir.RootPin, drain privateUpgradeDrain, options Options) (*Client, error) {
-	selected, err := selectRecoveryClient(drain.Predecessor, options.RuntimeClientExecutable)
+	client, err := bindRecordedPredecessorTransport(ctx, root.Root(), drain.Predecessor, options)
 	if err != nil {
 		return nil, err
 	}
-	options.RuntimeClientExecutable = selected
-	var client *Client
-	if alias, found, readErr := readValidatedPrivateRecoveryAlias(root.Root()); readErr != nil {
-		return nil, readErr
-	} else if found && alias.matches(drain.Predecessor) {
-		daemon, daemonErr := selectRecoveryDaemon(drain.Predecessor, filepath.Join(filepath.Dir(selected), "pueued"))
-		if daemonErr != nil {
-			return nil, daemonErr
-		}
-		client, err = bindPrivateRecoveryTransport(ctx, alias.record, drain.Predecessor, selected, daemon, options)
-	} else {
-		client, err = NewClient(drain.Predecessor, options)
-	}
-	if err != nil {
-		return nil, err
-	}
-	client.binding = drain.Predecessor
 	observation, probeErr := client.ObservePrivateEndpoint(ctx)
 	if probeErr != nil || !observation.ready() {
 		return nil, errors.Join(upgradePending("predecessor_unavailable", probeErr), client.CloseAfterPending(probeErr))
-	}
-	if err = recordPrivateClientConstruction(client, root.Root()); err != nil {
-		return nil, errors.Join(err, client.Close())
 	}
 	return client, nil
 }
