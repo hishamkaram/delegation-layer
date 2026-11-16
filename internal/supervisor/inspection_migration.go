@@ -81,6 +81,7 @@ func resumeInspectionSupervisorGenerationWithLock(ctx context.Context, store *ta
 		}
 	}
 	err = RecoverInspectionGroupGenerationWithLock(ctx, store, supervisor, false)
+	// Top-level only: wrapped or joined faults cannot lend preparation authority.
 	if _, unprepared := err.(interface{ unpreparedInspectionMigration() }); unprepared {
 		// Only explicit migration may continue into the existing callback's
 		// Prepare -> private-edge verification -> Complete sequence.

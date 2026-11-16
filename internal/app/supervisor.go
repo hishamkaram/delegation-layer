@@ -172,7 +172,11 @@ func supervisorStatusFromStore(ctx context.Context, root string, deps Dependenci
 	}
 	migrated := !resolution.GroupCleanupDue && (resolution.GroupMigrated || (resolution.PrivateAuthority && seed.Supervisor != resolution.Active))
 	result := supervisorLegacyStatus(controlContext, root, deps, options, response, active, migrated, store)
-	if resolution.GroupCleanupDue && result.code == 0 && result.err == nil {
+	return pendingInspectionStatusResult(result, resolution.GroupCleanupDue)
+}
+
+func pendingInspectionStatusResult(result commandResult, cleanupDue bool) commandResult {
+	if cleanupDue && result.code == 0 && result.err == nil {
 		result.response.SupervisorControl.State = "legacy_present"
 		result.response.SupervisorControl.NextAction = "run_supervisor_migrate"
 	}
