@@ -122,10 +122,11 @@ func infrastructurePreparationFailureError(failure infrastructure.PreparationFai
 		causes = append(causes, infrastructure.ErrOwnerRequest)
 	}
 	err := errors.Join(causes...)
-	if failure.Reason != "" {
-		return &pueue.PrivateRecoveryError{ReasonCode: string(failure.Reason), Err: err}
+	if err == nil {
+		return nil
 	}
-	return err
+	// The validated resident reason, including empty, owns queue classification.
+	return &pueue.PrivateRecoveryError{ReasonCode: string(failure.Reason), Err: err}
 }
 
 // Only a verified outcome enters this projection. Selection, transport,

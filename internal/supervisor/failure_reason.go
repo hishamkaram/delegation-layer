@@ -9,8 +9,8 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/supervisor/infrastructure"
 )
 
-// FailureReason selects the existing closed recovery reason; empty reason data
-// must not hide the underlying pending or observation failure.
+// FailureReason preserves validated queue classification while retaining
+// independently observed pending or observation failures.
 func FailureReason(err error) string {
 	// Closure-only maintenance and joined faults cannot supply queue activity.
 	// Legacy errors may lack an assessment; preserve their pure busy reason.
@@ -20,8 +20,12 @@ func FailureReason(err error) string {
 		queueBusy = false
 	}
 	var recovery *pueue.PrivateRecoveryError
-	if errors.As(err, &recovery) && recovery.ReasonCode != "" && infrastructure.PreparationReason(recovery.ReasonCode).Validate() == nil {
-		if recovery.ReasonCode != "active_work" || queueBusy {
+	if errors.As(err, &recovery) && infrastructure.PreparationReason(recovery.ReasonCode).Validate() == nil {
+		// An explicit empty reason carries no queue witness across transport.
+		if recovery.ReasonCode != "active_work" {
+			queueBusy = false
+		}
+		if recovery.ReasonCode != "" && (recovery.ReasonCode != "active_work" || queueBusy) {
 			return recovery.ReasonCode
 		}
 	}
