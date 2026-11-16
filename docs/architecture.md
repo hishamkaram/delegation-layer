@@ -391,13 +391,19 @@ cannot replace a connected completed private generation.
 
 Installation handoff uses a `drain_v1` variant in that same bootstrap journal.
 It owns the exact root and predecessor, stable operation identity, preparation
-mode, completion authorization and once-selected installed pair. Committing it
+mode, completion authorization and candidate installed pair. Committing it
 under bootstrap EX is the admission cutoff. Existing workers retain their
 original records and lifetime owners; new submission and staged replay are
 fenced. Saved-task reads and exact authorized cancellation have a separate,
 constrained predecessor-control path. Generic startup, repair and identity
 publication cannot erase the drain. Historical strict readers reject the new
 variant rather than clearing it.
+
+Before the migration journal accepts a target, the same authorized operation
+may reselect a missing candidate. The guarded writer revalidates the complete
+predecessor, configuration, history and both executable roles; other read or
+installation faults refuse. A published migration target or completed operation
+can never be retargeted by this exception.
 
 This cutoff covers participating private admissions. External/custom producers,
 including another configuration or root addressing the private endpoint, do not

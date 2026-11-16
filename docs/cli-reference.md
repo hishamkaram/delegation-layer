@@ -346,6 +346,13 @@ An ordinary current-pair call without a pending operation does not restart a
 healthy daemon. Same-path replacement cannot be detected from path metadata;
 use proactive preparation for that case.
 
+Finish the current handoff before replacing the installation again. If a
+candidate executable disappears before migration accepts its target, the same
+authorized operation can select the current compatible installation. After
+target acceptance, that target stays fixed. An unavailable accepted target is
+a fault: preserve the operation and records, and report it without clearing
+the fence or choosing another target.
+
 `--refresh-owner` alone replaces only the serving helper when needed; it does
 not authorize a prepared installation or claim daemon execution readiness.
 Read `state`, `next_action`, `upgrade` and errors together: exit `0` can mean

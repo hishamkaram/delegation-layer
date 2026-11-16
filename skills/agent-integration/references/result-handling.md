@@ -170,6 +170,9 @@ admitted work keeps its original lifetime/evidence. Preparation before a planned
 installer and exact completion afterward also support same-path updates; follow
 the [upgrade contract](command-reference.md#supervisor-owner-control), including
 quiescing nonparticipating writers. Observation itself never repairs it.
+Finish that handoff before another installation replacement. A fault involving
+an accepted target is not permission to choose another target or clear its
+records; preserve the OP and report the failure under the same upgrade contract.
 Ordinary admission can also refresh a missing installed
 infrastructure helper through the existing outside-owner handoff. Busy or
 concurrent handoffs remain explicit refusals; nested invocations cannot perform

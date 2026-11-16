@@ -60,6 +60,10 @@ already applied, reactive `ensure-owner` drains and resumes the same operation.
 Follow [installation upgrades](cli-reference.md#installation-upgrades), including
 quiescing writers outside Delegate's private admission path. Never clear the
 bootstrap journal or edit saved executable paths to bypass a blocker.
+Finish the handoff before another installation replacement. A missing candidate
+can be reselected before target acceptance; an unavailable accepted target
+remains a fault. Preserve that operation and report it. See the same upgrade
+procedure for the exact boundary.
 
 For an installation mismatch, compare both client and daemon observations in
 `installation_binding`. File availability and path equality are metadata only.

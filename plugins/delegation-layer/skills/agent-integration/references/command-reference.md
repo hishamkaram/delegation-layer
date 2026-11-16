@@ -501,6 +501,10 @@ maintenance. Private Drain fences participating private admissions only. Follow
 the [upgrade procedure](https://github.com/hishamkaram/delegation-layer/blob/main/docs/cli-reference.md#installation-upgrades)
 and preserve returned completion argv boundaries. Do not clear a fence, replay
 an uncertain task or infer closure from queue completion.
+Finish this handoff before another installation replacement. The same operation
+can reselect a missing candidate only before migration accepts a target; an
+unavailable accepted target remains a fault. Preserve its OP and report the
+failure without clearing records or substituting another target.
 
 ### Maintenance-only settlement
 

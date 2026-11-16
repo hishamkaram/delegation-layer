@@ -329,13 +329,151 @@ func replacePrivateUpgrade(ctx context.Context, root taskdir.RootPin, expected, 
 		if err != nil || !found || current != expected {
 			return errors.Join(ErrBinding, err)
 		}
-		writeErr := writePrivateUpgrade(root.Root(), replacement, true)
-		winner, found, readErr := readPrivateUpgrade(root, replacement.OperationID)
-		if readErr != nil || !found || winner != replacement {
-			return errors.Join(writeErr, readErr, ErrBinding)
-		}
-		return writeErr
+		return writePrivateUpgradeReplacement(root, replacement)
 	})
+}
+
+func writePrivateUpgradeReplacement(root taskdir.RootPin, replacement privateUpgradeDrain) error {
+	writeErr := writePrivateUpgrade(root.Root(), replacement, true)
+	winner, found, readErr := readPrivateUpgrade(root, replacement.OperationID)
+	if readErr != nil || !found || winner != replacement {
+		return errors.Join(writeErr, readErr, ErrBinding)
+	}
+	return writeErr
+}
+
+// Only this writer may replace a missing candidate before the migration owner
+// has accepted a target. Ordinary upgrade progress remains strictly immutable.
+func reselectPrivateUpgradePair(ctx context.Context, root taskdir.RootPin, expected, replacement privateUpgradeDrain, options Options) error {
+	if err := validatePrivateUpgradeReselection(expected, replacement); err != nil {
+		return err
+	}
+	return guardPrivateGeneration(ctx, root.Root(), options.PrivateGenerationGuard, func() error {
+		if err := requirePrivateUpgradeAuthority(ctx, root, options); err != nil {
+			return err
+		}
+		current, found, err := readPrivateUpgrade(root, expected.OperationID)
+		if err != nil || !found || current != expected {
+			return errors.Join(ErrBinding, err)
+		}
+		eligible, err := privateUpgradeReselectionEligible(root, expected, options)
+		if err != nil || !eligible {
+			return errors.Join(ErrBinding, err)
+		}
+		if err = validatePrivateUpgradePair(replacement.SelectedPair); err != nil {
+			return err
+		}
+		return writePrivateUpgradeReplacement(root, replacement)
+	})
+}
+
+func validatePrivateUpgradeReselection(before, after privateUpgradeDrain) error {
+	if before.Phase != UpgradeAuthorized || after.Phase != UpgradeAuthorized || before.MigrationReference != (privateUpgradeOperationRef{}) ||
+		before.SelectedPair == (privateUpgradePair{}) || after.SelectedPair == (privateUpgradePair{}) || before.SelectedPair == after.SelectedPair {
+		return ErrBinding
+	}
+	unchanged := before
+	unchanged.SelectedPair = after.SelectedPair
+	if unchanged != after {
+		return ErrBinding
+	}
+	return nil
+}
+
+// This decision performs canonical reads only. Probes and root-wide queue
+// authorization remain outside the resident's non-reentrant commit guard.
+func privateUpgradeReselectionEligible(root taskdir.RootPin, drain privateUpgradeDrain, options Options) (bool, error) {
+	missing, err := privateUpgradePairMissing(drain.SelectedPair)
+	if err != nil || !missing {
+		return false, err
+	}
+	if drain.Phase != UpgradeAuthorized || drain.MigrationReference != (privateUpgradeOperationRef{}) {
+		return false, ErrBinding
+	}
+	facts, err := loadPrivateUpgradeReselectionFacts(root.Root(), drain)
+	if err != nil {
+		return false, err
+	}
+	history, _, err := loadPrivateMigrationHistory(filepath.Join(root.Root(), privateSupervisorDirectory))
+	if err != nil {
+		return false, err
+	}
+	for _, record := range history.Migrations {
+		if record.UpgradeGeneration.OperationID == drain.OperationID {
+			return false, ErrBinding
+		}
+	}
+	if err = validatePrivateUpgradeReselectionConfig(root.Root(), drain.Predecessor, facts.aliasPresent, options); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func loadPrivateUpgradeReselectionFacts(root string, drain privateUpgradeDrain) (privateGenerationFacts, error) {
+	facts, err := loadPrivateGenerationFacts(root)
+	if err != nil {
+		return facts, err
+	}
+	if facts.migrationPresent || facts.migrationErr != nil || facts.drain == nil || *facts.drain != drain || facts.published != drain.Predecessor {
+		return facts, errors.Join(ErrBinding, facts.migrationErr, facts.publishedErr)
+	}
+	phase, err := facts.phaseFor(drain.Predecessor, privateGenerationUpgradeControl)
+	if err != nil || phase != privateGenerationObservable {
+		return facts, errors.Join(ErrBinding, err)
+	}
+	if _, publishing, publicationErr := readPrivateIdentityPublication(root); publicationErr != nil || publishing {
+		return facts, errors.Join(ErrBinding, publicationErr)
+	}
+	return facts, nil
+}
+
+func validatePrivateUpgradeReselectionConfig(root string, predecessor task.SupervisorRef, aliasPresent bool, options Options) error {
+	options, err := optionsForSavedBinding(predecessor, options)
+	if err != nil {
+		return err
+	}
+	if err = validateSavedPrivateProbeConfig(root, predecessor, options); err != nil || aliasPresent {
+		// The generation owner already authenticated an alias. Primary config
+		// may contain the callback replacement that alias preparation owns.
+		return err
+	}
+	client, err := NewClient(predecessor, options)
+	if err != nil {
+		return err
+	}
+	authenticated, configErr := client.runtimeConfigAuthenticated()
+	closeErr := client.Close()
+	if !authenticated {
+		return errors.Join(ErrBinding, configErr, closeErr)
+	}
+	return errors.Join(configErr, closeErr)
+}
+
+func privateUpgradePairMissing(pair privateUpgradePair) (bool, error) {
+	missing := false
+	for _, path := range []string{pair.ClientExecutable, pair.DaemonExecutable} {
+		if _, err := os.Lstat(path); errors.Is(err, os.ErrNotExist) {
+			missing = true
+			continue
+		} else if err != nil {
+			return false, err
+		}
+		canonical, err := canonicalExecutable(path)
+		if err != nil || canonical != path {
+			return false, errors.Join(ErrBinding, err)
+		}
+	}
+	return missing, nil
+}
+
+func validatePrivateUpgradePair(pair privateUpgradePair) error {
+	for _, path := range []string{pair.ClientExecutable, pair.DaemonExecutable} {
+		canonical, err := canonicalExecutable(path)
+		if err != nil || canonical != path {
+			return errors.Join(ErrBinding, err)
+		}
+	}
+	return nil
 }
 
 func validatePrivateUpgradeTransition(before, after privateUpgradeDrain) error {
@@ -672,8 +810,12 @@ func finishRecordedPrivateUpgrade(ctx context.Context, root taskdir.RootPin, dra
 }
 
 func selectPrivateUpgradePair(ctx context.Context, root taskdir.RootPin, drain privateUpgradeDrain, selector CompatiblePairSelector, options Options) (privateUpgradeDrain, error) {
-	if drain.SelectedPair != (privateUpgradePair{}) {
-		return drain, nil
+	reselect := drain.SelectedPair != (privateUpgradePair{})
+	if reselect {
+		eligible, err := privateUpgradeReselectionEligible(root, drain, options)
+		if err != nil || !eligible {
+			return drain, err
+		}
 	}
 	// Full application quiescence precedes target selection and callback I/O.
 	previous, err := preparePrivateUpgradePredecessor(ctx, root, drain, options)
@@ -691,15 +833,17 @@ func selectPrivateUpgradePair(ctx context.Context, root taskdir.RootPin, drain p
 	if err != nil {
 		return drain, err
 	}
-	for _, path := range []string{client, daemon} {
-		canonical, canonicalErr := canonicalExecutable(path)
-		if canonicalErr != nil || canonical != path {
-			return drain, errors.Join(ErrBinding, canonicalErr)
-		}
-	}
 	updated := drain
 	updated.SelectedPair = privateUpgradePair{ClientExecutable: client, DaemonExecutable: daemon}
-	if err = replacePrivateUpgrade(ctx, root, drain, updated, options); err != nil {
+	if err = validatePrivateUpgradePair(updated.SelectedPair); err != nil {
+		return drain, err
+	}
+	if reselect {
+		err = reselectPrivateUpgradePair(ctx, root, drain, updated, options)
+	} else {
+		err = replacePrivateUpgrade(ctx, root, drain, updated, options)
+	}
+	if err != nil {
 		return drain, err
 	}
 	return updated, nil
