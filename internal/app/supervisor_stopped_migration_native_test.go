@@ -31,7 +31,9 @@ func TestStoppedCurrentNativeMigrationWithCompletedUpgradeAndStaleInspectionHead
 	clientPath, daemonPath := requireRuntimeRestartCLINativeContext(t)
 	ctx, cancel := context.WithTimeout(t.Context(), 90*time.Second)
 	defer cancel()
-	owner, store, current, options := stoppedMigrationNativeFixture(t, ctx, clientPath, daemonPath)
+	probe := newStoppedMigrationNativeFixture(t)
+	probe.bind(t, ctx, clientPath, daemonPath)
+	owner, store, current, options := probe.owner, probe.store, probe.current, probe.options
 	before, err := pueue.ObservePrivateExecutionTarget(ctx, store.Root, options)
 	if err != nil || before.State() != pueue.ExecutionTargetRunning {
 		t.Fatalf("current fixture daemon was not natively verified: state=%v err=%v", before.State(), err)
@@ -41,7 +43,6 @@ func TestStoppedCurrentNativeMigrationWithCompletedUpgradeAndStaleInspectionHead
 	stopCurrentMigrationNativeDaemon(t, ctx, owner, before)
 	base := filepath.Dir(current.Binding().ConfigPath)
 	witness := supervisorfixture.CapturePairFaultWitness(t, base)
-	probe := stoppedMigrationInvocation{owner: owner, store: store, current: current, options: options, lookup: installation.ExecutableLookup{InitialExecutable: clientPath, Environment: []string{}, AcceptedBootstrapPair: installation.BootstrapPair{Client: clientPath, Daemon: daemonPath}}}
 	checkpoint := stoppedMigrationCheckpoint{legacy: predecessor, published: current.Binding(), history: string(readSupervisorProbeTestFile(t, filepath.Join(base, "migration-history.json"))), starts: len(owner.daemonWaits())}
 	report, disposition, migrationErr := probe.migrate(t, ctx)
 	if migrationErr != nil {
@@ -153,7 +154,9 @@ func stoppedMigrationInspectionRecords(t *testing.T, root string) map[string]str
 	return records
 }
 
-func stoppedMigrationNativeFixture(t *testing.T, ctx context.Context, clientPath, daemonPath string) (*componentSupervisorFixture, *taskdir.Store, *pueue.Client, pueue.Options) {
+// Store setup and cleanup registration intentionally use the test lifetime;
+// native binding below retains the caller's finite operation context.
+func newStoppedMigrationNativeFixture(t *testing.T) stoppedMigrationInvocation {
 	t.Helper()
 	owner := newComponentSupervisorFixture(t, componentPersistentDaemon)
 	store, err := taskdir.InitStore(owner.root)
@@ -162,18 +165,25 @@ func stoppedMigrationNativeFixture(t *testing.T, ctx context.Context, clientPath
 		t.Fatal(err)
 	}
 	runner := canonicalAppTestExecutable(t)
-	options := owner.setupOptions(nativeInfrastructureCallbacks().ApplyTo(pueue.Options{ObservationTimeout: 10 * time.Second, RuntimeClientExecutable: clientPath, ControlOwnerExecutable: runner, PrivateTerminalEventRunner: runner, Environment: pueue.DefaultEnvironment()}))
-	current, err := owner.bindPrivate(ctx, clientPath, daemonPath, options)
+	options := owner.setupOptions(nativeInfrastructureCallbacks().ApplyTo(pueue.Options{ObservationTimeout: 10 * time.Second, ControlOwnerExecutable: runner, PrivateTerminalEventRunner: runner, Environment: pueue.DefaultEnvironment()}))
+	return stoppedMigrationInvocation{owner: owner, store: store, options: options}
+}
+
+func (p *stoppedMigrationInvocation) bind(t *testing.T, ctx context.Context, clientPath, daemonPath string) {
+	t.Helper()
+	p.options.RuntimeClientExecutable = clientPath
+	current, err := p.owner.bindPrivate(ctx, clientPath, daemonPath, p.options)
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = pueue.WithExistingBootstrapLockContext(ctx, store.Root, func(locked context.Context) error {
-		return supervisor.EnsureOrdinarySchedulingWithBootstrapLock(locked, store.Root, current)
+	p.current = current
+	p.lookup = installation.ExecutableLookup{InitialExecutable: clientPath, Environment: []string{}, AcceptedBootstrapPair: installation.BootstrapPair{Client: clientPath, Daemon: daemonPath}}
+	err = pueue.WithExistingBootstrapLockContext(ctx, p.store.Root, func(locked context.Context) error {
+		return supervisor.EnsureOrdinarySchedulingWithBootstrapLock(locked, p.store.Root, current)
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	return owner, store, current, options
 }
 
 func stopCurrentMigrationNativeDaemon(t *testing.T, ctx context.Context, owner *componentSupervisorFixture, before pueue.ExecutionTarget) {
@@ -229,8 +239,8 @@ func seedStoppedMigrationUpgradeHistory(t *testing.T, ctx context.Context, store
 		t.Fatal(err)
 	}
 	err = pueue.WithExistingBootstrapLockContext(ctx, store.Root, func(locked context.Context) error {
-		if err := os.WriteFile(filepath.Join(store.Root, ".supervisor", "migration-history.json"), data, 0o600); err != nil {
-			return err
+		if writeErr := os.WriteFile(filepath.Join(store.Root, ".supervisor", "migration-history.json"), data, 0o600); writeErr != nil {
+			return writeErr
 		}
 		active, found, resolveErr := pueue.ResolvePrivateSupervisorSuccessorWithLock(locked, store.Root, legacy)
 		if resolveErr != nil || !found || active != current {
@@ -277,7 +287,9 @@ func TestNativeInspectionMigrationKeepsCompletedCanonicalPairOverUnacceptedPropo
 	clientPath, daemonPath := requireRuntimeRestartCLINativeContext(t)
 	ctx, cancel := context.WithTimeout(t.Context(), 90*time.Second)
 	defer cancel()
-	owner, store, current, options := stoppedMigrationNativeFixture(t, ctx, clientPath, daemonPath)
+	probe := newStoppedMigrationNativeFixture(t)
+	probe.bind(t, ctx, clientPath, daemonPath)
+	owner, store, current, options := probe.owner, probe.store, probe.current, probe.options
 	running, err := pueue.ObservePrivateExecutionTarget(ctx, store.Root, options)
 	if err != nil || running.State() != pueue.ExecutionTargetRunning {
 		t.Fatalf("canonical current daemon unavailable: state=%v err=%v", running.State(), err)
@@ -301,7 +313,6 @@ func TestNativeInspectionMigrationKeepsCompletedCanonicalPairOverUnacceptedPropo
 		t.Fatalf("app migration selector replaced completed canonical D with unaccepted C': selected=%+v", selected.Binding())
 	}
 	history := string(readSupervisorProbeTestFile(t, filepath.Join(store.Root, ".supervisor", "migration-history.json")))
-	probe := stoppedMigrationInvocation{owner: owner, store: store, current: current, options: options, lookup: lookup}
 	report, disposition, migrationErr := probe.migrate(t, ctx)
 	if migrationErr != nil || report.State != infrastructure.ManualMigrationMigrated || disposition.Kind != infrastructure.DispositionWarmReuse {
 		t.Fatalf("outer app coordinator did not complete canonical D: report=%+v disposition=%+v err=%v", report, disposition, migrationErr)

@@ -64,11 +64,7 @@ func assertFailedManagedInspectionWithoutCompletionAuthorized(t *testing.T, migr
 	store, operation, job := newCleanupInspectionTestOperationWithOwnership(
 		t, inspection.ResultUnavailable, false, false, task.RunnerOwnershipManaged,
 	)
-	if migrate {
-		completePrivateMigrationInspectionData(t, operation)
-	} else {
-		completeInspectionPollTestLifetime(t, operation, task.LifetimeTerminationCompleted)
-	}
+	completeInspectionMaintenanceFixture(t, store, operation, migrate)
 	operationDirectory := filepath.Join(store.Root, "inspections", operation.Request().TaskID)
 	for _, record := range []string{"completion.json", "result.json"} {
 		if err := os.Remove(filepath.Join(operationDirectory, record)); err != nil {
@@ -80,9 +76,6 @@ func assertFailedManagedInspectionWithoutCompletionAuthorized(t *testing.T, migr
 	}
 
 	binding := operation.Request().Binding.Supervisor
-	if migrate {
-		initializePrivateMigrationTestLifecycle(t, store.Root)
-	}
 	if err := preparePrivateTerminalEvidence(t.Context(), store.Root, binding, []pueue.Job{job}); err != nil {
 		t.Fatal(err)
 	}
@@ -112,14 +105,9 @@ func TestManagedInspectionCleanupUsesGuardianEvidenceOverQueueResult(t *testing.
 			store, operation, job := newCleanupInspectionTestOperationWithOwnership(
 				t, inspection.ResultEligible, false, false, task.RunnerOwnershipManaged,
 			)
-			if migrate {
-				completePrivateMigrationInspectionData(t, operation)
-			} else {
-				completeInspectionPollTestLifetime(t, operation, task.LifetimeTerminationCompleted)
-			}
+			completeInspectionMaintenanceFixture(t, store, operation, migrate)
 			binding := operation.Request().Binding.Supervisor
 			if migrate {
-				initializePrivateMigrationTestLifecycle(t, store.Root)
 				if err := authorizePrivateMigrationQueue(t.Context(), store.Root, binding, []pueue.Job{job}); err != nil {
 					t.Fatalf("guardian queue failure blocked child-proven migration: %v", err)
 				}
@@ -214,6 +202,16 @@ func initializePrivateMigrationTestLifecycle(t *testing.T, root string) {
 	}
 }
 
+func completeInspectionMaintenanceFixture(t *testing.T, store *taskdir.Store, operation *inspection.Operation, migrate bool) {
+	t.Helper()
+	if migrate {
+		completePrivateMigrationInspectionData(t, operation)
+		initializePrivateMigrationTestLifecycle(t, store.Root)
+		return
+	}
+	completeInspectionPollTestLifetime(t, operation, task.LifetimeTerminationCompleted)
+}
+
 // completePrivateMigrationInspectionData retains the auxiliary owner inode and
 // qualified completed journal DATA required by root-wide maintenance. It makes
 // no native process or scope observation and preserves legacy worker bindings.
@@ -284,11 +282,7 @@ func newTerminalInspectionCleanupOperation(t *testing.T, store *taskdir.Store, s
 func assertDefaultQueueCleanupAndMigration(t *testing.T, migrate bool) {
 	t.Helper()
 	store, operation, job := newCleanupInspectionTestOperationInQueue(t, inspection.ResultEligible, true, true)
-	if migrate {
-		completePrivateMigrationInspectionData(t, operation)
-	} else {
-		completeInspectionPollTestLifetime(t, operation, task.LifetimeTerminationCompleted)
-	}
+	completeInspectionMaintenanceFixture(t, store, operation, migrate)
 	if job.Group != "default" {
 		t.Fatalf("fixture used group %q", job.Group)
 	}
@@ -296,9 +290,6 @@ func assertDefaultQueueCleanupAndMigration(t *testing.T, migrate bool) {
 		t.Fatalf("fixture unexpectedly has a legacy group journal: %v", err)
 	}
 	binding := operation.Request().Binding.Supervisor
-	if migrate {
-		initializePrivateMigrationTestLifecycle(t, store.Root)
-	}
 	if err := preparePrivateTerminalEvidence(t.Context(), store.Root, binding, []pueue.Job{job}); err != nil {
 		t.Fatal(err)
 	}

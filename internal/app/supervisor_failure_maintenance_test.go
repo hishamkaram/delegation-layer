@@ -48,12 +48,7 @@ func TestSupervisorMaintenancePublicFailureDoesNotInventQueueWait(t *testing.T) 
 		t.Run(fixture.name, func(t *testing.T) {
 			diagnostic := maintenancePublicFailureFixture(fixture.activity)
 			busy := diagnostic.Cause
-			var cause error = diagnostic
-			if fixture.faultInside {
-				diagnostic.Cause = errors.Join(busy, fixture.fault)
-			} else if fixture.fault != nil {
-				cause = errors.Join(diagnostic, fixture.fault)
-			}
+			cause := maintenancePublicFailureCause(diagnostic, fixture.fault, fixture.faultInside)
 			result := supervisorMigrationFailure(newSupervisorCommandResponse("migrate"), cause)
 			control := result.response.SupervisorControl
 			if result.code != 1 || result.err == nil {
@@ -75,6 +70,17 @@ func TestSupervisorMaintenancePublicFailureDoesNotInventQueueWait(t *testing.T) 
 			assertMaintenancePublicCauses(t, result.err, diagnostic, busy, fixture.fault)
 		})
 	}
+}
+
+func maintenancePublicFailureCause(diagnostic *supervisorcore.MaintenanceError, fault error, inside bool) error {
+	if inside {
+		diagnostic.Cause = errors.Join(diagnostic.Cause, fault)
+		return diagnostic
+	}
+	if fault != nil {
+		return errors.Join(diagnostic, fault)
+	}
+	return diagnostic
 }
 
 func TestSupervisorMaintenancePublicQueueWaitKeepsLegacyCompatibility(t *testing.T) {
