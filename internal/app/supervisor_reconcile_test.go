@@ -1348,6 +1348,58 @@ func recordClosedHistoricalCallbackLifetimeData(t *testing.T, td *taskdir.TaskDi
 	}
 }
 
+// closeHistoricalMigrationGhostTaskData proves that the incidental rowless
+// ordinary task blocks maintenance before adding synthetic closure DATA. The
+// real component daemon still has its original Start/Wait owner; no task worker,
+// native scope or OS absence is observed or claimed by these journal writes.
+func closeHistoricalMigrationGhostTaskData(t *testing.T, fixture *historicalSupervisorFixture) {
+	t.Helper()
+	assertHistoricalMigrationGhostBlocksMaintenance(t, fixture)
+	recordClosedHistoricalCallbackLifetimeData(t, fixture.td)
+	observation, err := fixture.store.ReadTaskExecutionClosureContext(t.Context(), fixture.req.TaskID)
+	if err != nil || observation.Proof == nil {
+		t.Fatalf("synthetic task closure DATA is unreadable: observation=%+v err=%v", observation, err)
+	}
+	owner, err := fixture.td.TryAcquireLifetimeOwnerContext(t.Context())
+	if owner != nil {
+		t.Cleanup(func() {
+			if releaseErr := owner.Release(); releaseErr != nil {
+				t.Error(releaseErr)
+			}
+		})
+	}
+	if err != nil || owner == nil {
+		t.Fatalf("synthetic task lifetime writer retained its owner: %v", err)
+	}
+	if err = owner.Release(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func assertHistoricalMigrationGhostBlocksMaintenance(t *testing.T, fixture *historicalSupervisorFixture) {
+	t.Helper()
+	published, found, err := pueue.ReadPrivateSupervisorBinding(fixture.root)
+	if err != nil || !found || published != fixture.predecessor {
+		t.Fatalf("ghost fixture lost its full published predecessor: binding=%+v found=%t err=%v", published, found, err)
+	}
+	client, err := pueue.BindSavedForMigrationWithClient(t.Context(), published, fixture.clientA, fixture.dependencies().SupervisorOptions)
+	fixture.component.ownClient(client, err)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := client.Snapshot(t.Context())
+	if err = errors.Join(err, client.CloseAfterPending(err)); err != nil {
+		t.Fatal(err)
+	}
+	before := snapshotMaintenanceStatusRoot(t, fixture.root)
+	assessment, err := privateCleanupOwner().AssessMaintenance(t.Context(), fixture.store, published, snapshot.Jobs)
+	want := supervisor.MaintenanceBlocker{Kind: "task", TaskID: fixture.req.TaskID, ReasonCode: "runtime_closure_unproven", NextAction: "human_review_task"}
+	if !supervisor.MaintenanceBusy(err) || assessment.Readiness != "blocked" || assessment.ActiveWork != "none" || assessment.FirstBlocker == nil || *assessment.FirstBlocker != want {
+		t.Fatalf("rowless ordinary task did not block maintenance: assessment=%+v blocker=%+v err=%v", assessment, assessment.FirstBlocker, err)
+	}
+	assertMaintenanceStatusRootUnchanged(t, fixture.root, before)
+}
+
 func writeEndedHistoricalMigrationStatus(t *testing.T, fixture *historicalSupervisorFixture) {
 	t.Helper()
 	writeRunnerStatus(t, fixture.statusPath, fixture.req.RootID, fixture.req.TaskID, fixture.receipt.NumericTaskID)
@@ -1825,6 +1877,7 @@ func TestExplicitMigrationSelectsInstalledSuccessorBeforeShutdown(t *testing.T) 
 				privateBefore = readSupervisorProbeTestFile(t, privatePath)
 			}
 			clientC, daemonC := installInspectionMigrationTargetC(t, fixture)
+			closeHistoricalMigrationGhostTaskData(t, fixture)
 			selected := prepareInspectionMigrationTargetC(t, scenario, clientC, daemonC, window.appendSelected)
 			if window.privateJournal && !bytes.Equal(privateBefore, readSupervisorProbeTestFile(t, privatePath)) {
 				t.Fatal("preparing C's inspection proposal replaced the existing private B journal")
@@ -1907,6 +1960,7 @@ func TestExplicitMigrationRefusesMissingRecordedSuccessorAfterShutdown(t *testin
 	prepareStoppedInspectionMigration(t, scenario)
 	clientC, _ := installInspectionMigrationTargetC(t, fixture)
 	privateBase := filepath.Join(fixture.root, ".supervisor")
+	assertNoHistoricalMigrationConfigStage(t, privateBase)
 	privateBefore := testsupport.CapturePairFaultWitness(t, privateBase)
 	configBefore := readSupervisorProbeTestFile(t, pueue.PrivateConfigPath(fixture.root))
 	proposals := snapshotRetainedInspectionProposals(t, fixture.root)
@@ -1927,16 +1981,75 @@ func TestExplicitMigrationRefusesMissingRecordedSuccessorAfterShutdown(t *testin
 	if result.code == 0 || control == nil || control.ReasonCode != "transition_pending" || control.NextAction != "stop_and_report" {
 		t.Fatalf("missing pinned successor lost actionable refusal: code=%d control=%+v err=%v", result.code, control, result.err)
 	}
+	assertNoHistoricalMigrationConfigStage(t, privateBase)
 	testsupport.AssertPairFaultWitness(t, privateBase, privateBefore)
 	assertRetainedInspectionProposals(t, proposals)
 	if !maps.EqualFunc(proposals, snapshotRetainedInspectionProposals(t, fixture.root), bytes.Equal) || !bytes.Equal(requestBefore, readSupervisorProbeTestFile(t, requestPath)) {
 		t.Fatal("refusal appended a replacement proposal or changed the original group request")
 	}
-	if !bytes.Equal(configBefore, readSupervisorProbeTestFile(t, pueue.PrivateConfigPath(fixture.root))) || !bytes.Equal(commands, readSupervisorProbeTestFile(t, fixture.commandLog)) || !bytes.Equal(starts, readSupervisorProbeTestFile(t, fixture.daemonStartLog)) || len(fixture.component.daemonWaits()) != 1 {
-		t.Fatal("refusal changed configuration, issued a command, or started an alternate daemon")
+	if !bytes.Equal(configBefore, readSupervisorProbeTestFile(t, pueue.PrivateConfigPath(fixture.root))) {
+		t.Error("refusal changed configuration")
+	}
+	assertHistoricalSavedDiagnosticCommands(t, commands, readSupervisorProbeTestFile(t, fixture.commandLog), control.DiagnosticSnapshotAt)
+	if !bytes.Equal(starts, readSupervisorProbeTestFile(t, fixture.daemonStartLog)) {
+		t.Error("refusal started an alternate daemon")
+	}
+	if waits := len(fixture.component.daemonWaits()); waits != 1 {
+		t.Errorf("refusal changed daemon Wait count: got %d, want 1", waits)
+	}
+	if t.Failed() {
+		t.FailNow()
 	}
 	if after := snapshotOutputUpgradeTask(t, fixture.root, fixture.req.TaskID); !equalOutputUpgradeSnapshots(taskBefore, after) {
 		t.Fatal("refusal changed historical task evidence")
+	}
+}
+
+// A remains the installed saved transport after its daemon closes. A dated
+// diagnostic may bind it once, rebind its staged endpoint once, and read status.
+// These commands never authorize replacement of the immutable accepted target.
+func assertHistoricalSavedDiagnosticCommands(t *testing.T, before, after []byte, diagnosticAt string) {
+	t.Helper()
+	if diagnosticAt == "" {
+		t.Fatal("refusal omitted its dated diagnostic attempt")
+	}
+	suffix, unchanged := bytes.CutPrefix(after, before)
+	if !unchanged {
+		t.Fatalf("refusal changed the original command log: before=%q after=%q", before, after)
+	}
+	if !bytes.HasSuffix(suffix, []byte("\n")) {
+		t.Fatalf("diagnostic command suffix is empty or unterminated: %q", suffix)
+	}
+	lines := strings.Split(string(suffix[:len(suffix)-1]), "\n")
+	if len(lines) < 2 || len(lines) > 3 {
+		t.Fatalf("diagnostic exceeded its saved-client probe bound: %q", suffix)
+	}
+	versions, statuses := 0, 0
+	for _, line := range lines {
+		switch line {
+		case "A version":
+			versions++
+		case "A status":
+			statuses++
+		default:
+			t.Fatalf("diagnostic issued an unacknowledged saved-client command: %q", line)
+		}
+	}
+	if versions < 1 || versions > 2 || statuses != 1 {
+		t.Fatalf("diagnostic did not retain one status and bounded version probes: %q", suffix)
+	}
+}
+
+func assertNoHistoricalMigrationConfigStage(t *testing.T, privateBase string) {
+	t.Helper()
+	entries, err := os.ReadDir(privateBase)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), ".migration-pueue-") {
+			t.Fatalf("diagnostic retained a temporary migration config: %s", entry.Name())
+		}
 	}
 }
 

@@ -279,6 +279,10 @@ func TestGuardianCustodyFaultSurvivesFullMigrationUntilFullMaintenance(t *testin
 	registration := recordCustodyLifetimeUntil(t, operation, newCustodyTestPlacement(t), task.LifetimeTerminationCompleted, operation.Deadline())
 	bindCustodyTestView(t, registration)
 	writeHistoricalInspectionStatus(t, fixture, job)
+	// Migration prepares the independent legacy worker observation before its
+	// assessment. Establish that canonical DATA before freezing inspection bytes.
+	prepareHistoricalInspectionTerminalEvidence(t, fixture, operation, job)
+	closeHistoricalMigrationGhostTaskData(t, fixture)
 	records := snapshotRebootTaskFiles(t, filepath.Join(fixture.root, "inspections"))
 
 	before := readTaskMaintenanceWake(t, fixture.root)
@@ -326,6 +330,15 @@ func TestGuardianCustodyFaultSurvivesFullMigrationUntilFullMaintenance(t *testin
 func newTerminalInspectionCleanupOperationForTask(t *testing.T, store *taskdir.Store, supervisor *pueue.Client, taskID string, jobID int64) (*inspection.Operation, pueue.Job) {
 	t.Helper()
 	return admissionfixture.NewTerminalInspectionCleanupOperationForTask(t, store, supervisor, inspection.ResultEligible, true, taskID, jobID)
+}
+
+func prepareHistoricalInspectionTerminalEvidence(t *testing.T, fixture *historicalSupervisorFixture, operation *inspection.Operation, job pueue.Job) {
+	t.Helper()
+	if err := pueue.WithBootstrapLockContext(t.Context(), fixture.root, func(ctx context.Context) error {
+		return privateCleanupOwner().PrepareEndedInspectionEvidence(ctx, fixture.store, supervisorcore.InspectionGroup(fixture.store.RootID, fixture.predecessor), operation.Request().TaskID, job)
+	}); err != nil {
+		t.Fatal(err)
+	}
 }
 
 // writeHistoricalInspectionStatus publishes the ended inspection row in the
