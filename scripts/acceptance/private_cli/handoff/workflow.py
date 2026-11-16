@@ -266,6 +266,8 @@ def _run_handoff_case(case: HandoffCase):
             resources=resources,
             supervisor_control=supervisor_control,
             task_commands=task_commands,
+            expected_external_task_id=old_task.task_id,
+            expected_private_task_id=automatic_response["task_id"] if automatic_response is not None else None,
         )
         private_pair = assert_state_supervisor_pair(case.state, case.client.parent)
         if automatic_response is None:
@@ -556,6 +558,8 @@ def _observe_handoff_transition(
     resources,
     supervisor_control,
     task_commands,
+    expected_external_task_id: str,
+    expected_private_task_id: str | None = None,
 ):
     external_calls_after = task_commands.external_client_calls()
     if external_calls_after != external_calls_before:
@@ -591,9 +595,12 @@ def _observe_handoff_transition(
         receipt=task_commands.receipts / "supervisor-status-after-handoff.json",
         phase="private-supervisor-observation",
         capture_root=case.capture_root,
+        capture_response=True,
     )
     journal = read_external_inspection_handoff_journal(
-        case.state, case.private_config, supervisor_status=supervisor_status
+        case.state, case.private_config, supervisor_status=supervisor_status,
+        expected_external_task_id=expected_external_task_id,
+        expected_private_task_id=expected_private_task_id,
     )
     evidence["journal"].update(
         {

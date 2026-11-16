@@ -2,11 +2,21 @@
 
 from pathlib import Path
 from scripts.acceptance.directories.policy import require
+from scripts.acceptance.evidence.validation import _task_identity
 import json
 
 
-def read_external_inspection_handoff_journal(state, private_config, *, supervisor_status):
+def read_external_inspection_handoff_journal(
+    state, private_config, *, supervisor_status, expected_external_task_id: str,
+    expected_private_task_id: str | None = None,
+):
     """Retain edge evidence after the CLI validates the current journal head."""
+    require(_task_identity(expected_external_task_id), "expected external task identity is invalid")
+    require(
+        expected_private_task_id is None
+        or (_task_identity(expected_private_task_id) and expected_private_task_id != expected_external_task_id),
+        "expected private task identity is invalid",
+    )
     root = Path(state)
     journal = root / "inspection-group"
     request_path = journal / "request.json"
@@ -23,13 +33,15 @@ def read_external_inspection_handoff_journal(state, private_config, *, superviso
     control = supervisor_status.get("supervisor_control")
     require(
         supervisor_status.get("command") == "supervisor"
+        and supervisor_status.get("failure") is None
+        and supervisor_status.get("error") is None
         and supervisor_status.get("root_id") == legacy.get("root_id")
         and isinstance(control, dict)
         and control.get("action") == "status"
-        and (control.get("state"), control.get("migration_phase")) in (("migrated", "complete"), ("ready", "adopted"))
-        and control.get("next_action") == "none",
+        and (control.get("state"), control.get("migration_phase")) in (("migrated", "complete"), ("ready", "adopted")),
         "CLI did not validate the completed private inspection handoff",
     )
+    _require_expected_maintenance(control, expected_external_task_id, expected_private_task_id)
     successor = migration.get("successor")
     require(isinstance(successor, dict), "inspection handoff omitted its successor")
     legacy_supervisor = legacy.get("supervisor")
@@ -46,3 +58,29 @@ def read_external_inspection_handoff_journal(state, private_config, *, superviso
         "inspection handoff successor is not the private state-root supervisor",
     )
     return {"legacy": legacy, "migration": migration, "successor": successor, "canonical_status": control}
+
+
+def _require_expected_maintenance(control, external_task_id: str, private_task_id: str | None):
+    """Completed routing can coexist with the fixture's exact still-live task."""
+    blocker = control.get("first_blocker")
+    require(isinstance(blocker, dict), "handoff maintenance blocker is missing")
+    expected_blocker = {
+        "kind": "task", "task_id": external_task_id,
+        "reason_code": "runtime_closure_unproven", "next_action": "human_review_task",
+    }
+    activity = "none"
+    if private_task_id is not None:
+        queue_state = blocker.get("queue_state")
+        require(queue_state in ("queued", "stashed", "running"), "handoff maintenance private queue state is not active")
+        expected_blocker = {
+            "kind": "queue", "task_id": private_task_id, "queue_state": queue_state,
+            "reason_code": "queue_work_present", "next_action": "wait_for_legacy_work",
+        }
+        activity = "present"
+    require(
+        control.get("migration_readiness") == "blocked"
+        and control.get("active_work") == activity
+        and blocker == expected_blocker
+        and control.get("next_action") == expected_blocker["next_action"],
+        "handoff maintenance does not match the expected live task",
+    )
