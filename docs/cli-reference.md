@@ -464,8 +464,15 @@ ordinary scheduling preparation before reporting readiness. If that preparation
 fails after migration has committed, the response retains `state: "migrated"`
 and `migration_phase: "complete"` alongside an error and `stop_and_report`.
 A completed `migration_phase` remains historical evidence even when current
-readiness requires repair. The retained
-legacy journal is historical evidence, not pending work. An inspection journal still bound to an external Pueue
+readiness requires repair. Completed journal entries remain historical evidence.
+If an installation handoff has finished but inspection routing still points to
+its predecessor, status reports `legacy_present` and
+`next_action: "run_supervisor_migrate"`. Run `delegate supervisor migrate --json`
+with the same root to complete that routing. Continuation and some provider
+inspections can require this step. Admission may also finish an already prepared
+edge; status still advises explicit completion until the edge is recorded as
+complete. Follow a more specific maintenance blocker first.
+An inspection journal still bound to an external Pueue
 configuration reports `state: "external"` and
 `next_action: "run_supervisor_migrate"`. The repair changes Delegate's
 inspection routing; it does not operate on that external supervisor.

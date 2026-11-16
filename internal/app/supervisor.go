@@ -170,8 +170,13 @@ func supervisorStatusFromStore(ctx context.Context, root string, deps Dependenci
 	if !resolution.GroupPresent || active.Supervisor != resolution.Active {
 		active = supervisorcore.InspectionGroup(store.RootID, resolution.Active)
 	}
-	migrated := resolution.GroupMigrated || (resolution.PrivateAuthority && seed.Supervisor != resolution.Active)
-	return supervisorLegacyStatus(controlContext, root, deps, options, response, active, migrated, store)
+	migrated := !resolution.GroupCleanupDue && (resolution.GroupMigrated || (resolution.PrivateAuthority && seed.Supervisor != resolution.Active))
+	result := supervisorLegacyStatus(controlContext, root, deps, options, response, active, migrated, store)
+	if resolution.GroupCleanupDue && result.code == 0 && result.err == nil {
+		result.response.SupervisorControl.State = "legacy_present"
+		result.response.SupervisorControl.NextAction = "run_supervisor_migrate"
+	}
+	return result
 }
 
 func supervisorStatusWithoutInspectionGroup(ctx context.Context, root string, deps Dependencies, options pueue.Options, response Response, store *taskdir.Store) (result commandResult) {

@@ -41,6 +41,12 @@ needs review; waiting for queue activity cannot supply missing closure proof.
 Keep the exact task ID and reported reason. A later `diagnostic_snapshot_at`
 describes the local diagnostic observation, separately from a resident error.
 
+After a completed installation handoff, `legacy_present` with
+`run_supervisor_migrate` means inspection routing still needs completion. Use
+the same root's explicit migration command; existing tasks retain their
+identities. Follow [supervisor recovery](cli-reference.md#supervisor-recovery)
+for blocker priority and prepared-edge behavior.
+
 For an eligible same-boot private ghost, see
 [human maintenance permission](cli-reference.md#human-maintenance-permission).
 It can unblock maintenance after explicit human confirmation; it cannot turn
