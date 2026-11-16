@@ -26,6 +26,10 @@ for ordinary delegation.
 For recurring tasks, use the [schedule commands](references/command-reference.md#schedules)
 and the independent [scheduler runtime](references/command-reference.md#scheduler-runtime).
 
+For a Codex lead that calls Delegate itself, use the
+[one-time native rule setup](examples/codex-lead.md). A sandbox denial is not
+authorization to change permissions or make the state root writable.
+
 ## Boundaries
 
 - Preserve the requested destination, exact model ID, effort, permissions,

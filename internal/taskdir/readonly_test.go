@@ -138,3 +138,58 @@ func TestReadOnlyOpenDoesNotInitializeAbsentRoot(t *testing.T) {
 		t.Fatalf("read initialized missing root: %v", err)
 	}
 }
+
+func TestReadOnlyOrdinaryCommittedResultUsesCanonicalEvidence(t *testing.T) {
+	store := testStore(t)
+	directory := sealedTask(t, store, "ordinary committed answer")
+	committed := collectOK(t, directory)
+	reader, err := OpenReadOnlyStoreContext(t.Context(), store.Root, store.predicates)
+	must(t, err)
+	t.Cleanup(func() { must(t, reader.Close()) })
+	outcome, err := reader.ReadOrdinaryCommittedResultOutcomeContext(t.Context(), directory.TaskID)
+	must(t, err)
+	if outcome.Verdict != task.VerdictCommitted || outcome.Payload != committed.Payload || outcome.EvidenceSHA256 != committed.EvidenceSHA256 {
+		t.Fatalf("ordinary read changed committed evidence: %+v", outcome)
+	}
+	// The ordinary entry point must retain the same seal/manifest verification
+	// as the existing guarded entry point, before any result bytes are opened.
+	must(t, os.WriteFile(filepath.Join(directory.Dir, "raw", "stderr"), []byte("changed evidence"), 0o600))
+	outcome, err = reader.ReadOrdinaryCommittedResultOutcomeContext(t.Context(), directory.TaskID)
+	if err == nil || outcome != nil {
+		t.Fatalf("ordinary reader accepted corrupted committed evidence: outcome=%+v err=%v", outcome, err)
+	}
+}
+
+func TestReadOnlyOrdinaryCommittedResultRejectsConnectorTasks(t *testing.T) {
+	for _, kind := range []string{"gateway_origin", "context_only_successor"} {
+		t.Run(kind, func(t *testing.T) {
+			var store *Store
+			var directory *TaskDir
+			if kind == "gateway_origin" {
+				store, directory, _, _ = workspacePreparedTask(t)
+			} else {
+				store, directory, _ = pathPreparedTask(t)
+			}
+			permit := consumeStart(t, directory)
+			t.Cleanup(func() { must(t, permit.Release()) })
+			must(t, directory.RecordStarted(1))
+			must(t, directory.WriteRawFiles("connector committed answer", "diagnostic\n"))
+			_, err := directory.Seal(task.InvocationStarted, 0, "", task.FixturePredicateRef())
+			must(t, err)
+			must(t, permit.Release())
+			committed := collectOK(t, directory)
+			reader, err := OpenReadOnlyStoreContext(t.Context(), store.Root, store.predicates)
+			must(t, err)
+			t.Cleanup(func() { must(t, reader.Close()) })
+			guarded, err := reader.ReadCommittedResultOutcomeContext(t.Context(), directory.TaskID)
+			must(t, err)
+			if guarded.Payload != committed.Payload {
+				t.Fatal("guarded reader lost the committed payload")
+			}
+			ordinary, err := reader.ReadOrdinaryCommittedResultOutcomeContext(t.Context(), directory.TaskID)
+			if !errors.Is(err, task.ErrRequestConflict) || ordinary != nil {
+				t.Fatalf("connector task bypassed guards: outcome=%+v err=%v", ordinary, err)
+			}
+		})
+	}
+}

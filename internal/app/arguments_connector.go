@@ -44,7 +44,7 @@ type ConnectorArguments struct {
 
 func registerConnectorFlags(fs *flag.FlagSet, a *Arguments) {
 	c := &a.Connector
-	fs.DurationVar(&c.ControlTimeout, "control-timeout", defaultConnectorControlTimeout, "finite public connector control deadline")
+	fs.DurationVar(&c.ControlTimeout, "control-timeout", defaultConnectorControlTimeout, "finite public control deadline")
 	fs.StringVar(&c.ExpectedRoot, "expected-root", "", "expected opaque root context token")
 	fs.StringVar(&c.ExpectedProject, "expected-project", "", "expected opaque project context token")
 	fs.StringVar(&c.ExpectedWorkspace, "expected-workspace", "", "expected opaque approved workspace token")
@@ -264,7 +264,7 @@ func validateConnectorResultArguments(c ConnectorArguments) error {
 }
 
 func validateConnectorGuardFields(a Arguments) error {
-	required := a.Command == "resolve" || a.Command == "result" || a.Command == "dispatch"
+	required := a.Command == "resolve" || a.Command == "dispatch"
 	if !required && !hasConnectorGuards(a.Connector) {
 		return nil
 	}

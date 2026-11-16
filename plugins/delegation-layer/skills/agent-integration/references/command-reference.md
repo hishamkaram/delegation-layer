@@ -18,6 +18,7 @@ The main skill owns [root selection](../SKILL.md#3-prepare-separate-paths-and-a-
 | `status TASK --json` | Observe task state | No launch |
 | `collect TASK [--watch DURATION] --json` | Read or wait for publication | No launch |
 | `wait [--any\|--all] [--watch DURATION] TASK... --json` | Passively wait for several local tasks | None |
+| `result read TASK --expected-descriptor ABS --json` | [Bounded committed local answer](#result-read) | None |
 | `logs TASK --json` | Read stream descriptors; remote handles support explicit bounded snapshots | No launch |
 | `cancel TASK --json` | Record an explicit stop | No launch |
 | `continue --task TASK ... --json` | Create an exact-session successor | At most one successor launch attempt |
@@ -308,6 +309,48 @@ another genuinely ready task can satisfy it. A settled member cannot satisfy
 watch expiry. A rejected task
 is ready data, not a successful provider answer. Preserve per-task status and
 failure fields; apply normal result handling after waiting.
+
+## Result read
+
+Read a committed ordinary local task's answer through a bounded passive range:
+
+```text
+delegate result read TASK_ID --expected-descriptor /absolute/path/payload.json --offset 0 --limit 8192 --json
+```
+
+Save the exact committed `payload` descriptor from `collect` as the JSON file
+(or supply it on stdin with `--expected-descriptor -`). It contains `basename`,
+`length` and `sha256`. The descriptor is required. `--offset` defaults to zero;
+`--limit` defaults to 65536 and accepts 1..65536 decoded bytes. Offset must be
+within the payload, including its end. `--control-timeout` defaults to `30s`
+and must be finite and positive; it covers the whole operation.
+
+A successful ordinary response has `publication: committed`, `outcome` and
+`result_range` with `descriptor`, `offset`, `data_base64`, `next_offset`, `eof`.
+Decode each page and advance to `next_offset` until `eof`; an offset at the
+payload end returns an empty EOF page. Every page verifies the whole sealed
+payload, including bytes outside that page, before returning any answer bytes.
+No private task layout or answer path is needed. Use `--json` to consume bytes;
+the existing human format is a summary. Assemble decoded byte pages in order
+before interpreting UTF-8, since a page boundary can split a character. Codex
+leads use the [sandboxed decoder example](../examples/codex-lead.md#read-a-complete-result-in-bounded-pages)
+to assemble pages without exposing base64 to the model, then bounded native
+text reads to avoid tool-output truncation.
+
+No connector guards selects the ordinary route. A task with connector origin
+or context requires its full existing connector guards; partial guard sets
+remain invalid. Guarded responses retain `connector.result_range` and their
+existing receipt contract. This local command does not accept remote handles.
+Missing, pending, rejected, mismatched, corrupt or timed-out evidence yields an
+explicit error without answer bytes. Ordinary reads exit `0` on success, `2`
+for invalid arguments or request/identity conflicts (including descriptor mismatch,
+connector-owned tasks and rejected outcomes), and `1` for other operational
+failures, including descriptor file I/O or JSON decoding errors,
+missing/pending evidence and verification timeout. A decoded descriptor that
+does not match the committed outcome is a request conflict. Ordinary
+timeouts do not create a connector `failure` envelope. Guarded reads retain
+their existing exit codes. No launch, collection, retry, repair or storage
+initialization occurs.
 
 ## Schedules
 

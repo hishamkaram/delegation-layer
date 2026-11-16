@@ -210,6 +210,9 @@ func connectorMutationRequested(a Arguments) bool {
 
 func connectorCommandContext(ctx context.Context, a Arguments, deps Dependencies) (result commandResult) {
 	response := newResponse(a.Command)
+	if a.Command == "result" && !hasConnectorGuards(a.Connector) {
+		return ordinaryResultContext(ctx, a, deps, response)
+	}
 	if err := loadConnectorOrigin(ctx, &a, deps); err != nil {
 		return failed(response, err, 2)
 	}
@@ -525,18 +528,65 @@ func connectorResultContext(ctx context.Context, a Arguments, deps Dependencies,
 		return connectorFailure(response, task.ErrRequestConflict)
 	}
 
-	file, err := reader.OpenTaskPayload(ctx, a.TaskID, expected)
+	observed, err := readResultRange(ctx, a, reader, expected)
 	if err != nil {
 		return connectorFailure(response, err)
 	}
-	observed, readErr := resultread.Read(ctx, file, expected, a.Connector.Offset, a.Connector.ResultLimit)
-	if err = errors.Join(readErr, file.Close()); err != nil {
-		return connectorFailure(response, err)
-	}
-	response.Connector.Receipt, response.Connector.ResultRange = receipt, &observed
+
+	response.Connector.Receipt, response.Connector.ResultRange = receipt, observed
 	response.Publication = task.PublicationCommitted.String()
 	response.Outcome = outcome
 	return commandResult{response: response}
+}
+
+// taskdir owns request identity and committed evidence. This ordinary view only
+// projects a verified page and never borrows connector authority or repairs state.
+func ordinaryResultContext(ctx context.Context, a Arguments, deps Dependencies, response Response) (result commandResult) {
+	root, err := tasklifecycle.ResolveRoot(a.Root)
+	if err != nil {
+		return failed(response, err, classifyCode(err, 1))
+	}
+	reader, err := taskdir.OpenReadOnlyStoreContext(ctx, root, deps.storeDependencies().registry())
+	if err != nil {
+		return failed(response, err, classifyCode(err, 1))
+	}
+	defer func() {
+		mergeCommandClose(&result, reader.Close)
+		if result.err != nil || result.code != 0 {
+			result.response.ResultRange = nil
+		}
+	}()
+	response.RootID, response.TaskID = reader.RootID(), a.TaskID
+	var expected task.PayloadDescriptor
+	if err = readConnectorJSON(ctx, a.Connector.DescriptorFile, deps.Input, &expected); err != nil {
+		return failed(response, err, classifyCode(err, 1))
+	}
+	outcome, err := reader.ReadOrdinaryCommittedResultOutcomeContext(ctx, a.TaskID)
+	if err != nil {
+		return failed(response, err, classifyCode(err, 1))
+	}
+	if outcome.Payload != expected {
+		return failed(response, task.ErrRequestConflict, classifyCode(task.ErrRequestConflict, 1))
+	}
+	observed, err := readResultRange(ctx, a, reader, expected)
+	if err != nil {
+		return failed(response, err, classifyCode(err, 1))
+	}
+	response.ResultRange, response.Outcome = observed, outcome
+	response.Publication = task.PublicationCommitted.String()
+	return commandResult{response: response}
+}
+
+func readResultRange(ctx context.Context, a Arguments, reader *taskdir.ReadOnlyStore, expected task.PayloadDescriptor) (*resultread.Range, error) {
+	file, err := reader.OpenTaskPayload(ctx, a.TaskID, expected)
+	if err != nil {
+		return nil, err
+	}
+	observed, readErr := resultread.Read(ctx, file, expected, a.Connector.Offset, a.Connector.ResultLimit)
+	if err = errors.Join(readErr, file.Close()); err != nil {
+		return nil, err
+	}
+	return &observed, nil
 }
 
 func retainOpenedTaskGuardContext(ctx context.Context, a Arguments, store *taskdir.Store, td *taskdir.TaskDir) (*taskdir.ConnectorControlGuard, error) {
