@@ -58,7 +58,11 @@ func establishCaptured(ctx context.Context, target *taskdir.Store, request Estab
 	if err := attempt.open(ctx, request); err != nil {
 		return finishProducerFailure(attempt, err)
 	}
-	lease, acquired, err := TryAcquireLease(ctx, filepath.Join(attempt.pin.Root(), instanceLeaseName))
+	acquire := TryAcquireLease
+	if request.Initial.Kind == InitialUpgradePreflight {
+		acquire = tryAcquireExistingLease
+	}
+	lease, acquired, err := acquire(ctx, filepath.Join(attempt.pin.Root(), instanceLeaseName))
 	attempt.lease = lease
 	if err != nil {
 		return finishProducerFailure(attempt, err)

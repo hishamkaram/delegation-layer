@@ -38,11 +38,11 @@ func BeginOrdinaryCheckpoint(ctx context.Context, store *taskdir.Store, deps Ope
 		return ack, err
 	}
 	spec := OperationSpec{Kind: workspace.OperationCheckpoint, Subject: subject, Budget: budget, Checkpoint: &selection}
-	request, err := newWorkspaceOperationRequest(control, store, deps, "", spec)
+	request, runtime, err := newWorkspaceOperationRequest(control, store, deps, "", spec)
 	if err != nil {
 		return ack, err
 	}
-	operation, err := workspace.OpenOperation(control, store, request)
+	operation, err := openWorkspaceOperationWithRuntime(control, store, request, runtime)
 	if err != nil {
 		return ack, err
 	}
@@ -123,11 +123,11 @@ func BeginCheckpointRemoval(ctx context.Context, store *taskdir.Store, deps Oper
 // never submitted, and reports the winner's state instead.
 func registerCheckpointRemoval(ctx context.Context, store *taskdir.Store, original *workspace.Operation, deps OperationOptions, expectedHead uint64, budget time.Duration) (ack ActionAcknowledgement, resultErr error) {
 	spec := OperationSpec{Kind: workspace.OperationCheckpointRemove, Subject: checkpointRemovalSubject(original), Budget: budget}
-	request, err := newWorkspaceOperationRequest(ctx, store, deps, "", spec)
+	request, runtime, err := newWorkspaceOperationRequest(ctx, store, deps, "", spec)
 	if err != nil {
 		return ack, err
 	}
-	removal, err := workspace.OpenOperation(ctx, store, request)
+	removal, err := openWorkspaceOperationWithRuntime(ctx, store, request, runtime)
 	if err != nil {
 		return ack, err
 	}

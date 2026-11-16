@@ -174,7 +174,7 @@ func qualifiedCallerCanonicalLegacy(ctx context.Context, root, binary, role stri
 		return nil, err
 	}
 	if role == "shutdown-migration" {
-		return newPrivateMigrationShutdownClient(root, client.Binding(), privateDaemonIdentityForBinding(client.Binding()), client.options)
+		return bindRecordedPredecessorTransport(ctx, root, client.Binding(), client.options)
 	}
 	saved := client.Binding()
 	base := filepath.Join(root, privateSupervisorDirectory)

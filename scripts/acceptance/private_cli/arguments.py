@@ -121,8 +121,8 @@ def _validate_scenario_arguments(args, parser):
     elif args.scenario == EXTERNAL_NOEXEC_STATE_SCENARIO:
         _validate_noexec_state_arguments(args, parser)
     elif args.scenario == SUPERVISOR_UPGRADE_RECOVERY_SCENARIO:
-        if args.parallel_tasks != 2 or args.runtime_only or args.upgraded_source_root:
-            parser.error("supervisor-upgrade-recovery requires two tasks and the current packaged installation")
+        if args.parallel_tasks != 2 or args.runtime_only:
+            parser.error("supervisor-upgrade-recovery requires two tasks and packaged installations")
     elif args.parallel_tasks != CAPACITY_TARGET_TASKS:
         parser.error("--parallel-tasks must be exactly %d for the capacity proof" % CAPACITY_TARGET_TASKS)
 
@@ -149,7 +149,7 @@ def prepare_receipt(args, dispatch_workers, parser):
         raise RuntimeError("private CLI response destination already exists: " + str(response_directory))
     output.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
 
-    legacy_mode = (args.scenario != MODERN_CONTENTION_SCENARIO
+    legacy_mode = (args.scenario not in (MODERN_CONTENTION_SCENARIO, SUPERVISOR_UPGRADE_RECOVERY_SCENARIO)
                    and args.upgraded_source_root is not None)
     if legacy_mode and args.runtime_only:
         parser.error("--runtime-only requires the current-installation acceptance scenario")

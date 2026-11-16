@@ -7,7 +7,7 @@ func ownerInitialOperationFixture(rootID string, kind InitialOperationKind) Init
 		operation.Source = SavedBindingSource{RootID: rootID, Kind: SavedBindingTaskMetadata, OwnerID: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", BindingSHA256: ownerWireDigest}
 	case InitialRuntimeRestart:
 		operation.RestartFrom = StartupReference{Sequence: 1, Epoch: rootID, IntentSHA256: ownerWireDigest}
-	case "", InitialEnsureOwn, InitialMigrateOwn:
+	case "", InitialEnsureOwn, InitialMigrateOwn, InitialUpgradePreflight:
 	}
 	return operation
 }

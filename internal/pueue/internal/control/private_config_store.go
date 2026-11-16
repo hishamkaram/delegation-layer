@@ -17,6 +17,9 @@ import (
 )
 
 func ensurePrivateConfigContext(ctx context.Context, stateRoot string, resolution ResolutionContext, guard PrivateGenerationGuard, callbackRunner ...string) (configPath, base string, resultErr error) {
+	if err := refusePendingPrivateUpgrade(stateRoot); err != nil {
+		return "", "", err
+	}
 	base = filepath.Join(stateRoot, privateSupervisorDirectory)
 	if err := ensurePrivateBase(base); err != nil {
 		return "", "", err
@@ -593,7 +596,7 @@ func (c *Client) preparePrivateCallbackTransition(ctx context.Context, root stri
 	if err != nil {
 		return nil, err
 	}
-	recovered, started, err := c.recoverStoppedPrivateCallback(ctx, root, published, previous)
+	recovered, started, err := c.recoverPrivateCallbackPredecessor(ctx, root, published, previous)
 	if err != nil {
 		return nil, err
 	}

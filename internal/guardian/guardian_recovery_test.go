@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/hishamkaram/delegation-layer/internal/lifetime"
@@ -731,49 +732,54 @@ func TestLifetimeGuardianDoesNotAckBeforeEmptyProof(t *testing.T) {
 }
 
 func TestLifetimeGuardianFinishUsesImmutableWorkDeadline(t *testing.T) {
-	emptyEntered := make(chan struct{})
-	emptyRelease := make(chan bool, 1)
-	f := newLifetimeGuardianTestFixtureWithOptions(
-		t,
-		nil,
-		lifetime.KindProcessGroup,
-		lifetime.AssuranceCooperative,
-		nil,
-		func(scope *lifetimeGuardianTestScope) {
-			scope.blockEmptyCall = 1
-			scope.emptyEntered = emptyEntered
-			scope.emptyRelease = emptyRelease
-		},
-		func(options *Options) {
-			options.CleanupTimeout = 20 * time.Millisecond
-			options.Deadline = time.Now().Add(time.Second)
-			options.Now = time.Now
-		},
-	)
-	f.callMust(t, "hello", f.message(lifetimeMessageHello, 0, 0))
-	f.callMust(t, "begin", f.message(lifetimeMessageBegin, 1, 0))
-	f.callMust(t, "started", f.message(lifetimeMessageStarted, 1, 303))
-	finishDone := make(chan error, 1)
-	go func() { finishDone <- f.call(t, f.message(lifetimeMessageFinish, 1, 0)) }()
-	select {
-	case <-emptyEntered:
-	case <-time.After(time.Second):
-		t.Fatal("finish did not reach empty observation")
-	}
-	select {
-	case err := <-finishDone:
-		t.Fatalf("finish used the shorter cleanup fallback: %v", err)
-	case <-time.After(50 * time.Millisecond):
-	}
-	emptyRelease <- true
-	if err := <-finishDone; err != nil {
-		t.Fatalf("finish after empty proof: %v", err)
-	}
-	f.callMust(t, "close", f.message(lifetimeMessageClose, 0, 0))
-	f.worker.release()
-	if err := f.waitRun(t); err != nil {
-		t.Fatalf("run: %v", err)
-	}
+	synctest.Test(t, func(t *testing.T) {
+		start := time.Now()
+		emptyEntered := make(chan struct{})
+		emptyRelease := make(chan bool, 1)
+		f := newLifetimeGuardianTestFixtureWithOptionsAndContext(
+			t,
+			t.Context(),
+			start.Add(lifetimeGuardianScenarioBudget),
+			nil,
+			lifetime.KindProcessGroup,
+			lifetime.AssuranceCooperative,
+			nil,
+			func(scope *lifetimeGuardianTestScope) {
+				scope.blockEmptyCall = 1
+				scope.emptyEntered = emptyEntered
+				scope.emptyRelease = emptyRelease
+			},
+			func(options *Options) {
+				options.CleanupTimeout = 20 * time.Millisecond
+				options.Deadline = start.Add(time.Second)
+				options.Now = time.Now
+			},
+		)
+		f.callMust(t, "hello", f.message(lifetimeMessageHello, 0, 0))
+		f.callMust(t, "begin", f.message(lifetimeMessageBegin, 1, 0))
+		f.callMust(t, "started", f.message(lifetimeMessageStarted, 1, 303))
+		finishDone := make(chan error, 1)
+		go func() { finishDone <- f.call(t, f.message(lifetimeMessageFinish, 1, 0)) }()
+		select {
+		case <-emptyEntered:
+		case <-time.After(time.Second):
+			t.Fatal("finish did not reach empty observation")
+		}
+		select {
+		case err := <-finishDone:
+			t.Fatalf("finish used the shorter cleanup fallback: %v", err)
+		case <-time.After(50 * time.Millisecond):
+		}
+		emptyRelease <- true
+		if err := <-finishDone; err != nil {
+			t.Fatalf("finish after empty proof: %v", err)
+		}
+		f.callMust(t, "close", f.message(lifetimeMessageClose, 0, 0))
+		f.worker.release()
+		if err := f.waitRun(t); err != nil {
+			t.Fatalf("run: %v", err)
+		}
+	})
 }
 
 func TestLifetimeGuardianCloseUsesImmutableWorkDeadline(t *testing.T) {

@@ -80,11 +80,12 @@ JSON has `schema_version: 1`, `command: "doctor"`, `root`, `installation`,
 | `installation` | `scope: installation_bundle`, `verification: filesystem_metadata`, `compatibility: not_checked`; reports paths/statuses for `delegate`, `delegate_run`, `pueue`, `pueued`. |
 | Installation/role statuses | Installation: `observed`, `blocked`, `observation_incomplete`; roles: `available`, `missing`, `unusable`, `observation_incomplete`. |
 | `supervisor.binding` | `not_initialized`, `present`, `binding_absent`, or `observation_incomplete`; persisted binding observation only. Absence does not prove an existing root is unused. |
+| `supervisor.installation_binding` | Compares recorded client and daemon paths with the loaded bundle. `scope: loaded_bundle`, `verification: filesystem_metadata`; relation is `current`, `different`, `unknown`, or `not_initialized`. Each role reports selected and recorded availability separately. With both selected roles available, a different binding or missing recorded role adds `supervisor_installation_differs`; follow its `next_step` for the installed-pair handoff. This does not establish the running daemon's installation. |
 | `supervisor.liveness`, `active_work` | Always `not_checked`, `unknown`. |
 | `scheduler` | `verification: read_only`; compatibility is `absent`, `compatible`, `migration_required`, `newer_schema`, `incompatible`, or `observation_incomplete`, with its own bounded `issues`. It never creates/migrates storage or recovers a journal. Scheduler advisories do not change top-level issues or exits. |
 | `provider` | ID, executable and `static_ready`, `blocked`, or `observation_incomplete`; `verification: static_preflight`, `authentication: unknown`. |
 | Exit 0 | Requested observations complete, with no observed blocker. Does not prove runtime compatibility, authentication or task success. |
-| Exit 2 | Invalid request or reliably observed missing/unusable required bundle/provider. |
+| Exit 2 | Invalid request, reliably observed missing/unusable required bundle/provider, or observed installed-pair handoff (`supervisor_installation_differs`). Follow the issue's `next_step`. |
 | Exit 1 | Incomplete/unreliable observation, malformed persisted data or output error; takes precedence over observed blockers. |
 
 Provider issues preserve the static rejection reason: `authentication_unavailable`
@@ -297,8 +298,14 @@ promise that later sealing is impossible. Running uncertainty and cancellation
 intent alone are not readiness. The command never launches, fences, repairs,
 collects or publishes anything.
 
-Exit `0` means the any/all condition was met, `1` is typed `task_not_found` or an
-observation fault, `2` is invalid input, and `3` is watch expiry. A rejected task
+Exit `0` means the any/all condition was met. Exit `1` reports typed
+`task_not_found`, an observation fault, or
+[administrative settlement](result-handling.md#administrative-settlement), which
+stops an unmet `--all` on any settled member, or `--any` when every member is
+settled, without setting `ready`. `--any` keeps watching other pending members;
+another genuinely ready task can satisfy it. A settled member cannot satisfy
+`--all`. Exit `2` is invalid input and `3` is
+watch expiry. A rejected task
 is ready data, not a successful provider answer. Preserve per-task status and
 failure fields; apply normal result handling after waiting.
 
@@ -469,6 +476,58 @@ Missing task files and corrupt evidence are distinct; see
 for freshness, no-result states, response bounds, exit codes and recovery.
 
 ## Supervisor owner control
+
+Installation handoff uses a stable operation, separate from task execution:
+
+```sh
+delegate supervisor ensure-owner --json
+delegate supervisor ensure-owner --prepare-upgrade --json
+delegate supervisor ensure-owner --complete-upgrade OP --refresh-owner --json
+```
+
+Keep the exact root. Ordinary ensure starts/resumes a reactive drain for a
+different selected installation; a healthy current pair is reused. Proactive
+prepare precedes an installer, including same-path replacements, and requires
+its exact completion OP afterward. `--refresh-owner` alone refreshes the serving
+helper, not the daemon upgrade authorization. Read `supervisor_control.upgrade`
+(`operation_id`, `mode`, `phase`, optional `completed` and `completion_command`)
+with `state`, `next_action` and errors. A repeated completed OP is historical,
+not a fresh readiness check. Exit `0` includes prepared/helper/history responses;
+`3` is pending; `1` fault/refusal; `2` invalid input.
+
+Stop the selected root's scheduler/connector and quiesce external/custom writers,
+including aliases addressing its private endpoint from other roots, before
+maintenance. Private Drain fences participating private admissions only. Follow
+the [upgrade procedure](https://github.com/hishamkaram/delegation-layer/blob/main/docs/cli-reference.md#installation-upgrades)
+and preserve returned completion argv boundaries. Do not clear a fence, replay
+an uncertain task or infer closure from queue completion.
+Finish this handoff before another installation replacement. The same operation
+can reselect a missing candidate only before migration accepts a target; an
+unavailable accepted target remains a fault. Preserve its OP and report the
+failure without clearing records or substituting another target.
+
+### Maintenance-only settlement
+
+```sh
+delegate settle TASK_ID --prepare --json
+delegate settle TASK_ID --confirm CHALLENGE --json
+```
+
+Exactly one local task and one flag are required. Prepare is read-only and may
+observe the existing queue. Before confirm, obtain a human's approval of that
+exact task, returned challenge and maintenance-only effect. Never auto-confirm
+a real task. Confirm requires fresh, exact ended private queue and same-boot
+native absence evidence; unsupported/unknown/conflicting facts refuse.
+
+`settlement` separates `administrative_state`, `native_execution`, `permission`,
+`challenge`, optional `confirmed_at` and `held_claims`. The immutable permission
+allows supervisor maintenance only; scheduler/resource/session/workspace/custody/
+deletion claims stay held. No result, native closure, retry or continuation is
+created. A matching confirm retry returns the same winner. Follow
+[result handling](result-handling.md#administrative-settlement) for status,
+collection and wait decisions.
+
+### Serving owner release
 
 ```sh
 delegate supervisor stop-owner --json

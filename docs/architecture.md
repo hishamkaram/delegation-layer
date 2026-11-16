@@ -381,6 +381,62 @@ requires its recorded authorization; custom or ambiguous workers are not silentl
 rewritten. Public recovery instructions live in
 [result handling](../skills/agent-integration/references/result-handling.md).
 
+Private generation completion and inspection-edge preparation have separate
+owners. Shared admission and continuation refuse an unprepared inspection edge.
+Only explicit migration may prepare the selected canonical target after reading
+its current queue and checking root-wide maintenance quiescence under bootstrap
+EX. A stopped published current daemon may restart normally for that observation;
+the completed private history remains unchanged. Unaccepted inspection proposals
+cannot replace a connected completed private generation.
+
+Installation handoff uses a `drain_v1` variant in that same bootstrap journal.
+It owns the exact root and predecessor, stable operation identity, preparation
+mode, completion authorization and candidate installed pair. Committing it
+under bootstrap EX is the admission cutoff. Existing workers retain their
+original records and lifetime owners; new submission and staged replay are
+fenced. Saved-task reads and exact authorized cancellation have a separate,
+constrained predecessor-control path. Generic startup, repair and identity
+publication cannot erase the drain. Historical strict readers reject the new
+variant rather than clearing it.
+
+Before the migration journal accepts a target, the same authorized operation
+may reselect a missing candidate. The guarded writer revalidates the complete
+predecessor, configuration, history and both executable roles; other read or
+installation faults refuse. A published migration target or completed operation
+can never be retargeted by this exception.
+
+This cutoff covers participating private admissions. External/custom producers,
+including another configuration or root addressing the private endpoint, do not
+hold that lease. Operator maintenance requires those writers and their in-flight
+commands to be quiescent; root-wide assessment is a dated observation, not a
+global writer exclusion or an OS sandbox.
+
+The existing migration journal owns shutdown and successor launch progress.
+Its upgrade variant links to the drain, records accepted Start and the native
+birth captured before reaping, and requires predecessor Wait settlement before
+publication. A live custodian's actual Wait must complete. Native absence is a
+fallback only after proving no live custodian can hold that Wait; endpoint loss
+alone proves neither. Even an equal installed pair requires a fresh daemon generation.
+Such same-pair events remain completion history without becoming installation
+lineage edges. Repeating a completed operation reads its original winner;
+an uncertain Start or birth cannot authorize another launch. This adds no task
+engine, executable-content identity check or per-release task-history rewrite.
+If a crash leaves accepted Start without recorded birth, the handoff can remain
+fenced. Preserve its records and report the uncertainty; this protocol provides
+no forced reset that guesses whether a daemon launched.
+
+For an eligible same-boot cooperative task with an ended private queue row but
+missing closure proof, taskdir owns one immutable `operator-disposition.json`.
+It binds exact task/root/receipt/native-registration evidence and records the
+human's `allow_supervisor_maintenance` permission. Preparation is stateless;
+confirmation revalidates under existing bootstrap and task-owner exclusions.
+Only maintenance policy consumes this permission, with fresh canonical queue
+generation mapping through completed migration history. It never changes
+generic lifetime closure, accepted outcomes or resource/scheduler/session/
+workspace/custody/deletion eligibility. Status, collection and wait expose the
+administrative stop separately; genuine native terminal evidence takes
+precedence. Older readers ignore the sidecar conservatively.
+
 The ordinary private group has no fixed task-count cap: the caller chooses
 fan-out, subject to new-task pressure admission. Required provider inspections
 and model discovery have their own single-slot inspection group and finite

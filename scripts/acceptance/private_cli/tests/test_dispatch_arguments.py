@@ -1,13 +1,15 @@
 """Implementation methods for PrivateDispatchArgumentsTests; collected once by the acceptance package discovery."""
 
 from contextlib import ExitStack, redirect_stderr, redirect_stdout
+from copy import deepcopy
 import io
 import json
 from pathlib import Path
+from types import SimpleNamespace
 import sys
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import create_autospec, patch
 import os
 import pathlib
 import shutil
@@ -23,6 +25,7 @@ from scripts.acceptance.private_cli import errors as private_cli_errors
 from scripts.acceptance.private_cli.handoff import journal as private_cli_handoff_journal
 from scripts.acceptance.private_cli.handoff import policy as private_cli_handoff_policy
 from scripts.acceptance.private_cli.handoff import supervisor as private_cli_handoff_supervisor
+from scripts.acceptance.private_cli.handoff import workflow as private_cli_handoff_workflow
 from scripts.acceptance.private_cli import leases as private_cli_leases
 from scripts.acceptance.supervisor import config_policy as supervisor_config_policy
 
@@ -77,6 +80,8 @@ class PrivateDispatchArgumentsTests(unittest.TestCase):
         temporary = tempfile.TemporaryDirectory(prefix="delegate-dispatch-args-")
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name).resolve(strict=True)
+        self.external_task_id = "b" * 32
+        self.private_task_id = "c" * 32
         self.enterContext(patch.object(installation, "build_candidate_pair", side_effect=materialize_candidate_pair))
         self.enterContext(patch.object(installation, "install_supervisor_pair", side_effect=materialize_supervisor_pair))
         self.sources = {}
@@ -99,7 +104,12 @@ class PrivateDispatchArgumentsTests(unittest.TestCase):
             "command": "supervisor", "root_id": root_id,
             "supervisor_control": {
                 "action": "status", "state": "migrated",
-                "migration_phase": "complete", "next_action": "none",
+                "migration_phase": "complete", "next_action": "human_review_task",
+                "migration_readiness": "blocked", "active_work": "none",
+                "first_blocker": {
+                    "kind": "task", "task_id": self.external_task_id,
+                    "reason_code": "runtime_closure_unproven", "next_action": "human_review_task",
+                },
             },
         }
         return private_config, status
@@ -117,30 +127,244 @@ class PrivateDispatchArgumentsTests(unittest.TestCase):
                 }
                 evidence = private_cli_handoff_journal.read_external_inspection_handoff_journal(
                     self.root, private_config, supervisor_status=observed,
+                    expected_external_task_id=self.external_task_id,
                 )
                 self.assertEqual(evidence["successor"]["supervisor"]["config_path"], str(private_config))
                 self.assertEqual(evidence["canonical_status"], observed["supervisor_control"])
 
+    def private_handoff_status(self, status, queue_state="queued"):
+        observed = deepcopy(status)
+        observed["supervisor_control"].update({
+            "active_work": "present", "next_action": "wait_for_legacy_work",
+            "first_blocker": {
+                "kind": "queue", "task_id": self.private_task_id, "queue_state": queue_state,
+                "reason_code": "queue_work_present", "next_action": "wait_for_legacy_work",
+            },
+        })
+        return observed
+
+    def test_handoff_journal_accepts_completed_routing_with_exact_live_external_task(self):
+        private_config, status = self.handoff_journal()
+        status.update({"failure": None, "error": None})
+        before = deepcopy(status)
+        evidence = private_cli_handoff_journal.read_external_inspection_handoff_journal(
+            self.root, private_config, supervisor_status=status,
+            expected_external_task_id=self.external_task_id,
+        )
+        self.assertEqual(evidence["canonical_status"], status["supervisor_control"])
+        self.assertEqual(evidence["successor"]["supervisor"]["config_path"], str(private_config))
+        self.assertEqual(status, before)
+
+    def test_handoff_journal_accepts_only_known_active_private_queue_states(self):
+        private_config, status = self.handoff_journal()
+        for queue_state in ("queued", "stashed", "running"):
+            with self.subTest(queue_state=queue_state):
+                observed = self.private_handoff_status(status, queue_state)
+                evidence = private_cli_handoff_journal.read_external_inspection_handoff_journal(
+                    self.root, private_config, supervisor_status=observed,
+                    expected_external_task_id=self.external_task_id,
+                    expected_private_task_id=self.private_task_id,
+                )
+                self.assertEqual(evidence["canonical_status"], observed["supervisor_control"])
+
+    def test_handoff_journal_rejects_wrong_or_missing_maintenance_projection(self):
+        private_config, status = self.handoff_journal()
+        for private in (False, True):
+            valid = self.private_handoff_status(status) if private else status
+            invalid_projections = []
+            for field, values in {
+                "migration_readiness": (None, "clear", "unknown", "fault"),
+                "active_work": (None, "unknown", "none" if private else "present"),
+                "next_action": (None, "none", "stop_and_report", "run_supervisor_migrate"),
+                "first_blocker": (None, [], {}, "task"),
+            }.items():
+                for value in values:
+                    changed = deepcopy(valid)
+                    changed["supervisor_control"][field] = value
+                    invalid_projections.append(changed)
+                missing = deepcopy(valid)
+                del missing["supervisor_control"][field]
+                invalid_projections.append(missing)
+            for field, values in {
+                "kind": ("inspection", "task" if private else "queue"),
+                "task_id": ("d" * 32, self.external_task_id if private else self.private_task_id, None, []),
+                "reason_code": (None, "maintenance_evidence_fault", "runtime_evidence_unreadable",
+                                "runtime_closure_unproven" if private else "queue_work_present"),
+                "next_action": (None, "none", "stop_and_report",
+                                "human_review_task" if private else "wait_for_legacy_work"),
+            }.items():
+                for value in values:
+                    changed = deepcopy(valid)
+                    changed["supervisor_control"]["first_blocker"][field] = value
+                    invalid_projections.append(changed)
+                missing = deepcopy(valid)
+                del missing["supervisor_control"]["first_blocker"][field]
+                invalid_projections.append(missing)
+            for value in (None, "d" * 32):
+                changed = deepcopy(valid)
+                changed["supervisor_control"]["first_blocker"]["operation_id"] = value
+                invalid_projections.append(changed)
+            if not private:
+                changed = deepcopy(valid)
+                changed["supervisor_control"]["first_blocker"]["queue_state"] = "running"
+                invalid_projections.append(changed)
+            for observed in invalid_projections:
+                with self.subTest(private=private, observed=observed):
+                    with self.assertRaisesRegex(RuntimeError, "handoff maintenance"):
+                        private_cli_handoff_journal.read_external_inspection_handoff_journal(
+                            self.root, private_config, supervisor_status=observed,
+                            expected_external_task_id=self.external_task_id,
+                            expected_private_task_id=self.private_task_id if private else None,
+                        )
+
+    def test_handoff_journal_rejects_inactive_or_malformed_private_queue_state(self):
+        private_config, status = self.handoff_journal()
+        for queue_state in (None, "ended", "unknown", "Running", "Queued", "Stashed", "", [], {}):
+            with self.subTest(queue_state=queue_state):
+                with self.assertRaisesRegex(RuntimeError, "private queue state is not active"):
+                    private_cli_handoff_journal.read_external_inspection_handoff_journal(
+                        self.root, private_config, supervisor_status=self.private_handoff_status(status, queue_state),
+                        expected_external_task_id=self.external_task_id,
+                        expected_private_task_id=self.private_task_id,
+                    )
+        missing = self.private_handoff_status(status)
+        del missing["supervisor_control"]["first_blocker"]["queue_state"]
+        with self.assertRaisesRegex(RuntimeError, "private queue state is not active"):
+            private_cli_handoff_journal.read_external_inspection_handoff_journal(
+                self.root, private_config, supervisor_status=missing,
+                expected_external_task_id=self.external_task_id, expected_private_task_id=self.private_task_id,
+            )
+
+    def test_handoff_journal_rejects_a_blocker_from_the_wrong_fixture_case(self):
+        private_config, status = self.handoff_journal()
+        for observed, expected_private in ((status, self.private_task_id), (self.private_handoff_status(status), None)):
+            with self.subTest(expected_private=expected_private):
+                with self.assertRaisesRegex(RuntimeError, "handoff maintenance|private queue state is not active"):
+                    private_cli_handoff_journal.read_external_inspection_handoff_journal(
+                        self.root, private_config, supervisor_status=observed,
+                        expected_external_task_id=self.external_task_id, expected_private_task_id=expected_private,
+                    )
+
+    def test_handoff_journal_rejects_invalid_expected_task_identities(self):
+        private_config, status = self.handoff_journal()
+        for field in ("expected_external_task_id", "expected_private_task_id"):
+            invalid_ids = ["", "b" * 31, "b" * 33, "B" * 32, "z" * 32, [], {}, 1]
+            invalid_ids.append(None if field == "expected_external_task_id" else self.external_task_id)
+            for invalid_id in invalid_ids:
+                with self.subTest(field=field, invalid_id=invalid_id):
+                    identities = {"expected_external_task_id": self.external_task_id}
+                    identities[field] = invalid_id
+                    # Dispatch responses are decoded JSON; malformed values must fail this boundary too.
+                    decoded_identities = json.loads(json.dumps(identities))
+                    with self.assertRaisesRegex(RuntimeError, "expected .* task identity is invalid"):
+                        private_cli_handoff_journal.read_external_inspection_handoff_journal(
+                            self.root, private_config, supervisor_status=status, **decoded_identities,
+                        )
+
     def test_handoff_journal_rejects_incomplete_or_unrelated_canonical_status(self):
         private_config, status = self.handoff_journal()
-        invalid_statuses = [None, {}, {**status, "root_id": "b" * 32}]
+        invalid_statuses = [
+            None, {}, [], {**status, "root_id": "d" * 32}, {**status, "command": "models"},
+            {**status, "failure": {"code": "evidence_fault"}}, {**status, "error": "unavailable"},
+        ]
+        for field in ("failure", "error"):
+            for value in ({}, [], "", 0, False):
+                invalid_statuses.append({**status, field: value})
         for field, value in (
                 ("action", "migrate"), ("state", "external"),
-                ("migration_phase", "pending"), ("next_action", "run_supervisor_migrate")):
+                ("migration_phase", "pending"), ("state", "ready"), ("migration_phase", "adopted"),
+                ("next_action", "run_supervisor_migrate"), ("supervisor_control", None)):
+            if field == "supervisor_control":
+                invalid_statuses.append({**status, field: value})
+                continue
             invalid_statuses.append({
                 **status, "supervisor_control": {**status["supervisor_control"], field: value},
             })
         for invalid in invalid_statuses:
             with self.subTest(status=invalid):
-                with self.assertRaisesRegex(RuntimeError, "canonical supervisor status|CLI did not validate"):
+                with self.assertRaisesRegex(RuntimeError, "canonical supervisor status|CLI did not validate|handoff maintenance"):
                     private_cli_handoff_journal.read_external_inspection_handoff_journal(
                         self.root, private_config, supervisor_status=invalid,
+                        expected_external_task_id=self.external_task_id,
                     )
         (self.root / "inspection-group" / "migration-complete.json").unlink()
         with self.assertRaisesRegex(RuntimeError, "completion marker is missing"):
             private_cli_handoff_journal.read_external_inspection_handoff_journal(
                 self.root, private_config, supervisor_status=status,
+                expected_external_task_id=self.external_task_id,
             )
+
+    def test_handoff_journal_rejects_invalid_records_and_successor_binding(self):
+        private_config, status = self.handoff_journal()
+        journal = self.root / "inspection-group"
+        request_path = journal / "request.json"
+        migration_path = journal / "migration-complete.json"
+        request = json.loads(request_path.read_text())
+        migration = json.loads(migration_path.read_text())
+        faults = (
+            (request_path, [], "journal request is invalid"),
+            (migration_path, [], "completion marker is invalid"),
+            (migration_path, {}, "omitted its successor"),
+            (migration_path, {"successor": []}, "omitted its successor"),
+            (request_path, {**request, "supervisor": None}, "omitted supervisor bindings"),
+            (migration_path, {"successor": {"supervisor": None}}, "omitted supervisor bindings"),
+            (request_path, {**request, "supervisor": {"config_path": str(private_config)}}, "already private"),
+            (migration_path, {"successor": {"supervisor": {"config_path": "/unrelated/pueue.yml"}}},
+             "not the private state-root supervisor"),
+        )
+        for path, value, message in faults:
+            with self.subTest(record=path.name, value=value):
+                request_path.write_text(json.dumps(request))
+                migration_path.write_text(json.dumps(migration))
+                path.write_text(json.dumps(value))
+                with self.assertRaisesRegex(RuntimeError, message):
+                    private_cli_handoff_journal.read_external_inspection_handoff_journal(
+                        self.root, private_config, supervisor_status=status,
+                        expected_external_task_id=self.external_task_id,
+                    )
+        for path, message in ((request_path, "journal request is missing"),
+                              (migration_path, "completion marker is missing")):
+            original = json.dumps(request if path == request_path else migration)
+            for symlink in (False, True):
+                with self.subTest(record=path.name, symlink=symlink):
+                    request_path.write_text(json.dumps(request))
+                    migration_path.write_text(json.dumps(migration))
+                    path.unlink()
+                    if symlink:
+                        target = self.root / (path.name + ".target")
+                        target.write_text(original)
+                        path.symlink_to(target)
+                    with self.assertRaisesRegex(RuntimeError, message):
+                        private_cli_handoff_journal.read_external_inspection_handoff_journal(
+                            self.root, private_config, supervisor_status=status,
+                            expected_external_task_id=self.external_task_id,
+                        )
+                    if symlink:
+                        path.unlink()
+                    path.write_text(original)
+
+    def test_handoff_workflow_passes_dispatch_owned_task_identities(self):
+        task = SimpleNamespace(
+            task_id=self.external_task_id, snapshot_name="before.json", wrapper_calls=[], label="external", row={},
+        )
+        case = create_autospec(private_cli_handoff_workflow.HandoffCase, instance=True)
+        case.state = self.root
+        case.client = self.root
+        for response in (None, {"task_id": self.private_task_id}):
+            with self.subTest(automatic_dispatch=response is not None):
+                with patch.object(private_cli_handoff_workflow, "_initialize_handoff_case",
+                                  return_value=(None, None, {}, lambda: None)), \
+                        patch.object(private_cli_handoff_workflow, "_start_external_task", return_value=(task, 1)), \
+                        patch.object(private_cli_handoff_workflow, "_trigger_private_handoff", return_value=response), \
+                        patch.object(private_cli_handoff_workflow, "_observe_handoff_transition") as observe, \
+                        patch.object(private_cli_handoff_workflow, "assert_state_supervisor_pair",
+                                     side_effect=RuntimeError("transition observed")), \
+                        patch.object(private_cli_handoff_workflow, "_finalize_handoff_case"):
+                    with self.assertRaisesRegex(RuntimeError, "transition observed"):
+                        private_cli_handoff_workflow._run_handoff_case(case)
+                self.assertEqual(observe.call_args.kwargs["expected_external_task_id"], self.external_task_id)
+                self.assertEqual(observe.call_args.kwargs["expected_private_task_id"],
+                                 self.private_task_id if response is not None else None)
 
     def arguments(self, total, workers, output=None, scenario="capacity"):
         output = output or (self.root / "receipt.json")

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 
+	"github.com/hishamkaram/delegation-layer/internal/supervisor"
 	"github.com/hishamkaram/delegation-layer/internal/supervisor/installation"
 
 	"github.com/hishamkaram/delegation-layer/internal/inspection"
@@ -43,7 +44,7 @@ func prepareInspectionMigrationSupervisorWithLock(ctx context.Context, store *ta
 		}
 	} else {
 		var selection preparedTargetSelection
-		recorded, selection, err = selectPreparedTargetBeforePrivateJournalWithLock(store.Root, proposals)
+		recorded, selection, err = selectInspectionTargetBeforePrivateJournal(ctx, store, proposals)
 		if err != nil {
 			return nil, err
 		}
@@ -56,6 +57,42 @@ func prepareInspectionMigrationSupervisorWithLock(ctx context.Context, store *ta
 		return nil, &pueue.PrivateRecoveryError{ReasonCode: "transition_pending", Err: errors.Join(err, pueue.ErrPrivateSupervisorMigrationRequired)}
 	}
 	return client, nil
+}
+
+// A completed private generation remains the authority while its inspection
+// edge is still stale. An unaccepted proposal cannot replace that exact target.
+func selectInspectionTargetBeforePrivateJournal(ctx context.Context, store *taskdir.Store, proposals []task.SupervisorRef) (task.SupervisorRef, preparedTargetSelection, error) {
+	published, found, err := pueue.ReadPrivateSupervisorBinding(store.Root)
+	if err != nil {
+		return task.SupervisorRef{}, preparedTargetUndecided, err
+	}
+	if !found {
+		return selectPreparedTargetBeforePrivateJournalWithLock(store.Root, proposals)
+	}
+	complete, err := pueue.PrivateSupervisorMigrationComplete(store.Root, published)
+	if err != nil {
+		return task.SupervisorRef{}, preparedTargetUndecided, err
+	}
+	if !complete {
+		// Existing recovery owns alias retirement and unsettled publication.
+		return selectPreparedTargetBeforePrivateJournalWithLock(store.Root, proposals)
+	}
+	head, _, err := inspection.ReadGroupHead(ctx, store)
+	if err != nil {
+		return task.SupervisorRef{}, preparedTargetUndecided, err
+	}
+	if !pueue.IsPrivateConfig(store.Root, head.Supervisor.ConfigPath) {
+		// External handoff has its own authority and prepared-target policy.
+		return selectPreparedTargetBeforePrivateJournalWithLock(store.Root, proposals)
+	}
+	generation, err := supervisor.ResolveGenerationWithLock(ctx, store, published)
+	if err != nil {
+		return task.SupervisorRef{}, preparedTargetUndecided, err
+	}
+	if generation.PrivateAuthority && generation.GroupCleanupDue {
+		return generation.Active, preparedTargetRecorded, nil
+	}
+	return selectPreparedTargetBeforePrivateJournalWithLock(store.Root, proposals)
 }
 
 func selectPreparedPrivateMigrationTarget(root string, proposals []task.SupervisorRef) (task.SupervisorRef, error) {

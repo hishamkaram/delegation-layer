@@ -33,6 +33,17 @@ class FixtureSourceArgumentsTests(unittest.TestCase):
         selected = self.private_args(("--source-root", "/baseline", "--upgraded-source-root", "/candidate"))
         self.assertEqual((selected.source_root, selected.upgraded_source_root), (Path("/baseline"), Path("/candidate")))
 
+    def test_upgrade_recovery_uses_two_sources_without_selecting_legacy_layout(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            selected = self.private_args(("--scenario", "supervisor-upgrade-recovery", "--parallel-tasks", "2",
+                                          "--source-root", "/released-source", "--upgraded-source-root", "/candidate"))
+            selected.output = Path(temporary) / "receipt.json"
+            legacy, _, _, _, receipt = arguments.prepare_receipt(selected, 2, None)
+            self.assertFalse(legacy, "released installed-path code still uses the Cellar-like layout")
+            self.assertEqual((selected.source_root, selected.upgraded_source_root),
+                             (Path("/released-source"), Path("/candidate")))
+            self.assertFalse(receipt.output.exists())
+
     def test_retired_private_inputs_refuse_instead_of_building_unrelated_current_source(self):
         for flag in ("--delegate", "--runner", "--upgraded-delegate", "--upgraded-runner"):
             errors = io.StringIO()

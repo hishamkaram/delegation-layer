@@ -15,6 +15,9 @@ func writeHumanResponse(w io.Writer, response Response) error {
 		writeHumanSummary(&output, response)
 	}
 	writeHumanWait(&output, response.Wait)
+	if settled := response.Settlement; settled != nil {
+		fmt.Fprintf(&output, "settlement administrative_state=%s native_execution=%s permission=%s challenge=%s confirmed_at=%s held_claims=%s\n", settled.AdministrativeState, settled.NativeExecution, settled.Permission, settled.Challenge, settled.ConfirmedAt, strings.Join(settled.HeldClaims, ","))
+	}
 	writeHumanScheduleReliability(&output, response)
 	if response.LastProviderOutputAt != "" {
 		fmt.Fprintf(&output, "last_provider_output_at=%s source=capture_metadata\n", response.LastProviderOutputAt)
@@ -61,10 +64,31 @@ func writeHumanSupervisor(output *strings.Builder, control *SupervisorControlRes
 		return
 	}
 	fmt.Fprintf(output, "supervisor action=%s state=%s legacy_reachability=%s active_work=%s next_action=%s", control.Action, control.State, control.LegacyReachability, control.ActiveWork, control.NextAction)
+	if control.MigrationReadiness != "" {
+		fmt.Fprintf(output, " migration_readiness=%s", control.MigrationReadiness)
+	}
+	if control.ObservedAt != "" {
+		fmt.Fprintf(output, " observed_at=%s", control.ObservedAt)
+	}
+	if control.DiagnosticSnapshotAt != "" {
+		fmt.Fprintf(output, " diagnostic_snapshot_at=%s", control.DiagnosticSnapshotAt)
+	}
 	if control.MigrationPhase != "" {
 		fmt.Fprintf(output, " migration_phase=%s", control.MigrationPhase)
 	}
 	output.WriteByte('\n')
+	if binding := control.InstallationBinding; binding != nil {
+		fmt.Fprintf(output, "installation_binding scope=%s verification=%s relation=%s client_selected=%s client_recorded=%s daemon_selected=%s daemon_recorded=%s\n", binding.Scope, binding.Verification, binding.Relation, binding.Client.SelectedAvailability, binding.Client.RecordedAvailability, binding.Daemon.SelectedAvailability, binding.Daemon.RecordedAvailability)
+	}
+	if blocker := control.FirstBlocker; blocker != nil {
+		fmt.Fprintf(output, "first_blocker kind=%s task_id=%s operation_id=%s queue_state=%s reason_code=%s next_action=%s\n", blocker.Kind, blocker.TaskID, blocker.OperationID, blocker.QueueState, blocker.ReasonCode, blocker.NextAction)
+	}
+	if upgrade := control.Upgrade; upgrade != nil {
+		fmt.Fprintf(output, "upgrade operation_id=%s mode=%s phase=%s completed=%t\n", upgrade.OperationID, upgrade.Mode, upgrade.Phase, upgrade.Completed)
+		if len(upgrade.CompletionCommand) > 0 {
+			fmt.Fprintf(output, "completion_command=%q\n", upgrade.CompletionCommand)
+		}
+	}
 	if restart := control.RuntimeRestart; restart != nil {
 		fmt.Fprintf(output, "runtime_restart from_startup=%s", restart.FromStartup)
 		if restart.Phase != "" {

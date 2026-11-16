@@ -73,7 +73,7 @@ func TestManualMigrationReportUsesCanonicalPublicProjection(t *testing.T) {
 		{"private idle", supervisorMigrationState{noInspectionGroup: true, activeWork: "none"}, nil, `{"state":"migrated","legacy":"not_present","active":"none"}`},
 		{"private active", supervisorMigrationState{noInspectionGroup: true, activeWork: "present"}, nil, `{"state":"migrated","legacy":"not_present","active":"present"}`},
 		{"recovered group", supervisorMigrationState{}, nil, `{"state":"migrated","legacy":"recovered","active":"none"}`},
-		{"busy", supervisorMigrationState{}, pueue.ErrPrivateSupervisorMigrationBusy, `{"state":"blocked","legacy":"unknown","active":"present"}`},
+		{"busy without queue observation", supervisorMigrationState{}, pueue.ErrPrivateSupervisorMigrationBusy, `{"state":"unavailable","legacy":"unknown","active":"unknown"}`},
 		{"IO", supervisorMigrationState{}, os.ErrPermission, `{"state":"unavailable","legacy":"unknown","active":"unknown"}`},
 	} {
 		t.Run(fixture.name, func(t *testing.T) {

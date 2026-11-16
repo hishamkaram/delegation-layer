@@ -92,6 +92,7 @@ func TestExplicitMigrationOwnsPublishedConfigDrift(t *testing.T) {
 	if err := os.WriteFile(fixture.statusPath, []byte(drained), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	closeHistoricalMigrationGhostTaskData(t, fixture)
 	migrated := supervisorMigrate(fixture.root, deps, newSupervisorTestResponse())
 	if migrated.code != 0 || migrated.err != nil || migrated.response.SupervisorControl.State != "migrated" {
 		t.Fatalf("drained config-drift migration: code=%d control=%+v err=%v", migrated.code, migrated.response.SupervisorControl, migrated.err)

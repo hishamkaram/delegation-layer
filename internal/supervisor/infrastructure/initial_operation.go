@@ -14,6 +14,7 @@ const (
 	InitialPrepareContinuation InitialOperationKind = "prepare-continuation"
 	InitialMigrateOwn          InitialOperationKind = "migrate-own"
 	InitialRuntimeRestart      InitialOperationKind = "runtime-restart"
+	InitialUpgradePreflight    InitialOperationKind = "upgrade-preflight"
 )
 
 // InitialOperation is immutable purpose and subject data owned by the accepted
@@ -40,7 +41,7 @@ func (o InitialOperation) validateSubject() error {
 		return ErrIdentity
 	}
 	switch o.Kind {
-	case "", InitialEnsureOwn, InitialMigrateOwn:
+	case "", InitialEnsureOwn, InitialMigrateOwn, InitialUpgradePreflight:
 		if o.Source != (SavedBindingSource{}) {
 			return fmt.Errorf("%w: initial operation has an unexpected subject", ErrIdentity)
 		}
@@ -80,6 +81,15 @@ func (o *InitialOperation) UnmarshalJSON(data []byte) error {
 	}
 	if decoded.Kind == "" {
 		return fmt.Errorf("%w: present initial operation requires a kind", ErrIdentity)
+	}
+	if decoded.Kind == InitialUpgradePreflight {
+		// This purpose carries no subject, including an explicitly supplied zero.
+		var passive struct {
+			Kind InitialOperationKind `json:"kind"`
+		}
+		if err := task.DecodeStrict(data, &passive); err != nil {
+			return err
+		}
 	}
 	operation := InitialOperation(decoded)
 	if err := operation.validateSubject(); err != nil {

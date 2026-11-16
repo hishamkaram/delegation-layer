@@ -82,6 +82,9 @@ type ResidentCleanupCompletion interface {
 // Failed resource cleanup must retain actual owners in an error node implementing
 // ResidentCleanupCompletion. The server stops admission and retains every such
 // fault through disposal; neither that marker nor a reply certifies closure.
+// A preflight birth opens only metadata. Any later independently authorized
+// preparation, including fresh v4 work, must establish normal filesystem support
+// before its effects; the passive birth supplies no such assurance.
 type EntryHost interface {
 	ValidateRunner(context.Context, string, string, *debug.BuildInfo) error
 	ValidateEstablishment(context.Context, *taskdir.Store, InitialOperation) error

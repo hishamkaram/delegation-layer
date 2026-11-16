@@ -30,6 +30,12 @@ func applyTaskObservation(response *Response, observed tasklifecycle.Observation
 		response.Raw = observed.Raw
 	}
 	applyContinuationOffer(response, root, observed.Continuation)
+	if record := observed.OperatorDisposition; record != nil && response.Outcome == nil {
+		response.Settlement = settlementResponse(record.Challenge, record)
+		response.Status, response.Liveness = "administratively_settled", task.LivenessUndetermined.String()
+		response.Pending, response.Continuation = nil, nil
+		response.Failure = &DispatchFailureResponse{Code: "administrative_settlement", Stage: response.Command, NextAction: "stop_and_report"}
+	}
 }
 
 func applyContinuationOffer(response *Response, root string, offer *tasklifecycle.ContinuationOffer) {

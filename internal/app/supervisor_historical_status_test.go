@@ -31,12 +31,14 @@ func TestPublicSupervisorStatusReportsHistoricalReadiness(t *testing.T) {
 func runHistoricalStatusReadinessScenario(t *testing.T, group, missing bool) {
 	t.Helper()
 	fixture := newHistoricalInstallationMigrationFixture(t, missing)
+	prepareClosedHistoricalStatusFixture(t, fixture)
 	if group {
 		writeSupervisorGenerationTestGroup(t, fixture.store, fixture.predecessor)
 	}
 	deps := fixture.dependencies()
 	ready := supervisorStatus(fixture.root, deps, newSupervisorCommandResponse("status"))
-	assertReadyHistoricalSupervisorStatus(t, ready, "none")
+	// A compatible historical daemon remains usable; installation drift is advisory.
+	assertReadyHistoricalSupervisorStatus(t, ready, "run_supervisor_ensure_owner")
 	stopHistoricalInstallationPredecessor(t, fixture)
 	configPath := pueue.PrivateConfigPath(fixture.root)
 	configBefore := readSupervisorProbeTestFile(t, configPath)
@@ -199,6 +201,7 @@ func assertHistoricalStatusPhaseDispatch(t *testing.T, fixture *historicalSuperv
 func TestHistoricalSupervisorStatusObservesDriftedSavedEndpoint(t *testing.T) {
 	t.Parallel()
 	fixture := newHistoricalInstallationMigrationFixture(t, false)
+	prepareClosedHistoricalStatusFixture(t, fixture)
 	configPath := pueue.PrivateConfigPath(fixture.root)
 	original := prepareHistoricalStatusEndpointDrift(t, fixture)
 	drifted := readSupervisorProbeTestFile(t, configPath)

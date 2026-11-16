@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/hishamkaram/delegation-layer/internal/guardian"
 	"github.com/hishamkaram/delegation-layer/internal/inspection"
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
 	"github.com/hishamkaram/delegation-layer/internal/supervisor"
@@ -287,3 +288,35 @@ func TestInfrastructurePreparationOutcomeKeepsConditionSeparate(t *testing.T) {
 type opaquePreparationFixtureError []string
 
 func (opaquePreparationFixtureError) Error() string { return "opaque fixture failure" }
+
+func TestInspectionProofPendingUsesExistingBusyWireCause(t *testing.T) {
+	pending := errors.Join(inspection.ErrGroupMigrationBusy, guardian.ErrProofPending)
+	failure := (Host{}).ClassifyPreparation(pending)
+	if failure.Causes != infrastructure.PreparationCauseInspectionMigrationBusy || failure.IndependentFault {
+		t.Fatalf("proof pending gained a fault: %+v", failure)
+	}
+	data, err := task.MarshalCanonical(failure)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded infrastructure.PreparationFailure
+	if err = task.DecodeStrict(data, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	projected := infrastructurePreparationFailureError(decoded)
+	if !errors.Is(projected, inspection.ErrGroupMigrationBusy) || errors.Is(projected, infrastructure.ErrOwnerRequest) || errors.Is(projected, guardian.ErrProofPending) {
+		t.Fatalf("busy wire identity lost or fabricated proof pending: %v", projected)
+	}
+	mixed := (Host{}).ClassifyPreparation(errors.Join(pending, os.ErrPermission))
+	if !mixed.IndependentFault || mixed.Causes != failure.Causes {
+		t.Fatalf("proof pending hid storage failure: %+v", mixed)
+	}
+}
+
+func TestInspectionBusyWireDoesNotFabricateProofPending(t *testing.T) {
+	failure := (Host{}).ClassifyPreparation(inspection.ErrGroupMigrationBusy)
+	projected := infrastructurePreparationFailureError(failure)
+	if !errors.Is(projected, inspection.ErrGroupMigrationBusy) || errors.Is(projected, guardian.ErrProofPending) {
+		t.Fatalf("wire manufactured guardian observation: %v", projected)
+	}
+}

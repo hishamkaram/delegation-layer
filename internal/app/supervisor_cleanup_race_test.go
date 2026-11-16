@@ -5,11 +5,13 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	admissioncore "github.com/hishamkaram/delegation-layer/internal/admission"
 
 	admissionfixture "github.com/hishamkaram/delegation-layer/internal/admission/testsupport"
 
+	"github.com/hishamkaram/delegation-layer/internal/guardian"
 	"github.com/hishamkaram/delegation-layer/internal/inspection"
 
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
@@ -62,7 +64,7 @@ func assertFailedManagedInspectionWithoutCompletionAuthorized(t *testing.T, migr
 	store, operation, job := newCleanupInspectionTestOperationWithOwnership(
 		t, inspection.ResultUnavailable, false, false, task.RunnerOwnershipManaged,
 	)
-	completeInspectionPollTestLifetime(t, operation, task.LifetimeTerminationCompleted)
+	completeInspectionMaintenanceFixture(t, store, operation, migrate)
 	operationDirectory := filepath.Join(store.Root, "inspections", operation.Request().TaskID)
 	for _, record := range []string{"completion.json", "result.json"} {
 		if err := os.Remove(filepath.Join(operationDirectory, record)); err != nil {
@@ -103,7 +105,7 @@ func TestManagedInspectionCleanupUsesGuardianEvidenceOverQueueResult(t *testing.
 			store, operation, job := newCleanupInspectionTestOperationWithOwnership(
 				t, inspection.ResultEligible, false, false, task.RunnerOwnershipManaged,
 			)
-			completeInspectionPollTestLifetime(t, operation, task.LifetimeTerminationCompleted)
+			completeInspectionMaintenanceFixture(t, store, operation, migrate)
 			binding := operation.Request().Binding.Supervisor
 			if migrate {
 				if err := authorizePrivateMigrationQueue(t.Context(), store.Root, binding, []pueue.Job{job}); err != nil {
@@ -191,6 +193,53 @@ func newCleanupInspectionTestOperationWithOwnership(t *testing.T, reason inspect
 	return admissionfixture.NewCleanupInspectionTestOperationWithOwnership(t, reason, succeeded, concurrent, ownership)
 }
 
+// initializePrivateMigrationTestLifecycle supplies the existing generation
+// lease boundary for data-only migration fixtures; it starts no supervisor.
+func initializePrivateMigrationTestLifecycle(t *testing.T, root string) {
+	t.Helper()
+	if err := pueue.WithBootstrapLock(t.Context(), root, func() error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func completeInspectionMaintenanceFixture(t *testing.T, store *taskdir.Store, operation *inspection.Operation, migrate bool) {
+	t.Helper()
+	if migrate {
+		completePrivateMigrationInspectionData(t, operation)
+		initializePrivateMigrationTestLifecycle(t, store.Root)
+		return
+	}
+	completeInspectionPollTestLifetime(t, operation, task.LifetimeTerminationCompleted)
+}
+
+// completePrivateMigrationInspectionData retains the auxiliary owner inode and
+// qualified completed journal DATA required by root-wide maintenance. It makes
+// no native process or scope observation and preserves legacy worker bindings.
+func completePrivateMigrationInspectionData(t *testing.T, operation *inspection.Operation) {
+	t.Helper()
+	owner, err := operation.AcquireLifetimeOwner(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if releaseErr := owner.Release(); releaseErr != nil {
+			t.Error(releaseErr)
+		}
+	}()
+	result, _, err := operation.ReadCompletedContext(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitResult := task.LifetimeWorkerWaitSuccess
+	if result.Reason != inspection.ResultEligible {
+		waitResult = task.LifetimeWorkerWaitExitError
+	}
+	admissionfixture.RecordManagedInspectionLifetimeExitWithCause(t, operation, waitResult, time.Time{}, task.LifetimeTerminationCompleted)
+	if _, err = guardian.ReadAuxiliaryClosureProof(t.Context(), operation); err != nil {
+		t.Fatalf("migration fixture lifetime DATA is not closed: %v", err)
+	}
+}
+
 func TestPrivateDefaultQueueInspectionCleanupAndMigrationNeedNoLegacyGroup(t *testing.T) {
 	for _, migrate := range []bool{false, true} {
 		name := "cleanup"
@@ -233,7 +282,7 @@ func newTerminalInspectionCleanupOperation(t *testing.T, store *taskdir.Store, s
 func assertDefaultQueueCleanupAndMigration(t *testing.T, migrate bool) {
 	t.Helper()
 	store, operation, job := newCleanupInspectionTestOperationInQueue(t, inspection.ResultEligible, true, true)
-	completeInspectionPollTestLifetime(t, operation, task.LifetimeTerminationCompleted)
+	completeInspectionMaintenanceFixture(t, store, operation, migrate)
 	if job.Group != "default" {
 		t.Fatalf("fixture used group %q", job.Group)
 	}

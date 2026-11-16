@@ -259,6 +259,9 @@ func TestControlContinuationSameActiveAliasRemainsPassive(t *testing.T) {
 	if err != nil || client == nil || client.Binding() != fixture.target {
 		t.Fatalf("same-identity active alias required owner: %v", err)
 	}
+	if client.RuntimeBinding().ConfigPath != client.Binding().ConfigPath {
+		t.Fatal("continuation producer returned a non-admission alias transport")
+	}
 	if !maps.Equal(before, parentMigrationTree(t, fixture.store.Root)) {
 		t.Fatal("same-identity alias entered cleanup")
 	}

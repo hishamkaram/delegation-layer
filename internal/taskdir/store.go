@@ -265,6 +265,20 @@ func OpenStoreWithPredicatesContext(ctx context.Context, rootPath string, regist
 	return s, nil
 }
 
+// OpenExistingStoreMetadataContext validates an existing root and opens only its
+// existing maintenance lock. It creates nothing and supplies no filesystem
+// support assurance. Upgrade preflight uses this for resident publication; a
+// later explicitly authorized mutation must perform the normal support probe.
+func OpenExistingStoreMetadataContext(ctx context.Context, rootPath string, registry predicate.Registry) (*Store, error) {
+	if ctx == nil {
+		return nil, context.Canceled
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return openStoreMetadataContext(ctx, rootPath, registry)
+}
+
 func openStoreMetadata(rootPath string, registry predicate.Registry) (*Store, error) {
 	return openStoreMetadataContext(context.Background(), rootPath, registry)
 }

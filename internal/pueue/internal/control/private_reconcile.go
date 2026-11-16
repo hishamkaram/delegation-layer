@@ -45,8 +45,24 @@ func refusePendingPrivateRestart(root string) error {
 	if runtimeRestartPending(record) {
 		return ErrPrivateRuntimeRestartPending
 	}
+	if record.DrainV1 != nil {
+		return ErrPrivateUpgradePending
+	}
 	if record.Restart != nil {
 		return privateRecoveryFailure("transition_pending", ErrBinding)
+	}
+	return nil
+}
+
+// New generic preparation checks fence only the upgrade variant. Existing
+// pair/runtime restart owners retain their original recovery and error order.
+func refusePendingPrivateUpgrade(root string) error {
+	record, _, err := readPrivateBootstrapRecord(root)
+	if err != nil {
+		return privateRecoveryFailure("state_unreadable", err)
+	}
+	if record.DrainV1 != nil {
+		return ErrPrivateUpgradePending
 	}
 	return nil
 }
@@ -58,6 +74,9 @@ func validatePrivateRestartPublication(root string, binding task.SupervisorRef) 
 	}
 	if runtimeRestartPending(record) {
 		return ErrPrivateRuntimeRestartPending
+	}
+	if record.DrainV1 != nil {
+		return ErrPrivateUpgradePending
 	}
 	if record.Restart != nil && record.Restart.Target != binding {
 		return privateRecoveryFailure("identity_conflict", ErrBinding)
@@ -89,7 +108,7 @@ func privateMigrationPrepared(record privateMigrationRecord) bool {
 }
 
 func privateMigrationRetargetable(record privateMigrationRecord) bool {
-	return privateMigrationPrepared(record) && record.LegacyPID == 0 && record.LegacyProcessStart == "" &&
+	return record.UpgradeGeneration.OperationID == "" && privateMigrationPrepared(record) && record.LegacyPID == 0 && record.LegacyProcessStart == "" &&
 		privateLogicalIdentityPresent(record.Legacy) && privateLogicalIdentityPresent(record.Successor)
 }
 
@@ -173,6 +192,9 @@ func ReconcilePublishedPrivatePairAttemptWithLock(ctx context.Context, stateRoot
 		return 0, context.Canceled
 	}
 	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+	if err := refusePendingPrivateUpgrade(stateRoot); err != nil {
 		return 0, err
 	}
 	if pending, err := PrivateRuntimeRestartPending(ctx, stateRoot); err != nil || pending {

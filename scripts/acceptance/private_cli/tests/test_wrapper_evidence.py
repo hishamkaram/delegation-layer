@@ -392,6 +392,7 @@ class HandoffExternalCallGuardTests(WrapperRunCase):
                 case=case, evidence={}, external_before_name=None, external_calls_before=before,
                 external_pid=None, old_label=None, old_row_before=None, resources=None,
                 supervisor_control=SimpleNamespace(external_config=Path(self.external)), task_commands=self.commands,
+                expected_external_task_id="a" * 32,
             )
 
     def observe_external_task(self, snapshot_logs):

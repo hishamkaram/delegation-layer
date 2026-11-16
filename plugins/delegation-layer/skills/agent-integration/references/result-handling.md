@@ -156,15 +156,24 @@ Use [`delegate wait`](command-reference.md#wait) instead of shell polling loops.
 its readiness condition was met, not that tasks succeeded. Inspect each returned
 summary, then collect validated results as needed. Exit `1` carries typed
 `task_not_found` or an observation fault; `2` is invalid input; `3` is expiry.
-An undetermined task without canonical terminal evidence remains pending.
+An undetermined task without canonical terminal evidence remains pending,
+unless an explicit administrative settlement stops observation as described
+below. That stop is never result readiness.
 
 A passive `supervisor status` may report `scheduling_refresh_required` with
 `next_action: "run_supervisor_ensure_owner"` after an installation upgrade.
 `migration_phase: "complete"` describes history, not current admission readiness.
 Run `delegate supervisor ensure-owner --json` only from a prepared persistent
-user context outside task-owned scope, retaining the same root selection. That
-owner refreshes the live transport's scheduling evidence; observation itself
-never repairs it. Ordinary admission can also refresh a missing installed
+user context outside task-owned scope, retaining the same root selection. It
+can drain private admissions and hand the daemon to a different installed pair;
+admitted work keeps its original lifetime/evidence. Preparation before a planned
+installer and exact completion afterward also support same-path updates; follow
+the [upgrade contract](command-reference.md#supervisor-owner-control), including
+quiescing nonparticipating writers. Observation itself never repairs it.
+Finish that handoff before another installation replacement. A fault involving
+an accepted target is not permission to choose another target or clear its
+records; preserve the OP and report the failure under the same upgrade contract.
+Ordinary admission can also refresh a missing installed
 infrastructure helper through the existing outside-owner handoff. Busy or
 concurrent handoffs remain explicit refusals; nested invocations cannot perform
 that replacement. Recover from the prepared outside context, without replaying
@@ -173,6 +182,33 @@ the original task's next action; this is not permission to replay created or
 uncertain tasks. A cold or incompatible supervisor retains its reported
 migration or stop-and-report guidance. See the repository CLI recovery guide
 for operator details.
+
+## Administrative settlement
+
+An exact human-confirmed maintenance permission is separate from native closure
+and publication. `status` can report `administratively_settled` with a separate
+`settlement` object; exit `0` means the observation completed. Native execution
+remains unknown and no accepted answer is implied. `collect` stops with exit `1`;
+`wait --all` does so when any member is settled and the condition is unmet.
+`wait --any` does so only when all members are settled. Both stops report
+`failure.code: administrative_settlement` and
+`failure.next_action: stop_and_report`. Do not keep watching, continue, retry a
+provider, release claims or create replacement work on that basis.
+
+For mixed tasks, `wait --any` can return `0` because another task is genuinely
+ready; the settled task stays nonready and retains its own summary. If another
+member is still pending, `--any` keeps watching until genuine readiness or its
+ordinary expiry (exit `3`). `--all` cannot be satisfied by an administratively
+settled member.
+
+A genuine committed/rejected outcome or native terminal evidence takes
+precedence. Keep the immutable permission even after that later evidence; it is
+not an outcome rewrite. Only the supervisor's maintenance policy consumes it;
+scheduler, resource, session, workspace, custody and deletion owners retain
+their original proof requirements. Use the
+[settlement command](command-reference.md#maintenance-only-settlement) only after
+human review of the exact task and effects. External unproven tasks can still
+block root-wide maintenance and have no permission through this private path.
 
 ## Failure diagnosis
 

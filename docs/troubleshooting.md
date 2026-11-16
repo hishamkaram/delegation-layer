@@ -34,6 +34,42 @@ Delegate administration. Preserve the root and recorded bindings. Report
 conflicts, unreadable state, or unknown endpoint ownership without editing
 records, deleting state, running process searches, or operating Pueue directly.
 
+If status reports `active_work: "none"` but migration is blocked, inspect
+`migration_readiness` and `first_blocker`. Queue completion alone does not prove
+native execution closed. `human_review_task` identifies a task whose evidence
+needs review; waiting for queue activity cannot supply missing closure proof.
+Keep the exact task ID and reported reason. A later `diagnostic_snapshot_at`
+describes the local diagnostic observation, separately from a resident error.
+
+After a completed installation handoff, `legacy_present` with
+`run_supervisor_migrate` means inspection routing still needs completion. Use
+the same root's explicit migration command; existing tasks retain their
+identities. Follow [supervisor recovery](cli-reference.md#supervisor-recovery)
+for blocker priority and prepared-edge behavior.
+
+For an eligible same-boot private ghost, see
+[human maintenance permission](cli-reference.md#human-maintenance-permission).
+It can unblock maintenance after explicit human confirmation; it cannot turn
+unknown execution into proven closure or release task/resource/schedule claims.
+An unproven external task remains a conservative maintenance blocker.
+
+A prepared installation upgrade remains fenced until its exact OP is completed
+explicitly. Use the saved `completion_command` from the new installation;
+ordinary `ensure-owner` does not authorize proactive completion. For an update
+already applied, reactive `ensure-owner` drains and resumes the same operation.
+Follow [installation upgrades](cli-reference.md#installation-upgrades), including
+quiescing writers outside Delegate's private admission path. Never clear the
+bootstrap journal or edit saved executable paths to bypass a blocker.
+Finish the handoff before another installation replacement. A missing candidate
+can be reselected before target acceptance; an unavailable accepted target
+remains a fault. Preserve that operation and report it. See the same upgrade
+procedure for the exact boundary.
+
+For an installation mismatch, compare both client and daemon observations in
+`installation_binding`. File availability and path equality are metadata only.
+Neither a missing old keg nor a reachable endpoint establishes which executable
+image is running. Follow the explicit recovery action without editing bindings.
+
 An extremely deep root can exceed the host's Unix socket path limit even with
 Delegate's compact socket name. Cold owner routing checks this byte budget
 before accepting a startup or launching its child, and the child checks it again.

@@ -62,6 +62,8 @@ func preparationAction(operation InitialOperation) ownerAction {
 		return ownerMigrateOwn
 	case InitialRuntimeRestart:
 		return ownerRuntimeRestart
+	case InitialUpgradePreflight:
+		return ""
 	default:
 		return ""
 	}

@@ -142,20 +142,46 @@ def delete_definitions(case: SchedulerCase) -> None:
             case.command("cleanup-delete", ["schedule", "delete", schedule_id])
 
 
-def observe_doctor(case: SchedulerCase, label: str, expected: str) -> None:
+def observe_doctor(case: SchedulerCase, label: str, expected: str, *, supervisor_current: bool = False) -> None:
     before = scheduler_files(case.fixture.state)
-    # An intact owned installation has exit0. Scheduler compatibility remains
-    # a separate passive advisory, including migration_required on schema1.
-    response = case.command("doctor-" + label, ["doctor"])
+    previous, selected = case.lifetime.old_libexec, case.lifetime.upgraded_libexec
+    if previous is None or selected is None:
+        raise RuntimeError("upgrade doctor lost its known installed supervisor pairs")
+    require(previous != selected, "upgrade doctor requires distinct old and candidate supervisor paths")
+    # Scheduler migration leaves the old supervisor binding intact. Only its
+    # explicit handoff makes this candidate installation current and exit0.
+    relation = "current" if supervisor_current else "different"
+    response = case.command("doctor-" + label, ["doctor"], (0,) if supervisor_current else (2,))
+    installation = json_object(response.get("installation"))
+    roles = json_object(installation.get("roles"))
+    expected_roles = {"delegate": case.fixture.upgraded_delegate_binary,
+                      "delegate_run": case.fixture.upgraded_runner_binary,
+                      "pueue": selected / "pueue", "pueued": selected / "pueued"}
+    require(installation.get("scope") == "installation_bundle" and installation.get("verification") == "filesystem_metadata"
+            and installation.get("compatibility") == "not_checked" and installation.get("status") == "observed"
+            and roles == {name: {"path": str(path), "status": "available"} for name, path in expected_roles.items()},
+            "doctor did not observe the selected candidate installation")
+    supervisor = json_object(response.get("supervisor"))
+    role = {"relation": relation, "selected_availability": "present", "recorded_availability": "present"}
+    require(supervisor.get("binding") == "present" and supervisor.get("liveness") == "not_checked"
+            and supervisor.get("active_work") == "unknown" and supervisor.get("installation_binding") == {
+                "scope": "loaded_bundle", "verification": "filesystem_metadata", "relation": relation,
+                "client": role, "daemon": role}, "doctor returned the wrong supervisor installation binding")
+    general = response.get("issues")
+    if not isinstance(general, list):
+        raise RuntimeError("doctor omitted its general issue inventory")
+    expected_general = [] if supervisor_current else [("supervisor_installation_differs", "supervisor")]
+    require([(json_object(issue).get("code"), json_object(issue).get("area")) for issue in general] == expected_general,
+            "doctor returned unexpected general issues")
     advisory = json_object(response.get("scheduler"))
     require(advisory.get("compatibility") == expected and advisory.get("verification") == "read_only",
             "candidate doctor returned the wrong scheduler advisory")
     issues = advisory.get("issues")
     require(issues == [] if expected == "compatible" else
-            isinstance(issues, list) and len(issues) == 1 and json_object(issues[0]).get("code") == expected,
+            isinstance(issues, list) and len(issues) == 1 and json_object(issues[0]).get("code") == expected
+            and json_object(issues[0]).get("area") == "scheduler",
             "doctor scheduler advisory changed its issue policy")
-    require(response.get("issues") == [] and scheduler_files(case.fixture.state) == before,
-            "doctor changed scheduler evidence/sidecars or general exit policy")
+    require(scheduler_files(case.fixture.state) == before, "doctor changed scheduler evidence/sidecars")
 
 
 def require_history_coverage(response: dict[str, object], rows: tuple[Occurrence, ...]) -> None:
@@ -209,6 +235,7 @@ def transition(case: SchedulerCase, before, release: Release, *, candidate_versi
     migrated_supervisor = case.command("supervisor-migrate", ["supervisor", "migrate"])
     require(not migrated_supervisor.get("error") and not migrated_supervisor.get("failure"),
             "candidate supervisor migration failed")
+    observe_doctor(case, "after-supervisor-migration", "compatible", supervisor_current=True)
 
 
 def exercise_upgrade(case: SchedulerCase, release: Release, output: Path, *, candidate_version: str) -> None:

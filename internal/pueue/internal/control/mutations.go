@@ -26,6 +26,20 @@ type SubmissionAuthorization struct {
 type SubmissionGate func(context.Context, task.SupervisorRef) (SubmissionAuthorization, error)
 
 func (c *Client) checkSubmissionGate(ctx context.Context, gate SubmissionGate) (SubmissionAuthorization, error) {
+	// The logical binding owns the generation lease and its Drain fence.
+	// A recovery alias or migration config is transport, never another owner.
+	if root, private := privateStateRoot(c.binding.ConfigPath); private {
+		record, _, err := readPrivateBootstrapRecord(root)
+		if err != nil {
+			return SubmissionAuthorization{}, err
+		}
+		if record.DrainV1 != nil {
+			return SubmissionAuthorization{}, ErrPrivateUpgradePending
+		}
+		if c.runtimeBinding.ConfigPath != c.binding.ConfigPath {
+			return SubmissionAuthorization{}, ErrPrivateSupervisorSubmissionIncomplete
+		}
+	}
 	if gate == nil {
 		return SubmissionAuthorization{}, nil
 	}

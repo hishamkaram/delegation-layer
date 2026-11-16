@@ -338,8 +338,16 @@ func assertHistoricalInspectionRecoverySelectsSuccessor(t *testing.T, scenario *
 		t.Fatalf("continuation rebind selected %+v, want successor B %+v: %v", rebound, fixture.successor, err)
 	}
 	status := supervisorCommand(Arguments{Root: fixture.root, SupervisorAction: "status"}, deps)
-	if status.code != 0 || status.err != nil || status.response.SupervisorControl == nil || status.response.SupervisorControl.State != "migrated" {
-		t.Fatalf("supervisor status did not select completed successor B: code=%d err=%v response=%+v", status.code, status.err, status.response.SupervisorControl)
+	control := status.response.SupervisorControl
+	if status.code != 0 || status.err != nil || control == nil {
+		t.Fatalf("supervisor status could not observe pending inspection routing: code=%d err=%v response=%+v", status.code, status.err, control)
+	}
+	if control.State != "legacy_present" || control.LegacyReachability != "ready" || control.ActiveWork != "present" || control.MigrationReadiness != "blocked" || control.NextAction != "wait_for_legacy_work" || control.MigrationPhase != "" {
+		t.Fatalf("pending inspection routing lost the running predecessor blocker: %+v", control)
+	}
+	want := supervisor.MaintenanceBlocker{Kind: "queue", TaskID: fixture.req.TaskID, QueueState: pueue.StateRunning, ReasonCode: "queue_work_present", NextAction: "wait_for_legacy_work"}
+	if control.FirstBlocker == nil || *control.FirstBlocker != want {
+		t.Fatalf("pending inspection routing changed its exact task queue blocker: got=%+v want=%+v", control.FirstBlocker, want)
 	}
 	return rebound
 }

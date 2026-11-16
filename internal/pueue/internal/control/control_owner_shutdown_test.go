@@ -340,7 +340,7 @@ func TestRequiredPrivateShutdownConstructionRejectsNonIsolatedConfig(t *testing.
 	if err := recordPrivateClientConstruction(client, fixture.stateRoot); !errors.Is(err, ErrConfiguration) {
 		t.Fatalf("required qualification ignored prior refusal: %v", err)
 	}
-	migration, err := newPrivateMigrationShutdownClient(fixture.stateRoot, client.Binding(), privateDaemonIdentityForBinding(client.Binding()), client.options)
+	migration, err := bindRecordedPredecessorTransport(t.Context(), fixture.stateRoot, client.Binding(), client.options)
 	if migration != nil || !errors.Is(err, ErrConfiguration) {
 		t.Fatalf("required migration construction accepted nonisolated config: client=%v err=%v", migration != nil, err)
 	}

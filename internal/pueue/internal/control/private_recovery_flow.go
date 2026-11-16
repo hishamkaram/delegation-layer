@@ -282,6 +282,11 @@ func RecoverSavedWithPair(ctx context.Context, operationRoot string, saved task.
 		return nil, false, ErrConfiguration
 	}
 	if private {
+		if err := refusePendingPrivateUpgrade(operationRoot); err != nil {
+			return nil, false, err
+		}
+	}
+	if private {
 		resolvedClient, resolveErr := selectRecoveryClient(saved, clientExecutable)
 		if resolveErr != nil {
 			return nil, false, resolveErr

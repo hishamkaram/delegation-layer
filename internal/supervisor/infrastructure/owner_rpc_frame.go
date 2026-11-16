@@ -106,6 +106,9 @@ func (r ownerRequest) validateOperationSubject() error {
 	case ownerRuntimeRestart:
 		return r.RestartFrom.Validate()
 	case ownerEnsureOther:
+		if r.Initial.Kind == InitialUpgradePreflight {
+			return ErrIdentity
+		}
 		return errors.Join(validateOwnerTarget(r.Target, r.RootID), r.Context.Validate(), r.Initial.Validate(r.Target.RootID))
 	case ownerPrepareContinuation:
 		return (InitialOperation{Kind: InitialPrepareContinuation, Source: r.Source}).Validate(r.RootID)
@@ -306,7 +309,7 @@ func validateOwnerTarget(target originRecord, ownerRootID string) error {
 }
 
 type ownerWireFrame interface {
-	ownerRequest | ownerReply | ownerStopRequest | ownerStopReply
+	ownerRequest | ownerReply | ownerStopRequest | ownerStopReply | ownerUpgradeRequest | ownerUpgradeReply
 	validate() error
 }
 
@@ -368,7 +371,7 @@ func decodeOwnerFrame[T ownerWireFrame](data []byte) (T, error) {
 		if envelope.StopProtocol != ownerStopProtocolVersion {
 			return zero, invalidOwnerFrame(ErrOwnerIncompatible)
 		}
-	} else if envelope.Protocol != ownerProtocolVersion {
+	} else if envelope.Protocol != ownerProtocolVersion && envelope.Protocol != ownerUpgradeProtocolVersion {
 		return zero, invalidOwnerFrame(ErrOwnerIncompatible)
 	}
 	var result T

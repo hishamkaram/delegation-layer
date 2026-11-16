@@ -22,6 +22,7 @@ type WaitResponse struct {
 }
 
 type WaitTask struct {
+	Settlement  *SettlementResponse            `json:"settlement,omitempty"`
 	TaskID      string                         `json:"task_id"`
 	Admission   string                         `json:"admission"`
 	Liveness    string                         `json:"liveness"`
@@ -94,6 +95,10 @@ func watchWaitTasks(ctx context.Context, a Arguments, reader tasklifecycle.Passi
 		if watch.Satisfied {
 			return commandResult{response: response}
 		}
+		if waitAdministrativelySettled(watch) {
+			response.Failure = &DispatchFailureResponse{Code: "administrative_settlement", Stage: "wait", NextAction: "stop_and_report"}
+			return commandResult{response: response, code: 1}
+		}
 		remaining := time.Until(deadline)
 		if remaining <= 0 {
 			return commandResult{response: response, code: 3}
@@ -126,6 +131,10 @@ func observeWaitRound(ctx context.Context, reader tasklifecycle.PassiveTaskReade
 		item := WaitTask{TaskID: prior.TaskID, Admission: observed.Admission.String(), Liveness: observed.Liveness.String(), Publication: observed.Publication.String(), Ready: observed.Ready, Readiness: observed.Readiness, Status: observed.Status}
 		if observed.FailureCode != "" {
 			item.Failure = &DispatchFailureResponse{Code: observed.FailureCode, Stage: "wait", NextAction: "inspect_task"}
+		}
+		if record := observed.OperatorDisposition; record != nil {
+			item.Settlement = settlementResponse(record.Challenge, record)
+			item.Failure.NextAction = "stop_and_report"
 		}
 		watch.Tasks[index] = item
 		if observed.Ready {
@@ -190,4 +199,14 @@ func waitRoundFailure(ctx context.Context, watch time.Duration, response Respons
 	}
 	response.TaskID = fault.taskID
 	return waitFailure(response, fault.code, fault.err)
+}
+
+func waitAdministrativelySettled(watch *WaitResponse) bool {
+	settledCount := 0
+	for _, item := range watch.Tasks {
+		if item.Settlement != nil {
+			settledCount++
+		}
+	}
+	return settledCount > 0 && (watch.Mode == "all" || settledCount == len(watch.Tasks))
 }

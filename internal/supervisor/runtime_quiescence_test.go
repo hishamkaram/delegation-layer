@@ -2,6 +2,7 @@ package supervisor_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -71,11 +72,12 @@ func TestRuntimeQuiescenceDoesNotUsePublicationAsClosure(t *testing.T) {
 func TestFencedRuntimePreparationIsNeitherAdmissionNorClosure(t *testing.T) {
 	store, td, _ := lifecyclefixture.NewAppTestTask(t, false)
 	binding := runtimeTestBinding(store)
+	recordRuntimeUpgradeFence(t, store, binding)
 	before := testsupport.SnapshotStore(t, store.Root)
 	if err := supervisor.CheckRuntimeQuiescence(t.Context(), store, binding, nil); !errors.Is(err, supervisor.ErrRuntimeQuiescenceBusy) {
 		t.Fatalf("initial prepared task returned %v", err)
 	}
-	if err := supervisor.CheckFencedRuntimeQuiescence(t.Context(), store, binding, nil); err != nil {
+	if err := supervisor.CheckMaintenanceQuiescence(t.Context(), store, binding, nil); err != nil {
 		t.Fatalf("fenced preparation-only task returned %v", err)
 	}
 	if after := testsupport.SnapshotStore(t, store.Root); !reflect.DeepEqual(before, after) {
@@ -95,8 +97,9 @@ func TestRuntimeQuiescenceRefusesPartialCandidatesWithoutCreatingLocks(t *testin
 			if err := os.MkdirAll(path, 0o700); err != nil {
 				t.Fatal(err)
 			}
+			recordRuntimeUpgradeFence(t, store, runtimeTestBinding(store))
 			before := testsupport.SnapshotStore(t, store.Root)
-			for _, check := range []func(context.Context, *taskdir.Store, task.SupervisorRef, []pueue.Job) error{supervisor.CheckRuntimeQuiescence, supervisor.CheckFencedRuntimeQuiescence} {
+			for _, check := range []func(context.Context, *taskdir.Store, task.SupervisorRef, []pueue.Job) error{supervisor.CheckRuntimeQuiescence, supervisor.CheckMaintenanceQuiescence} {
 				if err := check(t.Context(), store, runtimeTestBinding(store), nil); err == nil {
 					t.Fatal("partial rowless operation was ignored")
 				}
@@ -213,16 +216,67 @@ func TestFencedRuntimeAuxiliaryPreparationDoesNotPublishClosure(t *testing.T) {
 		t.Run(family, func(t *testing.T) {
 			store, _ := runtimeAuxiliaryFixture(t, family, time.Now().Add(time.Minute))
 			binding := runtimeTestBinding(store)
+			recordRuntimeUpgradeFence(t, store, binding)
 			before := testsupport.SnapshotStore(t, store.Root)
 			if err := supervisor.CheckRuntimeQuiescence(t.Context(), store, binding, nil); !errors.Is(err, supervisor.ErrRuntimeQuiescenceBusy) {
 				t.Fatalf("initial auxiliary preparation returned %v", err)
 			}
-			if err := supervisor.CheckFencedRuntimeQuiescence(t.Context(), store, binding, nil); err != nil {
+			if err := supervisor.CheckMaintenanceQuiescence(t.Context(), store, binding, nil); err != nil {
 				t.Fatalf("fenced auxiliary preparation returned %v", err)
 			}
 			if after := testsupport.SnapshotStore(t, store.Root); !reflect.DeepEqual(before, after) {
 				t.Fatal("fenced auxiliary observation created a closure or owner inode")
 			}
 		})
+	}
+}
+
+// The fixture writes the public durable variant, then the production reader
+// validates it. It does not bypass the maintenance subject check.
+func recordRuntimeUpgradeFence(t *testing.T, store *taskdir.Store, binding task.SupervisorRef) {
+	t.Helper()
+	pin, err := store.PinRootContext(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := filepath.Join(store.Root, ".supervisor")
+	if err = os.MkdirAll(base, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(filepath.Join(base, "bootstrap.lock"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	data, err := json.Marshal(map[string]any{"schema_version": task.SchemaVersion, "drain_v1": map[string]any{
+		"root":        map[string]any{"path": pin.Root(), "id": pin.RootID(), "device": pin.Device(), "inode": pin.Inode()},
+		"predecessor": binding, "operation_id": "upgrade-v1:" + strings.Repeat("9", 32), "mode": "operation_required", "phase": "draining",
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(filepath.Join(base, "bootstrap.pending"), data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestMaintenancePreparationRequiresCanonicalMatchingFence(t *testing.T) {
+	store, _, _ := lifecyclefixture.NewAppTestTask(t, false)
+	binding := runtimeTestBinding(store)
+	recordRuntimeUpgradeFence(t, store, binding)
+	path := filepath.Join(store.Root, ".supervisor", "bootstrap.pending")
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	before := testsupport.SnapshotStore(t, store.Root)
+	if err := supervisor.CheckMaintenanceQuiescence(t.Context(), store, binding, nil); !errors.Is(err, supervisor.ErrRuntimeQuiescenceBusy) {
+		t.Fatalf("unfenced preparation admitted: %v", err)
+	}
+	if after := testsupport.SnapshotStore(t, store.Root); !reflect.DeepEqual(before, after) {
+		t.Fatal("passive scan changed root")
+	}
+	recordRuntimeUpgradeFence(t, store, binding)
+	other := binding
+	other.ConfigDigest = task.ComputeSHA256([]byte("different predecessor"))
+	if err := supervisor.CheckMaintenanceQuiescence(t.Context(), store, other, nil); !errors.Is(err, task.ErrIdentityMismatch) {
+		t.Fatalf("mismatched predecessor accepted: %v", err)
 	}
 }

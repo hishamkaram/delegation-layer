@@ -21,10 +21,8 @@ func privateBootstrapRecordPath(stateRoot string) string {
 	return filepath.Join(stateRoot, privateSupervisorDirectory, privateBootstrapRecordName)
 }
 
-// PrivateBootstrapPending reports whether a private bootstrap has durable
-// intent without a published daemon identity. It distinguishes a retryable
-// Delegate-owned startup interrupted before publication from an unrelated
-// pre-existing private config whose owner cannot be proven.
+// PrivateBootstrapPending reports bootstrap intent or an unfinished lifecycle
+// fence. Pending alone never grants startup or configuration repair authority.
 func PrivateBootstrapPending(stateRoot string) (bool, error) {
 	record, found, err := readPrivateBootstrapRecord(stateRoot)
 	return found && (record.RuntimeRestart == nil || runtimeRestartPending(record)), err
@@ -34,7 +32,7 @@ func PrivateBootstrapPending(stateRoot string) (bool, error) {
 // Runtime intent is an admission fence, never configuration repair authority.
 func privateLegacyBootstrapPending(stateRoot string) (bool, error) {
 	record, found, err := readPrivateBootstrapRecord(stateRoot)
-	return found && record.RuntimeRestart == nil, err
+	return found && record.RuntimeRestart == nil && record.DrainV1 == nil, err
 }
 
 func readPrivateBootstrapRecord(stateRoot string) (privateBootstrapRecord, bool, error) {
@@ -55,20 +53,42 @@ func readPrivateBootstrapRecord(stateRoot string) (privateBootstrapRecord, bool,
 	if record.SchemaVersion != task.SchemaVersion {
 		return privateBootstrapRecord{}, false, fmt.Errorf("%w: unsupported private bootstrap journal schema %d", task.ErrUnsupportedSchema, record.SchemaVersion)
 	}
+	if err = validatePrivateBootstrapVariants(stateRoot, record); err != nil {
+		return privateBootstrapRecord{}, false, err
+	}
+	return record, true, nil
+}
+
+func validatePrivateBootstrapVariants(stateRoot string, record privateBootstrapRecord) error {
+	variants := 0
 	if record.Restart != nil {
-		if record.RuntimeRestart != nil {
-			return privateBootstrapRecord{}, false, ErrBinding
+		variants++
+	}
+	if record.RuntimeRestart != nil {
+		variants++
+	}
+	if record.DrainV1 != nil {
+		variants++
+	}
+	if variants > 1 {
+		return ErrBinding
+	}
+	if record.DrainV1 != nil {
+		if err := validatePrivateUpgradeDrain(stateRoot, *record.DrainV1); err != nil {
+			return err
 		}
-		if err = validatePrivatePairRestartIntent(stateRoot, *record.Restart); err != nil {
-			return privateBootstrapRecord{}, false, err
+	}
+	if record.Restart != nil {
+		if err := validatePrivatePairRestartIntent(stateRoot, *record.Restart); err != nil {
+			return err
 		}
 	}
 	if record.RuntimeRestart != nil {
-		if err = validatePrivateRuntimeRestartRecord(stateRoot, *record.RuntimeRestart); err != nil {
-			return privateBootstrapRecord{}, false, err
+		if err := validatePrivateRuntimeRestartRecord(stateRoot, *record.RuntimeRestart); err != nil {
+			return err
 		}
 	}
-	return record, true, nil
+	return nil
 }
 
 // Called only inside an existing generation commit callback. A later genuine
@@ -78,6 +98,9 @@ func markPrivateBootstrapPendingWithinCommit(ctx context.Context, stateRoot stri
 	record, _, err := readPrivateBootstrapRecord(stateRoot)
 	if err != nil {
 		return err
+	}
+	if record.DrainV1 != nil {
+		return ErrPrivateUpgradePending
 	}
 	if record.RuntimeRestart == nil {
 		return markPrivateBootstrapPending(stateRoot)
@@ -110,9 +133,9 @@ func clearPrivateBootstrapPending(stateRoot string) error {
 	if err != nil || !found {
 		return err
 	}
-	// Canonical identity publication can neither erase the unfinished runtime
-	// fence nor discard its bounded completion receipt. Its owner settles it.
-	if record.RuntimeRestart != nil {
+	// Generic clear preserves runtime receipts and upgrade fences. Each
+	// lifecycle owner alone settles its exact record.
+	if record.RuntimeRestart != nil || record.DrainV1 != nil {
 		return nil
 	}
 	if err = os.Remove(privateBootstrapRecordPath(stateRoot)); err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -133,7 +156,27 @@ func loadPrivateMigrationRecord(base string) (record privateMigrationRecord, fou
 	if invalid != nil {
 		return privateMigrationRecord{}, false, privateMigrationDecodeError(invalid)
 	}
+	if err = validateLoadedPrivateUpgradeRecord(base, record); err != nil {
+		return privateMigrationRecord{}, false, err
+	}
 	return record, true, nil
+}
+
+func validateLoadedPrivateUpgradeRecord(base string, record privateMigrationRecord) error {
+	if record.UpgradeGeneration.OperationID != "" {
+		u := record.UpgradeGeneration
+		bootstrap, found, err := readPrivateBootstrapRecord(filepath.Dir(base))
+		if err != nil || !found || bootstrap.DrainV1 == nil {
+			return errors.Join(ErrBinding, err)
+		}
+		drain := *bootstrap.DrainV1
+		if drain.OperationID != u.OperationID || drain.Root != u.Root || drain.Predecessor != u.Predecessor || drain.Mode != u.Mode ||
+			drain.SelectedPair.ClientExecutable != u.Target.ClientExecutable || drain.SelectedPair.DaemonExecutable != u.Target.DaemonExecutable ||
+			(drain.Phase != UpgradeAuthorized && drain.Phase != UpgradeMigrating) {
+			return ErrBinding
+		}
+	}
+	return nil
 }
 
 // publishPrivateMigrationState preserves progress when resuming a journal.
@@ -402,6 +445,12 @@ func publishPrivateIdentityPublication(stateRoot string, pending privateIdentity
 	if err := validatePrivateRestartPublication(stateRoot, pending.Binding); err != nil {
 		return err
 	}
+	return publishPrivateIdentityPublicationValidated(stateRoot, pending)
+}
+
+// Only the canonical identity owner calls this after its ordinary or exact
+// linked upgrade authorization. It performs no second generation commit.
+func publishPrivateIdentityPublicationValidated(stateRoot string, pending privateIdentityPublicationRecord) error {
 	pendingPath := privateIdentityPublicationPath(stateRoot)
 	bindingData, err := task.MarshalCanonical(privateSupervisorBindingRecord{
 		SchemaVersion: task.SchemaVersion,

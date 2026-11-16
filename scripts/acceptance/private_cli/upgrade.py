@@ -17,12 +17,15 @@ from scripts.acceptance.private_cli.installation import install_package_layout
 from scripts.acceptance.private_cli.installation import install_supervisor_pair
 import json
 import os
+import re
 import stat
 from scripts.acceptance.private_cli.supervisor import predecessor_closed
 from scripts.acceptance.private_cli.supervisor import capture_predecessor_shutdown_target
 from scripts.acceptance.private_cli.capacity.ownership import prove_lifetime_owner_cohort
 from scripts.acceptance.private_cli.supervisor import pueue_command
 from scripts.acceptance.private_cli.supervisor import pueue_snapshot
+from scripts.acceptance.private_cli.supervisor import private_daemon_process_gone
+from scripts.acceptance.private_cli.supervisor import private_shutdown_evidence
 from scripts.acceptance.private_cli.queue_policy import pueue_state
 from scripts.acceptance.evidence.files import read_json
 from scripts.acceptance.directories.policy import require
@@ -557,6 +560,132 @@ def _require_one_warm_queue_identity(state, response, client, config, env, captu
             "warm dispatch did not retain exactly one matching running queue identity")
 
 
+def _live_upgrade_report(response, operation_id=None, *, mode="reactive"):
+    control = response.get("supervisor_control")
+    require(isinstance(control, dict), "live upgrade omitted supervisor control")
+    report = control.get("upgrade")
+    require(isinstance(report, dict), "live upgrade omitted its committed operation")
+    actual = report.get("operation_id")
+    require(isinstance(actual, str) and re.fullmatch(r"upgrade-v1:[0-9a-f]{32}", actual) is not None,
+            "live upgrade has no valid operation identity")
+    require(operation_id is None or actual == operation_id, "live upgrade replaced its operation")
+    require(report.get("mode") == mode, "live upgrade changed its authorization mode")
+    return control, report
+
+
+def _complete_live_upgrade(delegate, env, state, receipts, operation_id, *, capture_root, mode="reactive"):
+    """Resume only acknowledged maintenance progress, never uncertain provider work."""
+    deadline = time.monotonic() + 120
+    attempt = 0
+
+    def complete():
+        nonlocal attempt
+        attempt += 1
+        arguments = ["--root", str(state), "supervisor", "ensure-owner"]
+        if mode == "operation_required":
+            arguments.extend(["--complete-upgrade", operation_id])
+            if attempt == 1:
+                arguments.append("--refresh-owner")
+        arguments.append("--json")
+        response = run_json(
+            delegate, env, arguments,
+            expected=(0, 3), timeout=None, deadline=deadline,
+            receipt=receipts / ("upgrade-live-complete-%d.json" % attempt),
+            capture_root=capture_root, capture_response=True,
+        )
+        pending_control = response.get("supervisor_control")
+        if isinstance(pending_control, dict) and not pending_control.get("upgrade"):
+            require(pending_control.get("state") == "blocked"
+                    and pending_control.get("next_action") == "repeat_supervisor_ensure_owner"
+                    and not response.get("error"),
+                    "upgrade without an OP was not an acknowledged pending preflight")
+            observed = run_json(
+                delegate, env, ["--root", str(state), "supervisor", "status", "--json"],
+                timeout=None, deadline=deadline,
+                receipt=receipts / ("upgrade-live-preflight-status-%d.json" % attempt),
+                capture_root=capture_root, capture_response=True,
+            )
+            _, existing = _live_upgrade_report(observed, operation_id, mode=mode)
+            require(not existing.get("completed", False), "pending preflight changed its saved operation")
+            return False
+        control, report = _live_upgrade_report(response, operation_id, mode=mode)
+        if report.get("completed") is True:
+            require(control.get("state") == "migrated" and control.get("next_action") == "retry_dispatch",
+                    "completed live handoff did not verify current admission readiness")
+            return report
+        require(report.get("phase") in ("draining", "authorized", "migrating")
+                and control.get("next_action") == "repeat_supervisor_ensure_owner",
+                "live handoff cannot resume its acknowledged pending phase")
+        return False
+
+    return wait_until(complete, timeout=120, description="explicit live installed-pair handoff")
+
+
+def prove_proactive_same_pair_upgrade(delegate, env, state, config, receipts, *, capture_root):
+    """An explicit no-op installation still replaces the daemon, once per OP."""
+    authority = _warm_authority_records(state)
+    with private_fixture_transition(state):
+        predecessor_pid = private_shutdown_evidence(config)[0]
+        config_before = config.read_bytes()
+    arguments = ["--root", str(state), "supervisor", "ensure-owner"]
+    ready = run_json(delegate, env, [*arguments, "--json"],
+                     receipt=receipts / "upgrade-current-noop.json", capture_root=capture_root,
+                     capture_response=True)
+    require(ready.get("status") == "owner_ready"
+            and not ready.get("supervisor_control", {}).get("upgrade"),
+            "ordinary current-pair ensure created an unnecessary upgrade")
+    prepared = run_json(delegate, env, [*arguments, "--prepare-upgrade", "--json"],
+                        receipt=receipts / "upgrade-proactive-prepare.json", capture_root=capture_root,
+                        capture_response=True)
+    control, report = _live_upgrade_report(prepared, mode="operation_required")
+    operation_id = report["operation_id"]
+    completion = ["delegate", *arguments, "--complete-upgrade", operation_id, "--refresh-owner", "--json"]
+    require(report.get("phase") == "awaiting_installation" and not report.get("completed", False)
+            and control.get("next_action") == "install_then_complete_upgrade"
+            and report.get("completion_command") == completion,
+            "proactive prepare omitted its exact completion authorization")
+    fence = state / ".supervisor" / "bootstrap.pending"
+    before = fence.read_bytes()
+    pending = run_json(delegate, env, [*arguments, "--json"], expected=(3,),
+                       receipt=receipts / "upgrade-proactive-unrelated-ensure.json", capture_root=capture_root,
+                       capture_response=True)
+    _, unchanged = _live_upgrade_report(pending, operation_id, mode="operation_required")
+    require(unchanged.get("phase") == "awaiting_installation" and not unchanged.get("completed", False)
+            and fence.read_bytes() == before and config.read_bytes() == config_before
+            and _warm_authority_records(state) == authority,
+            "ordinary ensure authorized or advanced a prepared installation")
+    with private_fixture_transition(state):
+        require(private_shutdown_evidence(config)[0] == predecessor_pid,
+                "proactive prepare replaced the daemon before completion")
+    # No installer runs: the same selected installed pair must get a fresh birth.
+    _complete_live_upgrade(delegate, env, state, receipts, operation_id,
+                           capture_root=capture_root, mode="operation_required")
+    with private_fixture_transition(state):
+        successor_pid = private_shutdown_evidence(config)[0]
+    require(successor_pid != predecessor_pid, "same-pair completion reused its predecessor daemon")
+    deadline = time.monotonic() + 30
+    wait_until(lambda: private_daemon_process_gone(predecessor_pid, deadline, capture_root=capture_root),
+               timeout=30, description="proactive predecessor PID absence")
+    completed_authority = _warm_authority_records(state)
+    owner_history = snapshot(state / "infrastructure")
+    repeated = run_json(delegate, env, [*arguments, "--complete-upgrade", operation_id, "--refresh-owner", "--json"],
+                        receipt=receipts / "upgrade-proactive-historical-repeat.json", capture_root=capture_root,
+                        capture_response=True)
+    repeated_control, repeated_report = _live_upgrade_report(repeated, operation_id, mode="operation_required")
+    require(repeated_report.get("completed") is True
+            and repeated_control.get("next_action") == "inspect_supervisor_status"
+            and _warm_authority_records(state) == completed_authority
+            and snapshot(state / "infrastructure") == owner_history
+            and not fence.exists(),
+            "historical completion repeated an upgrade or owner rotation")
+    with private_fixture_transition(state):
+        require(private_shutdown_evidence(config)[0] == successor_pid,
+                "historical completion replaced the current daemon")
+    return {"operation_id": operation_id, "same_pair_noop_installation": True,
+            "unrelated_ensure_preserved_fence": True, "fresh_daemon": True,
+            "predecessor_native_pid_absent": True, "historical_repeat_no_effect": True}
+
+
 def prove_live_package_removal(
     *, brief, capture_root, client, collect, config, delegate, dispatch, env, gate,
     historical_directory, history, lease_nonce, old_delegate, old_libexec, receipts,
@@ -577,6 +706,8 @@ def prove_live_package_removal(
         inputs = {name: (original_directory / name).read_bytes()
                   for name in ("task.json", "meta.json", "submit.json", "supervisor.ref.json")}
         authority = _warm_authority_records(state)
+        with private_fixture_transition(state):
+            predecessor_pid = private_shutdown_evidence(config)[0]
         remove_old_package()
         require(not old_libexec.exists() and not old_delegate.exists(), "live old package was not removed")
         original_cohort.assert_live()
@@ -586,6 +717,8 @@ def prove_live_package_removal(
         fresh_specifications = _upgrade_live_leases(state, [fresh], waiter_directory, lease_nonce)
         fresh_cohort = LiveFIFOLeaseCohort.acquire(fresh_specifications, lease_nonce)
         cleanup.callback(fresh_cohort.close)
+        fresh_directory = state / "tasks" / fresh["task_id"]
+        fresh_inputs = {name: (fresh_directory / name).read_bytes() for name in inputs}
         original_cohort.assert_live()
         fresh_cohort.assert_live()
         scheduling_path = state / ".supervisor" / "ordinary-scheduling.json"
@@ -595,13 +728,30 @@ def prove_live_package_removal(
         require(isinstance(runtime, dict) and runtime.get("client_executable") == str(client)
                 and runtime.get("daemon_executable") == str(client.parent / "pueued"),
                 "live dispatch did not select the current installed pair")
-        prepared = run_json(
-            delegate, env, ["--root", str(state), "supervisor", "ensure-owner", "--json"],
-            receipt=receipts / "upgrade-live-ensure-owner.json", capture_root=capture_root, capture_response=True,
-        )
-        require(prepared.get("status") == "owner_ready", "removed-package owner did not become ready")
+        with private_fixture_transition(state):
+            require(private_shutdown_evidence(config)[0] == predecessor_pid,
+                    "warm recovery replaced the original daemon before draining")
+        operation_id = None
+        for attempt in range(2):
+            prepared = run_json(
+                delegate, env, ["--root", str(state), "supervisor", "ensure-owner", "--json"],
+                expected=(3,), receipt=receipts / ("upgrade-live-drain-%d.json" % attempt),
+                capture_root=capture_root, capture_response=True,
+            )
+            control, report = _live_upgrade_report(prepared, operation_id)
+            operation_id = report["operation_id"]
+            require(report.get("phase") == "draining" and not report.get("completed", False)
+                    and control.get("active_work") == "present"
+                    and control.get("migration_readiness") == "blocked"
+                    and control.get("next_action") == "wait_for_legacy_work",
+                    "live tasks did not block the explicit upgrade drain")
+            original_cohort.assert_live()
+            fresh_cohort.assert_live()
+            with private_fixture_transition(state):
+                require(private_shutdown_evidence(config)[0] == predecessor_pid,
+                        "upgrade drain replaced the original daemon before task closure")
         require(scheduling_path.read_bytes() == scheduling_before,
-                "already-ready ensure-owner changed the runtime scheduling receipt")
+                "draining ensure-owner changed the runtime scheduling receipt")
         original_cohort.assert_live()
         fresh_cohort.assert_live()
         _require_one_warm_queue_identity(state, fresh, client, config, env, capture_root)
@@ -614,16 +764,38 @@ def prove_live_package_removal(
                 "warm repair changed the original active task's immutable inputs")
         require(_warm_authority_records(state) == authority, "warm task completion changed daemon provenance or history")
         require(snapshot(historical_directory) == history, "warm task completion changed committed task history")
+        _complete_live_upgrade(delegate, env, state, receipts, operation_id, capture_root=capture_root)
+        predecessor_deadline = time.monotonic() + 30
+        wait_until(lambda: private_daemon_process_gone(predecessor_pid, predecessor_deadline,
+                                                     capture_root=capture_root),
+                   timeout=30, description="original removed-keg daemon PID absence")
+        observe_installed_package(state, client.parent)
+        require(_warm_authority_records(state) != authority,
+                "explicit handoff retained the deleted installation's published generation")
+        successor = dispatch(delegate, "upgrade-after-handoff", brief)
+        successor_meta = read_json(state / "tasks" / successor["task_id"] / "meta.json")
+        successor_binding = successor_meta.get("supervisor_config")
+        require(isinstance(successor_binding, dict)
+                and successor_binding.get("client_executable") == str(client)
+                and successor_binding.get("daemon_executable") == str(client.parent / "pueued"),
+                "post-handoff task did not record the installed pair")
+        collect(successor, "upgrade-after-handoff")
+        require(all((original_directory / name).read_bytes() == data for name, data in inputs.items())
+                and all((fresh_directory / name).read_bytes() == data for name, data in fresh_inputs.items()),
+                "explicit handoff changed an admitted task's immutable inputs")
+        require(snapshot(historical_directory) == history, "explicit handoff changed committed task history")
     visible = os.stat(gate, follow_symlinks=False)
     require(stat.S_ISREG(visible.st_mode) and visible.st_uid == os.getuid()
             and (visible.st_dev, visible.st_ino) == (gate_identity.st_dev, gate_identity.st_ino),
             "warm release gate was replaced before owned cleanup")
     gate.unlink()
     return {"original_task": original["task_id"], "fresh_task": fresh["task_id"],
+            "successor_task": successor["task_id"], "upgrade_operation_id": operation_id,
             "old_install_removed_while_active": True, "active_task_survived": True,
             "runtime_receipt_refreshed": True, "first_recovery_by_dispatch": True,
             "one_fresh_queue_identity": True,
-            "published_provenance_and_history_preserved": True}
+            "provenance_preserved_until_tasks_closed": True, "immutable_history_preserved": True,
+            "installed_pair_handoff_completed": True, "predecessor_native_pid_absent": True}
 
 
 def finish_upgrade_recovery(
@@ -771,6 +943,8 @@ def prepare_upgrade_history(
         history=history, lease_nonce=lease_nonce, old_delegate=old_delegate, old_libexec=old_libexec,
         receipts=receipts, remove_old_package=remove_old_package, state=state, waiter_directory=waiter_directory,
     )
+    evidence["proactive_same_pair_upgrade"] = prove_proactive_same_pair_upgrade(
+        delegate, env, state, config, receipts, capture_root=capture_root)
     # Retain the independent stopped-daemon migration case after the live proof.
     shutdown_private_supervisor(
         client, config, env, state=state, task_ids=tuple(attempted_task_ids), capture_root=capture_root

@@ -56,12 +56,23 @@ func createTaskContext(ctx context.Context, selection supervisorcore.AdmissionSe
 			return creationFailure(result, CreationBrief, admissioncore.WithStage("read-brief", err))
 		}
 	}
-	if err = use.Register(ctx); err != nil {
-		return creationFailure(result, CreationRecord, admissioncore.WithStage("register-remote-data-use", err))
-	}
-	td, err := store.CreateTaskContext(ctx, req.TaskID, &req, brief, &meta)
-	if err != nil {
+	var td *taskdir.TaskDir
+	err = supervisorcore.WithAdmissionCreation(ctx, store.Root, supervisor.Binding(), supervisor.RuntimeBinding(), func(locked context.Context) error {
+		if registerErr := use.Register(locked); registerErr != nil {
+			return admissioncore.WithStage("register-remote-data-use", registerErr)
+		}
 		result.TaskRecord = CreationRecordUnknown
+		var createErr error
+		td, createErr = store.CreateTaskContext(locked, req.TaskID, &req, brief, &meta)
+		if createErr == nil {
+			result.TaskRecord = CreationRecordCreated
+		}
+		return admissioncore.WithStage("create-task-record", createErr)
+	})
+	if err != nil {
+		if td != nil {
+			err = errors.Join(err, td.Close())
+		}
 		err = annotateMissingDispatchStage("creating ordinary task", err)
 		return creationFailure(result, CreationRecord, admissioncore.WithStage("create-task-record", err))
 	}

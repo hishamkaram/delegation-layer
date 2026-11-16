@@ -27,6 +27,38 @@ type OwnerRouting interface {
 	MigrateOwn(context.Context, *taskdir.Store, infrastructure.LaunchContext) (infrastructure.Disposition, infrastructure.ManualMigrationReport, error)
 }
 
+// UpgradeRouting is explicit maintenance authority, separate from ordinary
+// admission. One request advances only the root's canonical upgrade journal.
+type UpgradeRouting interface {
+	UpgradeOwn(context.Context, *taskdir.Store, infrastructure.LaunchContext, infrastructure.UpgradeRequest, bool) (infrastructure.UpgradeOutcome, error)
+}
+
+func (r ControlRuntime) UpgradeOwn(ctx context.Context, store *taskdir.Store, request infrastructure.UpgradeRequest, refreshOwner bool) (infrastructure.UpgradeOutcome, error) {
+	if ctx == nil || store == nil {
+		return infrastructure.UpgradeOutcome{}, os.ErrInvalid
+	}
+	operation, cancel := ControlContextWithParent(ctx, r.Options)
+	defer cancel()
+	pin, err := store.PinRootContext(operation)
+	if err != nil {
+		return infrastructure.UpgradeOutcome{}, err
+	}
+	routing, ok := r.Routing.(UpgradeRouting)
+	if !ok {
+		return infrastructure.UpgradeOutcome{}, ErrInfrastructureAuthorityUnavailable
+	}
+	client, _, err := installation.ResolvePrivateSupervisorExecutables(r.Lookup)
+	if err != nil {
+		return infrastructure.UpgradeOutcome{}, err
+	}
+	selected, err := captureInfrastructureLaunchContext(pin, r.Options, client)
+	if err != nil {
+		return infrastructure.UpgradeOutcome{}, err
+	}
+	outcome, contactErr := routing.UpgradeOwn(operation, store, selected, request, refreshOwner)
+	return outcome, errors.Join(contactErr, outcome.Validate(), checkInfrastructureTarget(operation, store, pin))
+}
+
 // ControlRuntime owns invocation configuration, not supervisor state. The root
 // journals and canonical preparation own that state; Routing owns independent
 // contact. Healthy local observation needs no resident or artifact selection.

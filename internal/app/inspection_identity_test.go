@@ -8,8 +8,8 @@ import (
 	"time"
 
 	"github.com/hishamkaram/delegation-layer/internal/admission"
-	testsupportcore "github.com/hishamkaram/delegation-layer/internal/admission/testsupport"
 	"github.com/hishamkaram/delegation-layer/internal/inspection"
+	supervisorfixture "github.com/hishamkaram/delegation-layer/internal/supervisor/testsupport"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 	"github.com/hishamkaram/delegation-layer/internal/workspace"
@@ -39,6 +39,7 @@ func newAdmissionInspectionTestFixture(t *testing.T) admissionInspectionTestFixt
 	})
 	request := newBareInspectionRequest(t, store)
 	request.TaskID = resource.Request().TaskID
+	_, runtime := supervisorfixture.WriteUpgradeGeneration(t, store)
 	digest := task.ComputeSHA256([]byte("attempt worker"))
 	return admissionInspectionTestFixture{
 		store: store, resource: resource, request: request,
@@ -47,7 +48,7 @@ func newAdmissionInspectionTestFixture(t *testing.T) admissionInspectionTestFixt
 			DefinitionRevision: "inspection-v1", DefinitionSHA256: digest,
 			HelperExecutable: "/fixture/helper", HelperSHA256: digest, WorkerExecutable: "/fixture/worker", WorkerSHA256: digest,
 			RunnerOwnership: task.RunnerOwnershipManaged, WorkerExitProof: inspection.WorkerExitProofGuardianWaitV1,
-			Supervisor: testsupportcore.ContinuationSupervisorRef(store.Root, digest, "unix:/fixture/pueue.sock"),
+			Supervisor: runtime,
 		},
 	}
 }

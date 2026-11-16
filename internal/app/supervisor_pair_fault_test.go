@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/hishamkaram/delegation-layer/internal/admission"
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
@@ -359,33 +360,45 @@ func testSupervisorUpgradeRemovedPairSubmission(t *testing.T, missing string) {
 }
 
 func TestSupervisorUpgradeStatusReportsRuntimeSchedulingMiss(t *testing.T) {
-	f := newPublicContinuationFixture(t)
-	for _, path := range []string{f.clientC, f.daemonC} {
+	store, deps, current, owner := newOwnedSupervisorProbeTestFixture(t)
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	if err := supervisor.EnsureAdmissionSchedulingContext(ctx, store.Root, current); err != nil {
+		t.Fatal(err)
+	}
+	clientD, _ := writePublicContinuationPair(t, owner.base, "D")
+	deps.InitialSupervisorExecutable = clientD
+	for _, path := range []string{current.Binding().ClientExecutable, current.Binding().DaemonExecutable} {
 		if err := os.Remove(path); err != nil {
 			t.Fatal(err)
 		}
 	}
-	before := readSupervisorProbeTestFile(t, privateOrdinarySchedulingTestPath(f.owner.root))
-	result := supervisorStatus(f.owner.root, f.deps, newSupervisorCommandResponse("status"))
+	before := readSupervisorProbeTestFile(t, privateOrdinarySchedulingTestPath(store.Root))
+	result := supervisorStatus(store.Root, deps, newSupervisorCommandResponse("status"))
 	control := result.response.SupervisorControl
 	if result.code != 1 || control.State != "unavailable" || control.ReasonCode != "scheduling_refresh_required" || control.NextAction != "run_supervisor_ensure_owner" {
 		t.Fatalf("status hid runtime scheduling miss: code=%d control=%+v err=%v", result.code, control, result.err)
 	}
-	if after := readSupervisorProbeTestFile(t, privateOrdinarySchedulingTestPath(f.owner.root)); !bytes.Equal(before, after) {
+	if after := readSupervisorProbeTestFile(t, privateOrdinarySchedulingTestPath(store.Root)); !bytes.Equal(before, after) {
 		t.Fatal("status repaired runtime evidence")
 	}
-	if _, err := os.Stat(filepath.Join(f.owner.root, ".supervisor", "submissions")); !errors.Is(err, os.ErrNotExist) {
+	if _, err := os.Stat(filepath.Join(store.Root, ".supervisor", "submissions")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("status submitted work: %v", err)
 	}
 }
 
 func TestSupervisorStatusDoesNotMistakeEndpointForCompleteAdmission(t *testing.T) {
-	f := newPublicContinuationFixture(t)
-	path := filepath.Join(f.owner.root, ".supervisor", "task-observation.lock")
+	store, deps, current, _ := newOwnedSupervisorProbeTestFixture(t)
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	if err := supervisor.EnsureAdmissionSchedulingContext(ctx, store.Root, current); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(store.Root, ".supervisor", "task-observation.lock")
 	if err := os.Remove(path); err != nil {
 		t.Fatal(err)
 	}
-	result := supervisorStatus(f.owner.root, f.deps, newSupervisorCommandResponse("status"))
+	result := supervisorStatus(store.Root, deps, newSupervisorCommandResponse("status"))
 	control := result.response.SupervisorControl
 	if result.code != 1 || control.State != "unavailable" || control.NextAction != "run_supervisor_ensure_owner" {
 		t.Fatalf("reachable endpoint hid incomplete admission: code=%d control=%+v err=%v", result.code, control, result.err)
@@ -396,8 +409,9 @@ func TestSupervisorStatusDoesNotMistakeEndpointForCompleteAdmission(t *testing.T
 }
 
 func TestSupervisorStatusKeepsConfigDriftMigrationGuidance(t *testing.T) {
-	f := newPublicContinuationFixture(t)
-	path := f.client.Binding().ConfigPath
+	fixture := newHistoricalInstallationMigrationFixture(t, false)
+	prepareClosedHistoricalStatusFixture(t, fixture)
+	path := fixture.predecessor.ConfigPath
 	before := readSupervisorProbeTestFile(t, path)
 	t.Cleanup(func() {
 		if err := os.WriteFile(path, before, 0o600); err != nil {
@@ -407,7 +421,7 @@ func TestSupervisorStatusKeepsConfigDriftMigrationGuidance(t *testing.T) {
 	if err := os.WriteFile(path, append(before, '\n'), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	result := supervisorStatus(f.owner.root, f.deps, newSupervisorCommandResponse("status"))
+	result := supervisorStatus(fixture.root, fixture.dependencies(), newSupervisorCommandResponse("status"))
 	control := result.response.SupervisorControl
 	if result.code != 0 || result.err != nil || control.State != "legacy_present" || control.NextAction != "run_supervisor_migrate" {
 		t.Fatalf("configuration drift lost migration guidance: code=%d control=%+v err=%v", result.code, control, result.err)

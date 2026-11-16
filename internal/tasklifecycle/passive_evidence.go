@@ -30,13 +30,15 @@ const (
 // PassiveTaskObservation is a derived view, not another outcome or lifetime
 // authority. Liveness stays undetermined unless canonical closure is proven.
 type PassiveTaskObservation struct {
-	Admission   task.Admission
-	Liveness    task.Liveness
-	Publication task.Publication
-	Readiness   PassiveReadiness
-	Ready       bool
-	Status      string
-	FailureCode string
+	StopWatching        bool
+	OperatorDisposition *task.OperatorDispositionRecord
+	Admission           task.Admission
+	Liveness            task.Liveness
+	Publication         task.Publication
+	Readiness           PassiveReadiness
+	Ready               bool
+	Status              string
+	FailureCode         string
 }
 
 // ReadPassiveTaskObservation reuses validators and canonical noncreating proof.
@@ -47,7 +49,7 @@ func ReadPassiveTaskObservation(ctx context.Context, reader PassiveTaskReader, i
 		return facts, PassiveTaskObservation{}, err
 	}
 	observation, err := ClassifyPassiveTaskEvidence(facts, "")
-	if err != nil || observation.Ready || !facts.Exists || facts.Started != nil || facts.Lifetime.Intent != nil || facts.Lifetime.Registration != nil {
+	if err != nil || observation.Ready || observation.StopWatching || !facts.Exists || facts.Started != nil || facts.Lifetime.Intent != nil || facts.Lifetime.Registration != nil {
 		return facts, observation, err
 	}
 	proven, reference, err := reader.ReadNeverStartedTaskContext(ctx, id)
@@ -87,6 +89,11 @@ func ClassifyPassiveTaskEvidence(facts taskdir.TaskEvidence, neverStartedReferen
 	}
 	if closure.Closed() {
 		return passiveClosedEvidence(facts, result), nil
+	}
+	if facts.OperatorDisposition != nil {
+		result.StopWatching, result.OperatorDisposition = true, facts.OperatorDisposition
+		result.Status, result.FailureCode = "administratively_settled", "administrative_settlement"
+		return result, nil
 	}
 	if neverStartedReference != "" {
 		return passiveNeverStartedEvidence(facts, neverStartedReference, result)

@@ -42,6 +42,8 @@ type ownerServer struct {
 	initialCompleted  bool
 	initialOutcome    PreparationOutcome
 	initialError      error
+	upgradePreflight  UpgradePreflight
+	preflightError    error
 	terminalHandoff   bool
 	runtimeFrom       StartupReference
 	admissionStopped  chan struct{}
@@ -96,6 +98,9 @@ func newOwnerServer(ctx context.Context, entry *ownedResidentEntry, host EntryHo
 func (s *ownerServer) prepareInitial(ctx context.Context) (disposition Disposition, resultErr error) {
 	if s == nil {
 		return disposition, os.ErrInvalid
+	}
+	if s.entry.operation.Intent().Inputs.Initial.Kind == InitialUpgradePreflight {
+		return Disposition{}, s.prepareUpgradePreflight(ctx)
 	}
 	var outcome PreparationOutcome
 	dispatched := false

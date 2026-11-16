@@ -128,6 +128,12 @@ func infrastructureManualMigrationReport(result commandResult) (infrastructure.M
 		Legacy: infrastructure.ManualMigrationLegacy(control.LegacyReachability),
 		Active: infrastructure.ManualMigrationActive(control.ActiveWork),
 	}
+	// Protocol 4 cannot represent a closure-only blocker. Preserve its frozen
+	// shapes without reporting positive queue activity that was never observed.
+	if report.State == infrastructure.ManualMigrationBlocked && report.Active != infrastructure.ManualMigrationActivePresent {
+		report.State = infrastructure.ManualMigrationUnavailable
+		report.Active = infrastructure.ManualMigrationActiveUnknown
+	}
 	if err := report.Validate(); err != nil {
 		return infrastructure.ManualMigrationReport{}, err
 	}

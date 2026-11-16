@@ -177,6 +177,9 @@ func ownerServerIntentFixture(t *testing.T, journal *intentJournal, lease *Lease
 	t.Helper()
 	intent := liveJournalIntent(t, journal)
 	intent.Inputs.Initial = ownerInitialOperationFixture(journal.pin.RootID(), selection.initial)
+	if selection.initial == InitialUpgradePreflight {
+		intent.Inputs.RuntimeProducer = producerOutside
+	}
 	if selection.initial == InitialRuntimeRestart {
 		previous := journalIntent(t, journal, 1)
 		requireJournalPut(t, journal, lease, previous)

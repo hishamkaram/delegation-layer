@@ -73,10 +73,7 @@ func inspectLegacyEndedTask(ctx context.Context, store *taskdir.Store, legacy in
 		return fmt.Errorf("%w: ended Delegate task %s could not be inspected: %w", inspection.ErrGroupMigrationRequired, taskID, err)
 	}
 	if !result.Terminal() {
-		if requirement == endedTaskClosedForMigration && result.Publication == task.PublicationUnknown && !result.SealExists && !result.OutcomeExists {
-			return inspectClosedUnpublishedTask(ctx, td)
-		}
-		return fmt.Errorf("%w: ended Delegate task %s is awaiting publication", inspection.ErrGroupMigrationBusy, taskID)
+		return inspectUnpublishedLegacyTask(ctx, store, td, legacy.Supervisor, job, requirement, result)
 	}
 	return nil
 }
@@ -85,8 +82,8 @@ func inspectLegacyEndedTask(ctx context.Context, store *taskdir.Store, legacy in
 // after canonical native closure without manufacturing a publication outcome.
 func inspectClosedUnpublishedTask(ctx context.Context, td *taskdir.TaskDir) error {
 	if _, err := guardian.ReadClosureProof(ctx, td); err != nil {
-		if errors.Is(err, guardian.ErrProofPending) {
-			return fmt.Errorf("%w: ended Delegate task %s awaits lifetime closure", inspection.ErrGroupMigrationBusy, td.TaskID)
+		if task.AllErrorCauses(err, func(cause error) bool { return errors.Is(cause, guardian.ErrProofPending) }) {
+			return taskMaintenancePending(td.TaskID, "lifetime_closure_unproven", fmt.Errorf("%w: ended Delegate task %s awaits lifetime closure: %w", inspection.ErrGroupMigrationBusy, td.TaskID, err))
 		}
 		return fmt.Errorf("%w: ended Delegate task %s closure could not be verified: %w", inspection.ErrGroupMigrationRequired, td.TaskID, err)
 	}
@@ -95,7 +92,7 @@ func inspectClosedUnpublishedTask(ctx context.Context, td *taskdir.TaskDir) erro
 		return fmt.Errorf("%w: ended Delegate task %s runner lease could not be verified: %w", inspection.ErrGroupMigrationRequired, td.TaskID, err)
 	}
 	if !released {
-		return fmt.Errorf("%w: ended Delegate task %s runner remains owned", inspection.ErrGroupMigrationBusy, td.TaskID)
+		return taskMaintenancePending(td.TaskID, "runner_owned", fmt.Errorf("%w: ended Delegate task %s runner remains owned", inspection.ErrGroupMigrationBusy, td.TaskID))
 	}
 	return nil
 }
@@ -154,4 +151,19 @@ func (c *Cleanup) inspectEndedInspection(ctx context.Context, store *taskdir.Sto
 		return err
 	}
 	return validated(ctx, operation)
+}
+
+func inspectUnpublishedLegacyTask(ctx context.Context, store *taskdir.Store, td *taskdir.TaskDir, binding task.SupervisorRef, job pueue.Job, requirement endedTaskRequirement, result *taskdir.TaskInspection) error {
+	if requirement == endedTaskClosedForMigration && result.Publication == task.PublicationUnknown && !result.SealExists && !result.OutcomeExists {
+		closureErr := inspectClosedUnpublishedTask(ctx, td)
+		if closureErr == nil || !MaintenanceBusy(closureErr) {
+			return closureErr
+		}
+		allowed, dispositionErr := inspectTaskMaintenancePermission(ctx, store, td, binding, job)
+		if allowed {
+			return dispositionErr
+		}
+		return errors.Join(closureErr, dispositionErr)
+	}
+	return taskMaintenancePending(td.TaskID, "publication_pending", fmt.Errorf("%w: ended Delegate task %s is awaiting publication", inspection.ErrGroupMigrationBusy, td.TaskID))
 }

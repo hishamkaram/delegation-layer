@@ -113,13 +113,21 @@ class InstalledUpgradeRecordTests(unittest.TestCase):
         history = upgrade.snapshot(historical)
         original = "a" * 32
         fresh = "b" * 32
+        successor = "e" * 32
+        operation_id = "upgrade-v1:" + "f" * 32
         client = self.root / "current" / "libexec" / "pueue"
+        client.parent.mkdir(parents=True)
+        materialize_supervisor_pair(client.parent)
         gate = self.root / "release-gate"
         cohorts = [Mock(spec=["assert_live", "close"]), Mock(spec=["assert_live", "close"])]
         responses = []
+        ensure_calls = []
+        expected_exits = []
+        collect = Mock()
 
         def dispatch(binary, name, _brief):
-            task_id = original if name == "upgrade-live-original" else fresh
+            task_id = {"upgrade-live-original": original, "upgrade-live-fresh": fresh,
+                       "upgrade-after-handoff": successor}[name]
             if task_id == fresh:
                 self.assertEqual(binary, self.root / "candidate")
                 self.assertFalse(old_delegate.exists())
@@ -131,6 +139,12 @@ class InstalledUpgradeRecordTests(unittest.TestCase):
             directory.mkdir(parents=True)
             for record in ("task.json", "meta.json", "submit.json", "supervisor.ref.json"):
                 (directory / record).write_text("immutable original input: " + record)
+            if task_id == successor:
+                self.assertEqual(collect.call_count, 2, "successor admitted before old tasks closed")
+                self.assertEqual(len(ensure_calls), 3, "successor admitted before explicit handoff")
+                write_json(directory / "meta.json", {"supervisor_config": {
+                    "client_executable": str(client), "daemon_executable": str(client.parent / "pueued"),
+                }}, replace=True)
             write_json(directory / "supervisor.ref.json", {
                 "task_id": task_id, "label": "delegate-" + task_id, "numeric_task_id": len(responses) + 1,
             }, replace=True)
@@ -153,17 +167,45 @@ class InstalledUpgradeRecordTests(unittest.TestCase):
                 return {"status": "unknown"}
             if fault == "provenance":
                 (self.supervisor / "daemon.identity.json").write_text("changed provenance")
-            return {"status": "owner_ready"}
+            ensure_calls.append(arguments)
+            expected_exits.append(_kwargs.get("expected", (0,)))
+            if len(ensure_calls) <= 2:
+                self.assertEqual(collect.call_count, 0, "drain proof ran after task release")
+                report = {"operation_id": operation_id, "mode": "reactive", "phase": "draining"}
+                if fault == "operation" and len(ensure_calls) == 2:
+                    report["operation_id"] = "upgrade-v1:" + "0" * 32
+                if fault == "premature completion":
+                    report["completed"] = True
+                return {"supervisor_control": {"state": "blocked", "active_work": "present",
+                        "migration_readiness": "blocked", "next_action": "wait_for_legacy_work",
+                        "upgrade": report}}
+            self.assertEqual(collect.call_count, 2, "handoff attempted before task collection/closure")
+            current = {**self.binding, "client_executable": str(client),
+                       "daemon_executable": str(client.parent / "pueued")}
+            write_json(self.supervisor / "supervisor.identity.json", {"schema_version": 1, "binding": current},
+                       replace=True)
+            write_json(self.supervisor / "daemon.identity.json", {
+                "executable_identity": "installed-path-v1", "executable": str(client.parent / "pueued")},
+                       replace=True)
+            return {"supervisor_control": {"state": "migrated", "next_action": "retry_dispatch", "upgrade": {
+                "operation_id": operation_id, "mode": "reactive", "phase": "migrating", "completed": True,
+            }}}
 
         def queue(*_args, **_kwargs):
             return {"tasks": {str(index): {"id": index, "label": "delegate-" + response["task_id"],
                                            "status": {"Running": {}}}
                               for index, response in enumerate(responses, start=1)}}
 
-        collect = Mock()
+        def daemon_evidence(_config):
+            changed = (fault == "daemon replaced" and not old_delegate.exists()
+                       or fault == "drain replaced" and bool(ensure_calls))
+            return (54321 if changed else 12345, None, None)
+
         with patch.object(upgrade, "run_json", side_effect=ensure), \
                 patch.object(upgrade, "_upgrade_live_leases", return_value=[{"owned": "lease"}]), \
                 patch.object(upgrade.LiveFIFOLeaseCohort, "acquire", side_effect=cohorts), \
+                patch.object(upgrade, "private_shutdown_evidence", side_effect=daemon_evidence), \
+                patch.object(upgrade, "private_daemon_process_gone", return_value=True) as predecessor_gone, \
                 patch.object(upgrade, "pueue_snapshot", side_effect=queue):
             options = dict(brief=self.root / "brief", capture_root=None, client=client, collect=collect,
                            config=self.root / "config", delegate=self.root / "candidate", dispatch=dispatch,
@@ -172,7 +214,10 @@ class InstalledUpgradeRecordTests(unittest.TestCase):
                            receipts=self.root, remove_old_package=remove_old, state=self.state,
                            waiter_directory=self.root / "waiters")
             if fault:
-                reason = "did not become ready" if fault == "not ready" else "changed daemon provenance"
+                reason = {"not ready": "omitted supervisor control", "provenance": "changed daemon provenance",
+                          "operation": "replaced its operation", "premature completion": "did not block",
+                          "daemon replaced": "replaced the original daemon",
+                          "drain replaced": "replaced the original daemon"}[fault]
                 with self.assertRaisesRegex(RuntimeError, reason):
                     upgrade.prove_live_package_removal(**options)
                 self.assertTrue(gate.exists(), "unproven task closure removed its release gate")
@@ -181,10 +226,16 @@ class InstalledUpgradeRecordTests(unittest.TestCase):
                 evidence = upgrade.prove_live_package_removal(**options)
                 self.assertEqual(evidence["original_task"], original)
                 self.assertEqual(evidence["fresh_task"], fresh)
+                self.assertEqual(evidence["successor_task"], successor)
+                self.assertEqual(evidence["upgrade_operation_id"], operation_id)
                 self.assertTrue(evidence["active_task_survived"])
                 self.assertTrue(evidence["first_recovery_by_dispatch"])
+                self.assertTrue(evidence["installed_pair_handoff_completed"])
+                self.assertTrue(evidence["predecessor_native_pid_absent"])
+                self.assertEqual(predecessor_gone.call_args.args[0], 12345)
                 self.assertFalse(gate.exists())
-                self.assertEqual(collect.call_count, 2)
+                self.assertEqual(collect.call_count, 3)
+                self.assertEqual(expected_exits, [(3,), (3,), (0, 3)])
                 self.assertGreaterEqual(cohorts[0].assert_live.call_count, 2)
                 self.assertEqual(upgrade.snapshot(historical), history)
             cohorts[0].close.assert_called_once()
@@ -198,6 +249,119 @@ class InstalledUpgradeRecordTests(unittest.TestCase):
 
     def test_live_package_removal_detects_daemon_provenance_rewrite(self):
         self._warm_removal_case("provenance")
+
+    def test_live_package_removal_rejects_operation_replacement(self):
+        self._warm_removal_case("operation")
+
+    def test_live_package_removal_rejects_completion_while_tasks_are_live(self):
+        self._warm_removal_case("premature completion")
+
+    def test_live_package_removal_detects_unrecorded_warm_daemon_replacement(self):
+        self._warm_removal_case("daemon replaced")
+
+    def test_live_package_removal_detects_unrecorded_drain_daemon_replacement(self):
+        self._warm_removal_case("drain replaced")
+
+    def _proactive_upgrade_case(self, fault=""):
+        operation_id = "upgrade-v1:" + "e" * 32
+        config = self.supervisor / "pueue.yml"
+        config.write_text("owned fixture configuration\n")
+        journal = self.state / "infrastructure"
+        journal.mkdir()
+        fence = self.supervisor / "bootstrap.pending"
+        arguments = ["--root", str(self.state), "supervisor", "ensure-owner"]
+        completed = False
+        historical_pid = 18002
+        calls = []
+
+        def response(next_action, *, complete=False):
+            report = {"operation_id": operation_id, "mode": "operation_required",
+                      "phase": "migrating" if complete else "awaiting_installation"}
+            if complete:
+                report["completed"] = True
+            else:
+                report["completion_command"] = ["delegate", *arguments, "--complete-upgrade", operation_id,
+                                                "--refresh-owner", "--json"]
+            return {"supervisor_control": {"next_action": next_action, "upgrade": report,
+                    "state": "migrated" if complete else "upgrade_prepared"}}
+
+        def run_control(_delegate, _env, actual, **_options):
+            nonlocal completed, historical_pid
+            calls.append(actual)
+            if actual[-2:] == ["status", "--json"]:
+                self.assertFalse(completed)
+                return response("install_then_complete_upgrade")
+            if "--prepare-upgrade" in actual:
+                fence.write_text("prepared; explicit completion required\n")
+                return response("install_then_complete_upgrade")
+            if "--complete-upgrade" in actual:
+                previous = [call for call in calls[:-1] if "--complete-upgrade" in call]
+                if fault == "preflight pending" and not previous:
+                    return {"supervisor_control": {"state": "blocked",
+                            "next_action": "repeat_supervisor_ensure_owner"}}
+                if completed:
+                    if fault == "historical effect":
+                        (journal / "unexpected-new-owner.json").write_text("new owner effect\n")
+                    elif fault == "historical drain":
+                        fence.write_text("unexpected new drain\n")
+                    elif fault == "historical daemon":
+                        historical_pid = 18003
+                    return response("inspect_supervisor_status", complete=True)
+                if fault == "preflight pending":
+                    self.assertNotIn("--refresh-owner", actual)
+                else:
+                    self.assertIn("--refresh-owner", actual)
+                completed = True
+                fence.unlink()
+                write_json(self.supervisor / "migration-history.json", {"fixture_completed_operation": operation_id})
+                return response("retry_dispatch", complete=True)
+            if fence.exists():
+                if fault == "ensure authorizes":
+                    fence.write_text("unrelated ensure authorized the installation\n")
+                return response("install_then_complete_upgrade")
+            return {"status": "owner_ready", "supervisor_control": {"state": "ready"}}
+
+        with patch.object(upgrade, "run_json", side_effect=run_control), \
+                patch.object(upgrade, "private_shutdown_evidence", side_effect=lambda _config: (
+                    historical_pid if completed else 18001, None, None)), \
+                patch.object(upgrade, "private_daemon_process_gone", return_value=True) as absent:
+            if fault and fault != "preflight pending":
+                reason = {"ensure authorizes": "ordinary ensure authorized or advanced",
+                          "historical effect": "historical completion repeated",
+                          "historical drain": "historical completion repeated",
+                          "historical daemon": "historical completion replaced"}[fault]
+                with self.assertRaisesRegex(RuntimeError, reason):
+                    upgrade.prove_proactive_same_pair_upgrade(self.root / "delegate", {}, self.state, config,
+                                                              self.root, capture_root=None)
+                if fault == "ensure authorizes":
+                    self.assertFalse(any("--complete-upgrade" in call for call in calls))
+                    absent.assert_not_called()
+            else:
+                evidence = upgrade.prove_proactive_same_pair_upgrade(self.root / "delegate", {}, self.state, config,
+                                                                    self.root, capture_root=None)
+                self.assertEqual(evidence["operation_id"], operation_id)
+                self.assertTrue(evidence["fresh_daemon"])
+                self.assertTrue(evidence["historical_repeat_no_effect"])
+                self.assertEqual(len(calls), 7 if fault == "preflight pending" else 5)
+                self.assertEqual(absent.call_args.args[0], 18001)
+
+    def test_proactive_same_pair_noop_installation_requires_completion_and_fresh_daemon(self):
+        self._proactive_upgrade_case()
+
+    def test_proactive_upgrade_detects_unrelated_ensure_authorization(self):
+        self._proactive_upgrade_case("ensure authorizes")
+
+    def test_proactive_upgrade_detects_historical_owner_effect(self):
+        self._proactive_upgrade_case("historical effect")
+
+    def test_proactive_upgrade_detects_historical_new_drain(self):
+        self._proactive_upgrade_case("historical drain")
+
+    def test_proactive_upgrade_detects_historical_daemon_replacement(self):
+        self._proactive_upgrade_case("historical daemon")
+
+    def test_proactive_upgrade_waits_for_preflight_without_repeating_owner_refresh(self):
+        self._proactive_upgrade_case("preflight pending")
 
     def pending(self, *, binding=None, shutdown=False, proposal_digest=None, source=None, group_directory=None,
                 legacy_pid=0, legacy_process_start=""):

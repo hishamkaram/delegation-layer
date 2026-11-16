@@ -67,13 +67,16 @@ func (a *StartupAttempt) elect(ctx context.Context, request EstablishmentRequest
 		return err
 	}
 	var err error
-	a.journal, err = openIntentJournal(ctx, a.target, true)
+	a.journal, err = openIntentJournal(ctx, a.target, request.Initial.Kind != InitialUpgradePreflight)
 	if err != nil {
 		return err
 	}
 	latest, found, err := a.journal.latestIntent(ctx)
 	if err != nil {
 		return err
+	}
+	if !found && request.Initial.Kind == InitialUpgradePreflight {
+		return ErrIdentity
 	}
 	if found {
 		pending, checkErr := a.prepareSuccessor(ctx, request, latest)
@@ -111,7 +114,7 @@ func (a *StartupAttempt) elect(ctx context.Context, request EstablishmentRequest
 }
 
 func validateRuntimeRestartProducer(initial InitialOperation, kind producerKind) error {
-	if initial.Kind == InitialRuntimeRestart && kind != producerOutside {
+	if (initial.Kind == InitialRuntimeRestart || initial.Kind == InitialUpgradePreflight) && kind != producerOutside {
 		return ErrOwnerRequest
 	}
 	return nil
@@ -224,7 +227,7 @@ func (a *StartupAttempt) newIntent(artifacts Artifacts, launch LaunchContextRefe
 		return StartupIntent{}, err
 	}
 	inputs := StartupInputs{Kind: StartupRootOwner, Initial: request.Initial, Root: a.pin.Root(), RootID: a.pin.RootID(), RootDevice: a.pin.Device(), RootInode: a.pin.Inode(), BootID: boot, Artifacts: artifacts, Context: launch}
-	if request.Initial.Kind == InitialRuntimeRestart {
+	if request.Initial.Kind == InitialRuntimeRestart || request.Initial.Kind == InitialUpgradePreflight {
 		inputs.RuntimeProducer = producer
 	}
 	digest, err := inputs.Digest()

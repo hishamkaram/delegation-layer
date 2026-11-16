@@ -158,21 +158,52 @@ func recordPrivateClientConstruction(client *Client, root string) error {
 	return nil
 }
 
-func newPrivateMigrationShutdownClient(root string, binding task.SupervisorRef, identity privateDaemonIdentity, options Options) (*Client, error) {
-	client := privateMigrationPIDObserver(binding, identity, options)
+// bindRecordedPredecessorTransport derives protocol transport without changing
+// the logical predecessor or requiring it to be ready. Callers own the client
+// until every pending command has settled.
+func bindRecordedPredecessorTransport(ctx context.Context, root string, binding task.SupervisorRef, options Options) (*Client, error) {
+	options, err := optionsForSavedBinding(binding, options)
+	if err != nil {
+		return nil, err
+	}
+	selected, err := selectRecoveryClient(binding, options.RuntimeClientExecutable)
+	if err != nil {
+		return nil, err
+	}
+	options.RuntimeClientExecutable = selected
+	alias, found, err := readValidatedPrivateRecoveryAlias(root)
+	if err != nil {
+		return nil, err
+	}
+	var client *Client
+	if found {
+		if !alias.matches(binding) {
+			return nil, fmt.Errorf("%w: recovery alias differs from recorded predecessor", ErrBinding)
+		}
+		daemon, daemonErr := selectRecoveryDaemon(binding, filepath.Join(filepath.Dir(selected), "pueued"))
+		if daemonErr != nil {
+			return nil, daemonErr
+		}
+		client, err = bindPrivateRecoveryTransport(ctx, alias.record, binding, selected, daemon, options)
+	} else {
+		client, err = NewClient(binding, options)
+	}
+	if err != nil {
+		return nil, err
+	}
 	resolution, err := client.resolution()
+	if err == nil {
+		var resolved ResolvedConfig
+		resolved, err = readPrivateConfig(client.runtimeBinding.ConfigPath, filepath.Join(root, privateSupervisorDirectory), resolution)
+		if err == nil {
+			err = validateResolvedPrivateMigrationConfig(resolved, filepath.Join(root, privateSupervisorDirectory), binding.Endpoint)
+		}
+	}
+	if err == nil {
+		err = recordPrivateClientConstruction(client, root)
+	}
 	if err != nil {
-		return nil, err
-	}
-	resolved, err := readPrivateConfig(client.runtimeBinding.ConfigPath, filepath.Join(root, privateSupervisorDirectory), resolution)
-	if err != nil {
-		return nil, err
-	}
-	if err = validateResolvedPrivateMigrationConfig(resolved, filepath.Join(root, privateSupervisorDirectory), client.runtimeBinding.Endpoint); err != nil {
-		return nil, err
-	}
-	if err = recordPrivateClientConstruction(client, root); err != nil {
-		return nil, err
+		return nil, errors.Join(err, client.CloseAfterPending(err))
 	}
 	return client, nil
 }

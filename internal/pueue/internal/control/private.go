@@ -115,6 +115,7 @@ type privateBootstrapRecord struct {
 	SchemaVersion  int                          `json:"schema_version"`
 	Restart        *privatePairRestartIntent    `json:"restart,omitempty"`
 	RuntimeRestart *privateRuntimeRestartRecord `json:"runtime_restart,omitempty"`
+	DrainV1        *privateUpgradeDrain         `json:"drain_v1,omitempty"`
 }
 
 type privateQueueMaintenanceRun struct {

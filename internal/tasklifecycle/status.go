@@ -19,19 +19,10 @@ func Status(store *taskdir.Store, td *taskdir.TaskDir, options SupervisorOptions
 
 func StatusContext(ctx context.Context, store *taskdir.Store, td *taskdir.TaskDir, options SupervisorOptions, runner string, catalog commonprovider.Catalog) (result StatusResult, resultErr error) {
 	options.AdmissionStore = store
-	inspection, err := td.InspectContext(ctx)
-	interaction, interactionErr := ReadInteraction(td)
-	result.Interaction, result.Inspection = interaction, inspection
-	if !inspection.Terminal() {
-		err = errors.Join(err, interactionErr)
-	}
-	if err != nil {
+	if handled, err := observeStoredStatus(ctx, store, td, options, catalog, &result); handled {
 		return result, err
 	}
-	if inspection.Terminal() {
-		err = observeTerminalStatus(ctx, store.Root, td, options, catalog, &result.Observation)
-		return result, err
-	}
+
 	req, meta, spec, metaHash, err := td.PreparedIdentity()
 	if err != nil {
 		return result, err
@@ -126,4 +117,29 @@ func ReconcileStatus(ctx context.Context, root string, td *taskdir.TaskDir, req 
 	}
 	defer func() { supervisorcore.CloseMaintenance(client, resultErr) }()
 	return ReconcileStatusWithClient(ctx, root, td, req, meta, spec, metaHash, client, observed)
+}
+
+func observeStoredStatus(ctx context.Context, store *taskdir.Store, td *taskdir.TaskDir, options SupervisorOptions, catalog commonprovider.Catalog, result *StatusResult) (bool, error) {
+	inspection, err := td.InspectContext(ctx)
+	interaction, interactionErr := ReadInteraction(td)
+	result.Interaction, result.Inspection = interaction, inspection
+	if !inspection.Terminal() {
+		err = errors.Join(err, interactionErr)
+	}
+	if err != nil {
+		return true, err
+	}
+	if inspection.Terminal() {
+		err = observeTerminalStatus(ctx, store.Root, td, options, catalog, &result.Observation)
+		return true, err
+	}
+	result.OperatorDisposition, err = ObserveAdministrativeSettlement(ctx, td, inspection)
+	if err != nil || result.OperatorDisposition != nil {
+		if result.OperatorDisposition != nil {
+			result.Admission, result.AdmissionObserved = task.AdmissionAdmitted, true
+			result.Liveness, result.LivenessObserved = task.LivenessUndetermined, true
+		}
+		return true, err
+	}
+	return false, nil
 }
