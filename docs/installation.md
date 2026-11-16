@@ -58,6 +58,10 @@ returns setup exit 2: check provider options, or upgrade through the original
 installer if doctor is unsupported. Malformed/incompatible reports and valid
 blocked doctor reports return setup exit 1. No skill/routing writes start in
 these cases; any already completed CLI installation is reported and retained.
+An installed-pair handoff can produce doctor exit 2 with issue
+`supervisor_installation_differs`, even when the new CLI is supported. Follow
+that issue's printed `next_step` from the same persistent user context and state
+root; setup does not perform the handoff. Rerun setup after doctor exits 0.
 Other blocked/failed setup exits 1; completed setup exits 0 with manual actions
 still explicit.
 
