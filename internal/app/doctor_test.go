@@ -267,3 +267,16 @@ func assertDoctorScheduler(t *testing.T, report DoctorReport, code int, want sch
 		t.Fatalf("scheduler report=%+v code=%d want=%s", report, code, want)
 	}
 }
+
+func TestDoctorAllIssuesIsOrderedAndIndependent(t *testing.T) {
+	report := DoctorReport{Scheduler: DoctorScheduler{Issues: []DoctorIssue{{Code: "scheduler_advisory"}}}, Issues: []DoctorIssue{{Code: "root_issue"}}}
+	issues := report.AllIssues()
+	if len(issues) != 2 || issues[0].Code != "scheduler_advisory" || issues[1].Code != "root_issue" {
+		t.Fatalf("issues=%+v", issues)
+	}
+	issues[0].Code = "changed"
+	issues[1].Code = "changed"
+	if report.Scheduler.Issues[0].Code != "scheduler_advisory" || report.Issues[0].Code != "root_issue" {
+		t.Fatal("derived list aliases owner")
+	}
+}

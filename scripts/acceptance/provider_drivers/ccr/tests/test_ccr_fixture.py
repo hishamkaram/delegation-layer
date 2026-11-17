@@ -246,7 +246,7 @@ class FixturePublicationTests(unittest.TestCase):
         run.processes = object.__new__(Processes)
         run.processes.capture_root = raw
         run.closed, run.success_candidate = True, None
-        run.args, run.mode = argparse.Namespace(model="ok"), "read-only"
+        run.args, run.mode = argparse.Namespace(model="ok", cpu_guard=True), "read-only"
         run.tasks, run.numeric_ids = {}, {}
         run.root_id = ROOT_ID
         run.provider_executable = Path("/ccr")
@@ -305,8 +305,9 @@ class FixturePublicationTests(unittest.TestCase):
         patched_cli.start()
         self.addCleanup(patched_cli.stop)
 
-    def main(self, run: gate.FixtureAcceptance, *patches, refusal_cleanup=False):
-        argv = ["acceptance/provider_drivers/ccr/fixture.py", "--output", str(self.output)]
+    def main(self, run: gate.FixtureAcceptance, *patches, refusal_cleanup=False, cpu_guard=True):
+        argv = ["acceptance/provider_drivers/ccr/fixture.py", "--output", str(self.output),
+                "--cpu-guard", "true" if cpu_guard else "false"]
         if refusal_cleanup:
             argv.append("--refusal-cleanup")
         with patch.object(gate, "choose_output", return_value=self.output), \
@@ -413,6 +414,52 @@ class FixturePublicationTests(unittest.TestCase):
         self.assertFalse((self.output / "processes").exists())
         cleanup = json.loads((self.output / "cleanup.json").read_text())
         self.assertEqual((cleanup["status"], cleanup["completion"]), ("removed", "passed"))
+
+    def test_receipts_disclose_effective_positive_admission_guards(self):
+        for cpu_guard in (True, False):
+            for failure in (False, True):
+                with self.subTest(cpu_guard=cpu_guard, failure=failure):
+                    self.setUp()
+                    run = self.closed_run()
+                    run.args.cpu_guard = cpu_guard
+                    if failure:
+                        with patch.object(run, "exercise", side_effect=RuntimeError("controlled failure")):
+                            with self.assertRaisesRegex(RuntimeError, "controlled failure"):
+                                self.main(run, cpu_guard=cpu_guard)
+                    else:
+                        self.assertEqual(self.main(run, cpu_guard=cpu_guard), 0)
+                    receipt = json.loads((self.output / ("failure.json" if failure else "success.json")).read_text())
+                    self.assertEqual(receipt["admission_guards"], {
+                        "cpu": "enabled" if cpu_guard else "disabled-by-caller", "memory": "enabled"})
+                    self.assertEqual(receipt["admission_guard_scope"], "positive-fixture-admissions")
+
+    def test_bounded_guard_policy_survives_setup_and_runtime_failure(self):
+        for cpu_guard in (True, False):
+            for stage in ("prepare", "exercise"):
+                with self.subTest(cpu_guard=cpu_guard, stage=stage):
+                    self.setUp()
+                    run = self.closed_run()
+                    run.args.cpu_guard = cpu_guard
+                    expected = {"admission_guard_scope": "positive-fixture-admissions",
+                                "admission_guards": {"cpu": "enabled" if cpu_guard else "disabled-by-caller",
+                                                     "memory": "enabled"}}
+                    original = RuntimeError("not-for-upload:" + "x" * 20_000)
+
+                    def fail(*_args, **_kwargs):
+                        # Retention must not depend on a later failure receipt or projection.
+                        policy = self.output / "admission-policy.json"
+                        self.assertTrue(policy.is_file(), "guard policy was not recorded before setup/admission")
+                        self.assertEqual(json.loads(policy.read_text()), expected)
+                        raise original
+
+                    fault = (patch.object(gate, "prepare_fixture_acceptance", side_effect=fail) if stage == "prepare"
+                             else patch.object(run, "exercise", side_effect=fail))
+                    with self.assertRaises(RuntimeError) as raised:
+                        self.main(run, fault, cpu_guard=cpu_guard)
+                    self.assertIs(raised.exception, original)
+                    policy = self.output / "admission-policy.json"
+                    self.assertEqual(json.loads(policy.read_text()), expected)
+                    self.assertLessEqual(policy.stat().st_size, 256)
 
     def test_failed_cleanup_never_publishes_and_keeps_the_committed_candidate(self):
         for label, fault in (
@@ -544,10 +591,10 @@ class FixtureWorkflowTests(unittest.TestCase):
         paths = {line.strip() for line in section.splitlines() if line.strip() not in ("", "|")}
         root = "~/ccr-integration-evidence"
         expected = {f"{root}/{name}" for name in (
-            "success.json", "cleanup.json", "*-dispatch-attempt.json", "*-continue-attempt.json",
+            "success.json", "admission-policy.json", "cleanup.json", "*-dispatch-attempt.json", "*-continue-attempt.json",
             "failure-diagnostics.json", "failure-host-cpu-snapshot.json", "failure-cleanup.json", "failure-cleanup-expired.json")}
         expected.update(f"~/ccr-refusal-cleanup-evidence/{name}" for name in (
-            "success.json", "*-dispatch-attempt.json", "failure-diagnostics.json",
+            "success.json", "admission-policy.json", "*-dispatch-attempt.json", "failure-diagnostics.json",
             "failure-cleanup.json", "failure-cleanup-expired.json", "cleanup.json"))
         self.assertEqual(paths, expected)
         self.assertIn("if: always()", upload)
@@ -632,6 +679,33 @@ class FixtureGuardSelectionTests(unittest.TestCase):
 
 
 class ControlledRefusalTests(unittest.TestCase):
+    def test_refusal_receipt_discloses_policy_of_real_positive_warmup(self):
+        for cpu_guard in (True, False):
+            with self.subTest(cpu_guard=cpu_guard), tempfile.TemporaryDirectory() as temporary:
+                run = gate.RefusalCleanupAcceptance.__new__(gate.RefusalCleanupAcceptance)
+                run.briefs = Path(temporary)
+                run.args = argparse.Namespace(model="ok", cpu_guard=cpu_guard)
+                run.root_id, run.refused_task_id = ROOT_ID, None
+                ops = SimpleNamespace(dispatch_observations=[{}])
+                observation = cpu_refusal_observation()
+
+                def dispatch(name, _brief):
+                    if name == "warm":
+                        return "a" * 32
+                    self.assertTrue(run.inject_refusal)
+                    run.refused_task_id = observation["task_id"]
+                    ops.dispatch_observations.append(observation)
+                    raise AdmissionFailure("controlled refusal", observation["response"])
+
+                with patch.object(run, "ops", ops, create=True), \
+                        patch.object(run, "setup"), patch.object(run, "dispatch", side_effect=dispatch), \
+                        patch.object(run, "published"):
+                    receipt = run.exercise(None)
+                self.assertEqual(receipt["admission_guards"], {
+                    "cpu": "enabled" if cpu_guard else "disabled-by-caller", "memory": "enabled"})
+                self.assertEqual(receipt["admission_guard_scope"], "positive-fixture-admissions")
+                self.assertEqual(receipt["original_failure"]["response"], observation["response"])
+
     def test_finite_injection_uses_actual_capture_wait_and_keeps_unknown_refusal(self):
         base = Path(tempfile.mkdtemp(prefix="ccr-controlled-refusal-")).resolve(strict=True)
         owner = DirectoryOwner()

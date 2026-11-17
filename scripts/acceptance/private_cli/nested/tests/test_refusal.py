@@ -49,7 +49,7 @@ class InnerReceiptFailureTests(unittest.TestCase):
                                        pueued=Path(sys.executable), native_fixture=Path(sys.executable))
                 receipt = AcceptanceReceipt(args.output, 3, 1, {})
 
-                def fail_inner(_args, _failure, _lifetime, inner, _success):
+                def fail_inner(_args, _failure, _lifetime, inner, _success, *, current_failure=None):
                     if mode == "malformed":
                         inner.output.write_text("{invalid JSON")
                     elif mode == "interrupted":
@@ -180,7 +180,7 @@ class RefusedLeaderControlTests(unittest.TestCase):
                                expected_backend="process-group")
         receipt = AcceptanceReceipt(args.output, 3, 1, {})
 
-        def finalize(_args, primary, lifetime, inner_receipt, success):
+        def finalize(_args, primary, lifetime, inner_receipt, success, *, current_failure=None):
             self.assertIs(primary, refused.exception)
             self.assertFalse(success)
             lifetime.closed_roots[self.state.directory] = None

@@ -95,7 +95,7 @@ class WorkflowSelectionTests(unittest.TestCase):
 
     def test_required_linux_guard_executes_and_refuses_failed_or_invalid_selection(self):
         gate = job_text(self.workflow, "gate-linux")
-        self.assertIn("if: ${{ always() }}", gate.split("    steps:", 1)[0])
+        self.assertIn("if: ${{ !cancelled() }}", gate.split("    steps:", 1)[0])
         guard = steps(gate)["Require a valid check selection"]
         self.assertIn("SELECTION_RESULT: ${{ needs.changes.result }}", guard)
         self.assertIn("FULL: ${{ needs.changes.outputs.full }}", guard)
@@ -110,6 +110,22 @@ class WorkflowSelectionTests(unittest.TestCase):
                     env={**os.environ, "SELECTION_RESULT": result, "FULL": full},
                     text=True, check=False, timeout=10)
                 self.assertEqual(observed.returncode, expected, observed.stderr)
+
+    def test_only_superseded_pr_runs_share_a_cancellable_workflow_group(self):
+        # These expressions are the hosted scheduling contract. The shell matrix
+        # above separately proves selection failures cannot turn into a green gate.
+        header = self.workflow.split("\njobs:\n", 1)[0]
+        self.assertIn("\nconcurrency:\n", header)
+        concurrency = header.split("\nconcurrency:\n", 1)[1]
+        self.assertEqual(
+            concurrency.strip(),
+            "group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' "
+            "&& format('pr-{0}', github.event.pull_request.number) "
+            "|| format('run-{0}', github.run_id) }}\n"
+            "  cancel-in-progress: ${{ github.event_name == 'pull_request' }}",
+        )
+        self.assertEqual(self.workflow.count("\nconcurrency:\n"), 1)
+        self.assertNotRegex(self.workflow.split("\njobs:\n", 1)[1], r"(?m)^ +concurrency:")
 
     def test_light_gate_runs_content_checks_and_full_only_steps_have_conditions(self):
         gate_steps = steps(job_text(self.workflow, "gate-linux"))

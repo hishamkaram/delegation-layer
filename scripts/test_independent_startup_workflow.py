@@ -279,7 +279,7 @@ class IndependentStartupWorkflowTests(unittest.TestCase):
         linux_package = job_text(self.source, "skill-package-linux").split("    steps:", 1)[0]
         self.assertNotIn("    if:", linux_package)
         linux_gate = job_text(self.source, "gate-linux").split("    steps:", 1)[0]
-        self.assertIn("if: ${{ always() }}", linux_gate)
+        self.assertIn("if: ${{ !cancelled() }}", linux_gate)
         self.assertIn("needs: development-candidate", job_text(self.source, "development-candidate-install"))
         self.assertIn("needs.changes.outputs.full == 'true'", self.job)
         self.assertIn("os: [ubuntu-24.04, macos-latest]", self.job)

@@ -39,6 +39,7 @@ input. Invalid requests keep exit `2` with scoped usage on the error stream.
 | `schedule health`, `schedule policy` | [Schedule reliability and quota policy](../skills/agent-integration/references/command-reference.md#schedule-reliability) |
 | `scheduler serve/status/stop/migrate`, `scheduler run` | [User-started host and compatibility runtime](../skills/agent-integration/references/command-reference.md#scheduler-runtime) |
 | `result read` | [Bounded committed local answers](../skills/agent-integration/references/command-reference.md#result-read) |
+| `result save` | [Complete verified local answer export](../skills/agent-integration/references/command-reference.md#result-save) |
 | `context`, `resolve`, guarded `result read`, `origin` | [Guarded local connector contract](connector-contract.md) |
 | `gateway connect/status/doctor/serve/disconnect`, `gateway workspace`, `gateway service` | [Gateway login, workspace approvals and per-user service](gateway-connect.md) |
 | `supervisor status/ensure-owner/migrate/restart` | [Operator recovery](#supervisor-recovery) |

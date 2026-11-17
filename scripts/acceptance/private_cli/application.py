@@ -1,5 +1,7 @@
 """Private CLI argument boundary and finite acceptance orchestration."""
 
+from contextlib import contextmanager
+import signal
 import uuid
 
 from scripts.acceptance.directories.operations import DirectoryOwner
@@ -25,16 +27,70 @@ from scripts.acceptance.private_cli.scenario_entry import run_noexec_state_scena
 from scripts.acceptance.private_cli.legacy import run_legacy_scenario
 from scripts.acceptance.private_cli.scenario_entry import run_recovery_scenario
 from scripts.acceptance.private_cli.scenario_entry import run_stop_scenario
+from scripts.acceptance.testing.fixture_cleanup import closing_preserving_primary
+
+
+class _ShutdownState:
+    """One invocation owns signal routing; cleanup and receipts only read its first interruption."""
+
+    def __init__(self):
+        self.interruption: KeyboardInterrupt | SystemExit | None = None
+        self.cleaning = False
+        self.cleanup_primary: BaseException | None = None
+
+    def begin_cleanup(self, primary: BaseException | None):
+        self.cleaning = True
+        self.cleanup_primary = primary
+
+    def current_failure(self, primary: BaseException | None) -> BaseException | None:
+        return primary if primary is not None else self.interruption
+
+
+@contextmanager
+def _shutdown_signals():
+    """Raise one interruption before cleanup, or defer it until once-only cleanup finishes."""
+    shutdown = _ShutdownState()
+    previous = []
+
+    def interrupt(number, _frame):
+        if shutdown.interruption is not None:
+            return
+        shutdown.interruption = KeyboardInterrupt() if number == signal.SIGINT else SystemExit(128 + number)
+        if not shutdown.cleaning:
+            raise shutdown.interruption
+
+    try:
+        for number in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
+            previous.append((number, signal.signal(number, interrupt)))
+        try:
+            yield shutdown
+        except BaseException as error:
+            if (shutdown.cleaning and shutdown.cleanup_primary is None
+                    and shutdown.interruption is not None and error is not shutdown.interruption):
+                raise shutdown.interruption from error
+            raise
+        else:
+            if shutdown.interruption is not None:
+                raise shutdown.interruption
+    finally:
+        for number, handler in reversed(previous):
+            signal.signal(number, handler)
 
 
 def main():
+    with _shutdown_signals() as shutdown:
+        _run_fixture(shutdown)
+
+
+def _run_fixture(shutdown: _ShutdownState):
     args, dispatch_workers, parser = parse_arguments()
     legacy_mode, queued_runner_check, inspection_runner_check, response_directory, run_receipt = prepare_receipt(
         args, dispatch_workers, parser
     )
     if args.scenario == "nested-refused-leader":
         from scripts.acceptance.private_cli.nested.refusal import run_refused_leader
-        run_refused_leader(args, response_directory, run_receipt)
+        run_refused_leader(args, response_directory, run_receipt,
+                          begin_cleanup=shutdown.begin_cleanup, current_failure=shutdown.current_failure)
         return
     lifetime = FixtureLifetime(DirectoryOwner(), DirectoryOwner())
     success = False
@@ -96,4 +152,8 @@ def main():
         run_receipt.add_details(failure_phase=run_receipt.current_phase)
         raise
     finally:
-        finalize_fixture(args, failure, lifetime, run_receipt, success)
+        shutdown.begin_cleanup(failure)
+        with closing_preserving_primary(lambda: finalize_fixture(args, failure, lifetime, run_receipt, success,
+                                                                current_failure=shutdown.current_failure)):
+            if failure is not None:
+                raise failure

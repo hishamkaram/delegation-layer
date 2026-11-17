@@ -124,6 +124,16 @@ can reuse trustworthy unchanged results. Final independent review covers the
 integrated change; do not repeat it separately for every worker. Unrelated
 findings are reported separately, not automatically added to the ticket.
 
+The private-CLI acceptance driver routes the first SIGINT, SIGTERM or SIGHUP
+through its existing failure/finalization owner. A first signal during cleanup
+is deferred until that once-only cleanup and refused-leader disposal finish;
+later signals do not interrupt it. The receipt decision samples a pending
+interruption before writing. A signal after that decision cannot rewrite the
+receipt; the interruption still determines the exit unless an earlier scenario
+failure takes precedence. Original handlers are restored on exit. Secondary
+finalization errors stay attached to the initiating failure. SIGKILL and forced
+runner termination cannot establish cleanup; retain and report incomplete proof.
+
 ### Focused app and fixture checks
 
 Select the behavior being edited before running the full gate. For example:
@@ -506,29 +516,24 @@ PATH="$PWD/bin:$PWD/bin/test-supervisor:$PATH" python3 scripts/acceptance/provid
 It covers overlapping sessions, writes, stops, continuation, aliases and replay.
 This proves the fixture integration, not an upstream account's availability.
 
-The fixture defaults to CPU and memory checks. CI passes `--cpu-guard=false`
-for macOS positive admissions in both fixture modes, including the refusal
-control's real warm-up; memory remains enabled and the injected negative is
-unchanged. This isolates provider-lifecycle coverage from uncontrolled runner CPU
-load. The platform gate retains default-on guard coverage. Revisit this choice
-if runners provide controlled CPU isolation; it does not establish the cause of
-a historical CPU refusal or prove that CPU accounting was defective.
+### Recorded resource-policy exceptions
 
-Nested-survival acceptance defaults to CPU and memory checks. CI temporarily
-sets `DELEGATE_NESTED_CPU_GUARD=false` only on macOS for positive admissions,
-including the refused-leader control's real warm-up. The Make target passes
-`--nested-cpu-guard` explicitly to all three topologies and the refusal control;
-the selected boolean travels through fixture configuration to both nested workers.
-Local and Linux runs retain CPU-on; memory stays on everywhere. The synthetic
-refused leader retains default CPU arguments and unchanged negative assertions.
-Before admission, the receipt records `admission_guards`, its positive-only
-scope and, when CPU is off, the unproven host-load source and fixture-descendant
-closure. This proves lifecycle behavior under that policy, not default CPU
-admission. The nested-survival CI job owns this temporary selection; it may hide
-fixture-descendant load. Remove it when host CPU is controlled and fixture
-descendants have proven closure. Platform checks and the remaining native
-acceptance checks keep default-on CPU coverage, apart from the macOS CCR,
-candidate-install and nested selections described here.
+CPU and memory admission checks remain enabled by default. These existing
+macOS CI selections isolate positive lifecycle proof from uncontrolled runner
+CPU load; none establishes default CPU admission or the historical cause of a
+CPU refusal. Linux and the platform gates retain default-on coverage. Memory
+stays enabled, and injected negative/refusal assertions remain unchanged.
+
+| Selection and owner | Recorded evidence and scope | Removal condition |
+| --- | --- | --- |
+| CCR foreground job: `--cpu-guard=false` | A bounded `admission-policy.json` is written before setup and retained by CI, including failed runs; success, refusal and failure receipts derive the same `admission_guards` and positive-only scope; includes the refusal control's warm-up in both modes | Controlled runner CPU isolation |
+| Nested-survival job: `DELEGATE_NESTED_CPU_GUARD=false` | Before admission, `admission_guards` records the positive-only policy, unproven host-load source and descendant closure; covers all three topologies and warm-up, while the synthetic refused leader keeps default CPU arguments | Controlled host CPU and proven fixture-descendant closure |
+| Distribution-install job: `--bootstrap-cpu-guard=false` | All three macOS channels record `admission_guards` before bootstrap, including the unproven load source and installer-descendant closure | Controlled host CPU and proven installer-descendant closure |
+
+The nested Make target passes its selected boolean explicitly to both nested
+workers. Local nested and bootstrap runs keep CPU-on by default. Failed or
+uncertain attempts retain their evidence; none of these selections authorizes
+a retry or closure claim. See the recorded scope before interpreting a pass.
 
 After a completed host-CPU refusal, the nested receipt includes one bounded,
 failure-only `ps` projection:
@@ -644,18 +649,10 @@ temporary merge commit. They run for same-repository PRs; fork PRs retain the
 ordinary gates. Main builds always run the distribution install checks before
 their artifacts can be published.
 
-Candidate-install CI temporarily selects `--bootstrap-cpu-guard=false` for positive macOS
-bootstrap turns across all three channels. The proof tool defaults to CPU-on;
-Linux and the shared private-CLI caller retain that default. Memory stays on.
-The receipt records `admission_guards` before bootstrap execution and discloses
-that the host-load source and installer-descendant closure are unproven. This
-proves installed bootstrap behavior under the recorded policy, not default CPU
-admission. Platform checks and the remaining native acceptance checks keep
-default-on CPU coverage, apart from the macOS CCR, candidate-install and nested
-selections described above.
-The distribution install job owns its selection; remove it when
-host CPU is controlled and installer descendants have proven closure. Failed
-or uncertain attempts still retain their evidence; the proof tool never retries them.
+Distribution-install resource selections and their evidence/removal conditions
+are listed under [recorded resource-policy exceptions](#recorded-resource-policy-exceptions).
+The installed-bootstrap proof covers that stated policy; the publisher does not
+retry failed or uncertain attempts.
 
 Publication validates the trusted workflow/run/source, successful build/install
 chain, artifact digest/expiry/archive contents and version before mutation.

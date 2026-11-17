@@ -19,13 +19,15 @@ from scripts.acceptance.private_cli.supervisor import shutdown_terminal_private_
 from scripts.acceptance.private_cli.supervisor import shutdown_remaining
 from scripts.acceptance.private_cli.supervisor import terminal_cleanup_evidence
 import time
+from collections.abc import Callable
 
 
 # One primary-root finalization deadline: readiness, observation, lease and shutdown share it.
 PRIMARY_FINALIZATION_SECONDS = 45
 
 
-def finalize_fixture(args, failure, lifetime, run_receipt, success):
+def finalize_fixture(args, failure, lifetime, run_receipt, success, *,
+                     current_failure: Callable[[BaseException | None], BaseException | None] | None = None):
     cleanup_errors = []
     run_receipt.phase("cleanup")
     # One disposal owner holds each root's lease from its authorized shutdown through root deletion.
@@ -86,7 +88,8 @@ def finalize_fixture(args, failure, lifetime, run_receipt, success):
         cleanup_failure = RuntimeError(
             "private acceptance cleanup failed: " + "; ".join(str(error) for error in cleanup_errors)
         )
-    receipt_error = failure or cleanup_failure
+    # This decision is the receipt boundary. A later interruption cannot rewrite it.
+    receipt_error = (current_failure(failure) if current_failure is not None else failure) or cleanup_failure
     result = (
         "PASS"
         if success and receipt_error is None and not cleanup_errors

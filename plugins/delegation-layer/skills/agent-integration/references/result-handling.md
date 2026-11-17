@@ -129,13 +129,17 @@ Keep collection in the foreground until terminal evidence or a reported
 blocker. Detach only when requested. `collect --watch` defaults to `0s`;
 a positive finite interval bounds observation and never extends the task budget.
 
-For an ordinary local committed task, read the complete answer with
-[`result read`](command-reference.md#result-read) using its exact returned
-`payload` descriptor. Decode `result_range.data_base64` and follow
-`next_offset` until `eof`. Assemble the decoded bytes before interpreting text;
-a page can split a UTF-8 character. Each bounded page verifies the entire
-payload. Codex leads use the [native sandboxed decoding recipe](../examples/codex-lead.md#read-a-complete-result-in-bounded-pages)
-rather than copying base64 through the model. A read error returns no answer bytes; it never authorizes raw-output fallback,
+For an ordinary local committed task, use
+[`result save`](command-reference.md#result-save) with the exact returned
+`payload` descriptor to save a complete verified answer without passing base64
+through the model. Read every part of the saved file using bounded native text
+reads. A post-publication cleanup error retains `saved`: preserve that verified
+file and report the error rather than retrying or deleting it. See the
+[Codex lead example](../examples/codex-lead.md#save-and-read-a-complete-result).
+
+[`result read`](command-reference.md#result-read) remains available for bounded
+byte ranges. Decode pages in order until `eof`, then interpret UTF-8. Each page
+verifies the full payload. Neither command authorizes raw-output fallback,
 repair or retrying provider work. Connector tasks retain their full guards.
 
 Committed publication certifies that the provider/evidence predicate passed;

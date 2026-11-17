@@ -40,6 +40,13 @@ from scripts.acceptance.directories.operations import rollback_owned_directories
 from scripts.acceptance.evidence.files import write_json
 
 
+def _admission_guard_evidence(cpu_guard):
+    return {
+        "admission_guard_scope": "positive-fixture-admissions",
+        "admission_guards": {"cpu": "enabled" if cpu_guard else "disabled-by-caller", "memory": "enabled"},
+    }
+
+
 class Fixture:
     def __init__(self):
         self.seen = {name: threading.Event() for name in ("cancel", "budget")}
@@ -317,6 +324,7 @@ class FixtureAcceptance(NativeAcceptance):
         response = self.command("missing-collect", "collect", rejected, "--json", expected=4).json()
         require(response.get("publication") == "rejected", "unknown alias did not produce a rejected outcome")
         self.success_receipt = {"gate": FIXTURE_GATE, "status": "passed", "platform": os.uname().sysname,
+            **_admission_guard_evidence(self.args.cpu_guard),
             "tasks": self.tasks, "sessions_isolated": True, "continuation": True, "budget_continuation": True, "continuation_reuses_route": True, "native_write_and_shell": True,
             "replay_observational": True, "invalid_alias_rejected": True,
             "cancel_and_budget_disconnected": True, "real_clis": ["delegate", "ccr", "claude"]}
@@ -364,6 +372,7 @@ class RefusalCleanupAcceptance(FixtureAcceptance):
             raise RuntimeError("refusal fixture unexpectedly admitted work")
         self.success_receipt = {
             "gate": REFUSAL_CLEANUP_GATE, "status": "passed", "platform": os.uname().sysname,
+            **_admission_guard_evidence(self.args.cpu_guard),
             "warm_task_id": warm, "controlled_refusal": True,
             "original_failure": {"status": "failed", "response": response},
         }
@@ -461,6 +470,8 @@ def main():
                         help="prove cleanup after one controlled refusal following real warm work")
     options = parser.parse_args()
     output = choose_output("ccr-fixture", options.output)
+    # Keep selected guard policy available even when setup fails before diagnostics exist.
+    write_json(output / "admission-policy.json", _admission_guard_evidence(options.cpu_guard == "true"))
     run = None
     success_receipt = None
     primary_error = None
@@ -503,6 +514,7 @@ def main():
         try:
             write_json(output / "failure.json", {
                 "status": "failed",
+                **_admission_guard_evidence(options.cpu_guard == "true"),
                 "error": str(error),
                 "behavior_completed": success_receipt is not None,
                 "passed_receipt_absent": not (output / "success.json").exists(),

@@ -27,6 +27,12 @@ on:
 permissions:
   contents: read
 
+# PR runs supersede only that PR. Main and manual runs keep independent groups,
+# including pending runs, which GitHub otherwise replaces within a shared group.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || format('run-{0}', github.run_id) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   changes:
     name: Change scope
@@ -94,7 +100,7 @@ jobs:
   gate-linux:
     name: Gate (Linux ubuntu-24.04)
     needs: changes
-    if: ${{ always() }}
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     steps:

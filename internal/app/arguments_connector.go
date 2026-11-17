@@ -24,6 +24,7 @@ type ConnectorArguments struct {
 	IncludeExecutionAssurance  bool
 	OriginFile                 string
 	ExpectedSpecSHA256         string
+	OutputFile                 string
 	DescriptorFile             string
 	ResumeAdmission            bool
 	FenceIfAbsent              bool
@@ -45,6 +46,11 @@ type ConnectorArguments struct {
 func registerConnectorFlags(fs *flag.FlagSet, a *Arguments) {
 	c := &a.Connector
 	fs.DurationVar(&c.ControlTimeout, "control-timeout", defaultConnectorControlTimeout, "finite public control deadline")
+	if a.Command == "result" && c.Action == "save" {
+		fs.StringVar(&c.DescriptorFile, "expected-descriptor", "", "expected committed payload descriptor JSON file or - for stdin")
+		fs.StringVar(&c.OutputFile, "output", "", "absolute new result file in an existing directory")
+		return
+	}
 	fs.StringVar(&c.ExpectedRoot, "expected-root", "", "expected opaque root context token")
 	fs.StringVar(&c.ExpectedProject, "expected-project", "", "expected opaque project context token")
 	fs.StringVar(&c.ExpectedWorkspace, "expected-workspace", "", "expected opaque approved workspace token")
@@ -257,6 +263,15 @@ func validateConnectorResolveAction(c ConnectorArguments) error {
 }
 
 func validateConnectorResultArguments(c ConnectorArguments) error {
+	if c.Action == "save" {
+		if hasConnectorGuards(c) {
+			return errors.New("result save does not accept connector guards")
+		}
+		if c.DescriptorFile == "" || !filepath.IsAbs(c.OutputFile) || filepath.Clean(c.OutputFile) != c.OutputFile || filepath.Base(c.OutputFile) == "." || c.OutputFile == string(filepath.Separator) {
+			return errors.New("result save requires expected descriptor and an absolute clean output file path")
+		}
+		return nil
+	}
 	if c.Action != "read" || c.DescriptorFile == "" || c.Offset < 0 || c.ResultLimit < 1 || c.ResultLimit > 65536 {
 		return errors.New("result read requires expected descriptor, nonnegative offset and limit 1..65536")
 	}

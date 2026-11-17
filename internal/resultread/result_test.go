@@ -62,3 +62,48 @@ func TestReadRepresentative64MiBPayloadWithBoundedRange(t *testing.T) {
 		}
 	}
 }
+
+func TestCopyVerifiesCompletePayload(t *testing.T) {
+	data := bytes.Repeat([]byte("answer€"), 15000)
+	descriptor := task.PayloadDescriptor{Basename: "result.txt", Length: int64(len(data)), SHA256: task.ComputeSHA256(data)}
+	for _, scenario := range []struct {
+		name  string
+		data  []byte
+		fault bool
+	}{
+		{"complete", data, false}, {"short", data[:len(data)-1], true}, {"long", append(append([]byte{}, data...), 'x'), true}, {"corrupt", bytes.Repeat([]byte("x"), len(data)), true},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			var destination bytes.Buffer
+			err := copyVerified(t.Context(), bytes.NewReader(scenario.data), descriptor, &destination)
+			if scenario.fault {
+				if !errors.Is(err, task.ErrEvidenceFault) {
+					t.Fatalf("expected evidence fault: %v", err)
+				}
+			} else if err != nil || !bytes.Equal(destination.Bytes(), data) {
+				t.Fatalf("copy mismatch: %v", err)
+			}
+		})
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	var output bytes.Buffer
+	if err := copyVerified(ctx, finalCancelReader{bytes.NewReader(data), cancel}, descriptor, &output); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled copy: %v", err)
+	}
+	if err := copyVerified(t.Context(), bytes.NewReader(data), descriptor, shortWriter{}); !errors.Is(err, io.ErrShortWrite) {
+		t.Fatalf("short write: %v", err)
+	}
+}
+
+type shortWriter struct{}
+
+func (shortWriter) Write(data []byte) (int, error) { return len(data) - 1, nil }
+
+func TestCopyRejectsEmptyPayload(t *testing.T) {
+	descriptor := task.PayloadDescriptor{Basename: "result.txt", SHA256: task.ComputeSHA256(nil)}
+	var output bytes.Buffer
+	if err := copyVerified(t.Context(), bytes.NewReader(nil), descriptor, &output); !errors.Is(err, task.ErrInvariantFault) || output.Len() != 0 {
+		t.Fatalf("empty invalid payload accepted: %v", err)
+	}
+}

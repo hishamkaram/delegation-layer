@@ -210,6 +210,9 @@ func connectorMutationRequested(a Arguments) bool {
 
 func connectorCommandContext(ctx context.Context, a Arguments, deps Dependencies) (result commandResult) {
 	response := newResponse(a.Command)
+	if a.Command == "result" && a.Connector.Action == "save" {
+		return ordinaryResultSaveContext(ctx, a, deps, response)
+	}
 	if a.Command == "result" && !hasConnectorGuards(a.Connector) {
 		return ordinaryResultContext(ctx, a, deps, response)
 	}
@@ -557,18 +560,11 @@ func ordinaryResultContext(ctx context.Context, a Arguments, deps Dependencies, 
 		}
 	}()
 	response.RootID, response.TaskID = reader.RootID(), a.TaskID
-	var expected task.PayloadDescriptor
-	if err = readConnectorJSON(ctx, a.Connector.DescriptorFile, deps.Input, &expected); err != nil {
-		return failed(response, err, classifyCode(err, 1))
-	}
-	outcome, err := reader.ReadOrdinaryCommittedResultOutcomeContext(ctx, a.TaskID)
+	outcome, err := ordinaryResultOutcome(ctx, a, deps, reader)
 	if err != nil {
 		return failed(response, err, classifyCode(err, 1))
 	}
-	if outcome.Payload != expected {
-		return failed(response, task.ErrRequestConflict, classifyCode(task.ErrRequestConflict, 1))
-	}
-	observed, err := readResultRange(ctx, a, reader, expected)
+	observed, err := readResultRange(ctx, a, reader, outcome.Payload)
 	if err != nil {
 		return failed(response, err, classifyCode(err, 1))
 	}
@@ -784,4 +780,75 @@ func connectorWorkspaceMatches(a Arguments, frozen *task.WorkspaceConstraint) bo
 		return true
 	}
 	return reflect.DeepEqual(frozen, expected)
+}
+
+// Saved output belongs to the caller; canonical task state is only observed.
+func ordinaryResultSaveContext(ctx context.Context, a Arguments, deps Dependencies, response Response) (result commandResult) {
+	if err := validateConnectorResultArguments(a.Connector); err != nil {
+		return failed(response, err, 2)
+	}
+	root, err := tasklifecycle.ResolveRoot(a.Root)
+	if err != nil {
+		return resultSaveFailure(response, err)
+	}
+	reader, err := taskdir.OpenReadOnlyStoreContext(ctx, root, deps.storeDependencies().registry())
+	if err != nil {
+		return resultSaveFailure(response, err)
+	}
+	defer func() {
+		mergeCommandClose(&result, reader.Close)
+		if result.err != nil && result.response.Saved != nil {
+			result = resultSaveFailure(result.response, result.err)
+		}
+	}()
+	response.RootID, response.TaskID = reader.RootID(), a.TaskID
+	outcome, err := ordinaryResultOutcome(ctx, a, deps, reader)
+	if err != nil {
+		return resultSaveFailure(response, err)
+	}
+	source, err := reader.OpenTaskPayload(ctx, a.TaskID, outcome.Payload)
+	if err != nil {
+		return resultSaveFailure(response, err)
+	}
+	response.Saved, err = resultread.Save(ctx, root, a.Connector.OutputFile, outcome.Payload, source)
+	if response.Saved != nil {
+		response.Publication = task.PublicationCommitted.String()
+	}
+	if err != nil {
+		return resultSaveFailure(response, err)
+	}
+	return commandResult{response: response}
+}
+
+func ordinaryResultOutcome(ctx context.Context, a Arguments, deps Dependencies, reader *taskdir.ReadOnlyStore) (*task.OutcomeRecord, error) {
+	var expected task.PayloadDescriptor
+	if err := readConnectorJSON(ctx, a.Connector.DescriptorFile, deps.Input, &expected); err != nil {
+		return nil, err
+	}
+	outcome, err := reader.ReadOrdinaryCommittedResultOutcomeContext(ctx, a.TaskID)
+	if err != nil {
+		return nil, err
+	}
+	if outcome.Payload != expected {
+		return nil, task.ErrRequestConflict
+	}
+	return outcome, nil
+}
+
+func resultSaveFailure(response Response, err error) commandResult {
+	result := failed(response, err, classifyCode(err, 1))
+	code, stage := "", "publish-result"
+	switch {
+	case response.Saved != nil:
+		code = "result_saved_cleanup_incomplete"
+	case errors.Is(err, context.DeadlineExceeded):
+		code, stage = "result_verification_timeout", "verify-result"
+	case errors.Is(err, os.ErrExist):
+		code = "result_destination_exists"
+	}
+	if code != "" {
+		result.code = 1
+		result.response.Failure = &DispatchFailureResponse{Code: code, Stage: stage, NextAction: "stop_and_report"}
+	}
+	return result
 }

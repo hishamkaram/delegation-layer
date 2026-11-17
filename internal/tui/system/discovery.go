@@ -67,7 +67,7 @@ func (v view) doctor(a app.Arguments) ui.Feedback {
 	report, code := v.backend.Doctor(a)
 	var text strings.Builder
 	fmt.Fprintf(&text, "Root: %s (%s)\nInstallation: %s\nCompatibility: %s\nSupervisor: %s; liveness %s; work %s", report.Root.Path, report.Root.Status, report.Installation.Status, report.Installation.Compatibility, report.Supervisor.Binding, report.Supervisor.Liveness, report.Supervisor.ActiveWork)
-	for _, issue := range report.Issues {
+	for _, issue := range report.AllIssues() {
 		fmt.Fprintf(&text, "\n%s (%s): %s", issue.Code, issue.Area, issue.NextStep)
 	}
 	feedback := ui.Feedback{Title: "Doctor", Body: text.String()}

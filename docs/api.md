@@ -16,6 +16,15 @@ The packaged [task response contract](../skills/agent-integration/references/res
 owns the envelope, authority fields, and descriptor rules.
 [JSON examples](../skills/agent-integration/examples/json-results.md) show abbreviated shapes.
 
+## Verified local answer export
+
+[`result save`](../skills/agent-integration/references/command-reference.md#result-save)
+exports a committed ordinary task's complete verified answer to a new caller-owned
+file. Its additive `saved` field reports path, length and digest without answer
+bytes. If cleanup fails after publication, the operational error and `saved`
+coexist; the exported file already exists and must not be retried or deleted.
+Task evidence, lifecycle and connector guard requirements remain unchanged.
+
 ## Guarded connectors
 
 The additive [local connector contract](connector-contract.md) owns root/project
