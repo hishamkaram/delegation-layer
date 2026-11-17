@@ -81,7 +81,7 @@ not install or repair the CLI. A trusted plugin startup hook normally handles bo
 
 ### 2. Discover Teams before deciding how to handle substantive work
 
-The responsible lead follows [automatic Team discovery and Member selection](references/command-reference.md#automatic-team-discovery)
+The responsible lead follows [automatic Team discovery and Member selection](references/team-selection.md)
 before deciding whether to keep or assign each substantive phase, even when it
 expects to keep all work local. Read afresh for each new substantive work
 decision or batch; do not require the user to mention Teams. Discovery alone

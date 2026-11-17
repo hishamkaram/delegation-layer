@@ -3,7 +3,8 @@
 import json
 from pathlib import Path
 import re
-import subprocess
+
+from scripts.acceptance.processes.operations import run_bounded_command
 
 
 def main(prompt: str, nonce: str, arguments: list[str], *, emit_session: bool = True):
@@ -27,12 +28,14 @@ def main(prompt: str, nonce: str, arguments: list[str], *, emit_session: bool = 
         stream.seek(0)
         stream.write(original + "edited:" + nonce + "\n")
         stream.truncate()
-    result = subprocess.run(
+    result = run_bounded_command(
         ["/bin/sh", "-c", 'printf "command:%s\\n" "$1"', "team-write-proof", nonce],
-        check=True, capture_output=True, timeout=5,
+        {"PATH": "/usr/bin:/bin"}, capture=True, capture_stderr=True, timeout=5, max_output=128,
     )
+    if result.exit_code != 0:
+        raise RuntimeError("Team write fixture command failed with exit code %d" % result.exit_code)
     with Path("team-command-" + nonce + ".txt").open("xb") as stream:
-        stream.write(result.stdout)
+        stream.write(result.output)
 
     message = {"role": "assistant", "content": [{"type": "text", "text": "team workspace-write accepted " + nonce}],
                "stopReason": "stop"}

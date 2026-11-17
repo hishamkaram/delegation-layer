@@ -183,7 +183,7 @@ ordinary direct delegation. The CLI still requires explicit Team/Member flags;
 it never applies a default implicitly. The allocating lead prefers a suitable
 default Team, considers better-fitting alternatives, and chooses Members for
 research, planning, implementation, testing or review. See the
-[automatic discovery procedure](../skills/agent-integration/references/command-reference.md#automatic-team-discovery)
+[automatic discovery procedure](../skills/agent-integration/references/team-selection.md)
 for precedence, ambiguity and incomplete results. Team availability does not
 authorize extra work or automatic Member fan-out.
 

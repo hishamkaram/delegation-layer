@@ -1,6 +1,8 @@
 """Exercise real fixture processes; this does not prove real CLI Team admission."""
 
 import json
+from contextlib import chdir, redirect_stdout
+import io
 from pathlib import Path
 import subprocess
 import sys
@@ -11,6 +13,9 @@ from unittest.mock import patch
 from scripts.acceptance.private_cli.arguments import parse_arguments
 from scripts.acceptance.private_cli.fixtures import install_pi_fixture
 from scripts.acceptance.private_cli.teams.scenario import require_public_team
+from scripts.acceptance.private_cli.teams import fixture as team_fixture
+from scripts.acceptance.processes.contracts import BoundedCommandError, CommandFailure
+from scripts.acceptance.processes.operations import run_bounded_command
 
 
 NONCE = "a" * 32
@@ -89,6 +94,31 @@ class TeamWriteFixtureTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(list(self.workspace.iterdir()), [])
         self.assertEqual(json.loads(result.stdout.splitlines()[-1])["type"], "agent_end")
+
+    def test_failed_owned_shell_command_cannot_publish_command_artifact_or_success(self):
+        def fail_command(_argv, environment, **options):
+            return run_bounded_command(["/bin/sh", "-c", "exit 23"], environment, **options)
+        output = io.StringIO()
+        with chdir(self.workspace), redirect_stdout(output), \
+                patch.object(team_fixture, "run_bounded_command", side_effect=fail_command), \
+                self.assertRaisesRegex(RuntimeError, "exit code 23"):
+            team_fixture.main("DELEGATE_TEAMS_WRITE:" + NONCE, NONCE, ARGUMENTS)
+        self.assertEqual(output.getvalue(), "")
+        self.assertFalse((self.workspace / ("team-command-" + NONCE + ".txt")).exists())
+
+    def test_owned_shell_timeout_retains_exact_wait_evidence_without_publishing_success(self):
+        def expire_command(_argv, environment, **options):
+            options["timeout"] = 0.05
+            return run_bounded_command(["/bin/sh", "-c", "exec /bin/sleep 30"], environment, **options)
+        output = io.StringIO()
+        with chdir(self.workspace), redirect_stdout(output), \
+                patch.object(team_fixture, "run_bounded_command", side_effect=expire_command), \
+                self.assertRaises(BoundedCommandError) as raised:
+            team_fixture.main("DELEGATE_TEAMS_WRITE:" + NONCE, NONCE, ARGUMENTS)
+        self.assertIs(raised.exception.reason, CommandFailure.TIMEOUT)
+        self.assertIsNotNone(raised.exception.exit_code, "shared owner must observe the exact child's Wait")
+        self.assertEqual(output.getvalue(), "")
+        self.assertFalse((self.workspace / ("team-command-" + NONCE + ".txt")).exists())
 
 
 class TeamScenarioArgumentsTests(unittest.TestCase):

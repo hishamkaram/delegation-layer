@@ -6,7 +6,7 @@ before deciding whether to keep or assign substantive work, even when the
 request names no Team or provider and the lead expects to do everything itself.
 The lead passively discovers configured Teams, then selects suitable Members
 for authorized research, planning, implementation, testing or review.
-The [discovery procedure](../skills/agent-integration/references/command-reference.md#automatic-team-discovery)
+The [discovery procedure](../skills/agent-integration/references/team-selection.md)
 defines default preference, explicit-choice precedence and incomplete results.
 Startup, resume, clear, and compaction use the host's SessionStart event;
 SubagentStart also tells native subagents not to discover or recruit unless
