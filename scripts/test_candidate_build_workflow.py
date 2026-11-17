@@ -46,12 +46,13 @@ class CandidateWorkflowTests(unittest.TestCase):
                 self.assertIn(f"name: {name}\n", header)
                 self.assertNotIn("matrix", header)
                 self.assertNotIn("candidate", header)
-        for job in ("skill-package-macos", "gate-macos"):
+        for job in ("skill-package-macos", "checks-macos", "acceptance-macos"):
             header = job_text(self.source, job).split("    steps:", 1)[0]
             self.assertIn("needs: changes", header)
-            self.assertIn("if: ${{ needs.changes.outputs.full == 'true' }}", header)
-        self.assertIn("runs-on: ubuntu-24.04", job_text(self.source, "gate-linux"))
-        self.assertIn("runs-on: macos-latest", job_text(self.source, "gate-macos"))
+            self.assertIn("needs.changes.outputs.full == 'true'", header)
+        for family in ("checks", "acceptance"):
+            self.assertIn("runs-on: ubuntu-24.04", job_text(self.source, f"{family}-linux"))
+            self.assertIn("runs-on: macos-latest", job_text(self.source, f"{family}-macos"))
 
     def test_dispatch_inputs_default_to_no_candidate(self):
         dispatch = self.source.split("  workflow_dispatch:\n", 1)[1].split("\npermissions:", 1)[0]
@@ -67,8 +68,8 @@ class CandidateWorkflowTests(unittest.TestCase):
             self.assertIn("node-version: '18.x'", package)
             self.assertNotIn("node-version: '22.x'", package)
             self.assertEqual(package.count("run: make skill-package-check"), 1)
-        for name, tool_target, check_target in (("gate-linux", "tools", "check"),
-                                                 ("gate-macos", "tools-go tools-node", "check-platform")):
+        for name, tool_target, check_target in (("checks-linux", "tools", "check"),
+                                                 ("checks-macos", "tools-go tools-node", "check-platform")):
             with self.subTest(job=name):
                 gate = job_text(self.source, name)
                 self.assertIn("node-version: '22.x'", gate)
@@ -76,15 +77,15 @@ class CandidateWorkflowTests(unittest.TestCase):
                 self.assertEqual(re.findall(r"^        run: make (check(?:-platform)?)$", gate, re.M), [check_target])
 
     def test_shared_analysis_is_required_by_linux_without_a_duplicate_workflow(self):
-        linux = job_text(self.source, "gate-linux")
-        macos = job_text(self.source, "gate-macos")
+        linux = job_text(self.source, "checks-linux")
+        macos = job_text(self.source, "checks-macos")
         self.assertEqual(linux.count("run: make check\n"), 1)
         self.assertNotIn("continue-on-error", linux)
         self.assertIn("run: make check-platform\n", macos)
         self.assertFalse(WORKFLOW.with_name("static-diagnostics.yml").exists())
 
     def test_native_unit_gates_have_supervisor_and_control_owner_prerequisites(self):
-        for name, target in (("gate-linux", "check"), ("gate-macos", "check-platform")):
+        for name, target in (("checks-linux", "check"), ("checks-macos", "check-platform")):
             with self.subTest(job=name):
                 native_steps = list(steps(job_text(self.source, name)).values())
                 install = next(index for index, step in enumerate(native_steps)
@@ -312,8 +313,10 @@ class InstallerDownloadTokenWorkflowTests(unittest.TestCase):
         source = WORKFLOW.read_text()
         upgrade = "Prove released scheduler upgrades through delegate CLI"
         chain = "Prove consecutive upgrades with legacy inspection journals"
-        expected = {"gate-linux": {"Install tools", "Install pinned supervisor test binaries", upgrade, chain},
-                    "gate-macos": {"Install platform tools", "Install pinned supervisor test binaries", upgrade, chain},
+        expected = {"checks-linux": {"Install tools", "Install pinned supervisor test binaries"},
+                    "checks-macos": {"Install platform tools", "Install pinned supervisor test binaries"},
+                    "acceptance-linux": {"Install tools", "Install pinned supervisor test binaries", upgrade, chain},
+                    "acceptance-macos": {"Install platform tools", "Install pinned supervisor test binaries", upgrade, chain},
                     "independent-startup-component": {"Install pinned repository tools"},
                     "remote-ssh": {"Install pinned SSH Go tools", "Install pinned SSH supervisor"},
                     "nested-survival": {"Install pinned tools and supervisor"},
@@ -337,7 +340,7 @@ class InstallerDownloadTokenWorkflowTests(unittest.TestCase):
                 if name not in names:
                     self.assertNotIn("DELEGATE_TOOL_DOWNLOAD_TOKEN", block)
                     self.assertNotIn("github.token", block)
-            if job in ("gate-linux", "gate-macos"):
+            if job in ("acceptance-linux", "acceptance-macos"):
                 self.assertRegex(blocks[upgrade], r"(?m)^        run: make acceptance-scheduler-upgrade$")
                 self.assertRegex(blocks[chain], r"(?m)^        run: make acceptance-upgrade-chain$")
 

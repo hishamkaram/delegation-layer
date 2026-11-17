@@ -118,6 +118,23 @@ platform-specific source and behavior. It omits only the shared static checks
 already run on Linux. Do not dispatch a second full workflow merely to certify
 the first.
 
+On each platform, checks and native acceptance run as independent jobs from the
+same checkout revision. Each installs its own prerequisites and builds its own
+fixtures; acceptance does not consume binaries or a warm runtime from checks.
+The acceptance scenarios remain serial within their job, including consecutive
+upgrade and scheduler-upgrade recovery. Existing required Gate checks fold the
+selected child results: full runs require both owners to pass; content-only
+runs require Linux documentation checks and skip native acceptance. Invalid
+selection, failure, cancellation or an unexpected skip cannot satisfy the gate.
+The small fold jobs use Linux; native macOS proof belongs to their macOS children.
+This parallelism can shorten the critical path but adds setup and runner costs;
+actual elapsed time depends on runner allocation and the selected work.
+
+A newer push to the same PR cancels its obsolete CI run. Main and manual runs
+have distinct concurrency groups and do not cancel each other. Expensive work
+remains cancellable; bounded evidence handling can still run. Cancellation is
+not a successful check or proof that all fixture resources closed.
+
 Fix actual failures and rerun affected checks. Broaden only for changed inputs
 or a concrete concern. A setup failure is blocked, not a passing test. Reviewers
 can reuse trustworthy unchanged results. Final independent review covers the

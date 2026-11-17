@@ -272,14 +272,15 @@ class IndependentStartupWorkflowTests(unittest.TestCase):
 
     def test_native_component_job_keeps_full_ci_selection_without_an_exclusive_mode(self):
         self.assertNotIn("native_startup_component_only", self.source)
-        for name in ("skill-package-macos", "gate-macos", "nested-survival", "development-candidate", "ccr"):
+        for name in ("skill-package-macos", "checks-macos", "acceptance-macos", "acceptance-linux",
+                     "nested-survival", "development-candidate", "ccr"):
             with self.subTest(job=name):
                 condition = job_text(self.source, name).split("    runs-on:", 1)[0]
                 self.assertIn("needs.changes.outputs.full == 'true'", condition)
         linux_package = job_text(self.source, "skill-package-linux").split("    steps:", 1)[0]
         self.assertNotIn("    if:", linux_package)
-        linux_gate = job_text(self.source, "gate-linux").split("    steps:", 1)[0]
-        self.assertIn("if: ${{ !cancelled() }}", linux_gate)
+        linux_checks = job_text(self.source, "checks-linux").split("    steps:", 1)[0]
+        self.assertIn("if: ${{ !cancelled() }}", linux_checks)
         self.assertIn("needs: development-candidate", job_text(self.source, "development-candidate-install"))
         self.assertIn("needs.changes.outputs.full == 'true'", self.job)
         self.assertIn("os: [ubuntu-24.04, macos-latest]", self.job)
