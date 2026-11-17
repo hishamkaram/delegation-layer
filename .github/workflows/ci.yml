@@ -395,7 +395,7 @@ jobs:
           test "$ACCEPTANCE_RESULT" = "$expected_acceptance" || { echo 'Acceptance did not satisfy the selected scope'; exit 1; }
 
   checks-macos:
-    name: Checks (macOS)
+    name: Checks and acceptance (macOS)
     needs: changes
     if: ${{ !cancelled() && needs.changes.result == 'success' && needs.changes.outputs.full == 'true' }}
     runs-on: macos-latest
@@ -466,52 +466,6 @@ jobs:
           path: bin/tui-acceptance.*/
           retention-days: 7
           if-no-files-found: ignore
-
-  acceptance-macos:
-    name: Acceptance (macOS)
-    needs: changes
-    if: ${{ !cancelled() && needs.changes.result == 'success' && needs.changes.outputs.full == 'true' }}
-    runs-on: macos-latest
-    timeout-minutes: 90
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-
-      - name: Set up Go
-        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
-        with:
-          go-version-file: '.go-version'
-          cache: false
-
-      - name: Set up Python
-        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
-        with:
-          python-version: '3.12'
-
-      - name: Set up Node.js
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
-        with:
-          node-version: '22.x'
-
-      - name: Log environment details
-        run: |
-          uname -a
-          go version
-          go env GOHOSTOS GOHOSTARCH
-          python3 --version
-
-      - name: Install platform tools
-        env:
-          DELEGATE_TOOL_DOWNLOAD_TOKEN: ${{ github.token }}
-        run: make tools-go tools-node
-
-      - name: Install pinned supervisor test binaries
-        env:
-          DELEGATE_TOOL_DOWNLOAD_TOKEN: ${{ github.token }}
-        run: ./scripts/install-test-supervisor.sh
 
       - name: Prove selected native lifetime backend
         id: native_lifetime
@@ -648,9 +602,9 @@ jobs:
           if-no-files-found: error
 
   gate-macos:
-    # Keep the required check identity; native work belongs to the children above.
+    # Keep the required check identity; its macOS owner runs the native work.
     name: Gate (macOS macos-15)
-    needs: [changes, checks-macos, acceptance-macos]
+    needs: [changes, checks-macos]
     if: ${{ always() }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -660,16 +614,14 @@ jobs:
           SELECTION_RESULT: ${{ needs.changes.result }}
           FULL: ${{ needs.changes.outputs.full }}
           CHECKS_RESULT: ${{ needs.checks-macos.result }}
-          ACCEPTANCE_RESULT: ${{ needs.acceptance-macos.result }}
         run: |
           test "$SELECTION_RESULT" = success || { echo 'Change selection did not succeed'; exit 1; }
           case "$FULL" in
-            true) expected_checks=success; expected_acceptance=success ;;
-            false) expected_checks=skipped; expected_acceptance=skipped ;;
+            true) expected_checks=success ;;
+            false) expected_checks=skipped ;;
             *) echo 'Change selection returned an invalid scope'; exit 1 ;;
           esac
           test "$CHECKS_RESULT" = "$expected_checks" || { echo 'Checks did not satisfy the selected scope'; exit 1; }
-          test "$ACCEPTANCE_RESULT" = "$expected_acceptance" || { echo 'Acceptance did not satisfy the selected scope'; exit 1; }
 
   independent-startup-component:
     name: Native infrastructure component (${{ matrix.os }})

@@ -118,17 +118,19 @@ platform-specific source and behavior. It omits only the shared static checks
 already run on Linux. Do not dispatch a second full workflow merely to certify
 the first.
 
-On each platform, checks and native acceptance run as independent jobs from the
-same checkout revision. Each installs its own prerequisites and builds its own
-fixtures; acceptance does not consume binaries or a warm runtime from checks.
-The acceptance scenarios remain serial within their job, including consecutive
-upgrade and scheduler-upgrade recovery. Existing required Gate checks fold the
-selected child results: full runs require both owners to pass; content-only
-runs require Linux documentation checks and skip native acceptance. Invalid
+Linux checks and native acceptance run as independent jobs from the same
+checkout revision. Each installs its own prerequisites and builds its own
+fixtures. macOS runs platform checks followed by native acceptance in one job,
+preserving their same-VM order and local build cache. Acceptance scenarios stay
+serial on both hosts, including consecutive upgrade and scheduler recovery.
+
+Existing required Gate checks fold the selected results: full runs need both
+Linux owners and the combined macOS owner to pass; content-only runs need Linux
+documentation checks and skip Linux acceptance and the macOS job. Invalid
 selection, failure, cancellation or an unexpected skip cannot satisfy the gate.
-The small fold jobs use Linux; native macOS proof belongs to their macOS children.
-This parallelism can shorten the critical path but adds setup and runner costs;
-actual elapsed time depends on runner allocation and the selected work.
+The small fold jobs use Linux; native macOS proof belongs to its macOS owner.
+Linux parallelism can provide earlier feedback but adds setup and runner costs;
+elapsed time depends on runner allocation and the selected work.
 
 A newer push to the same PR cancels its obsolete CI run. Main and manual runs
 have distinct concurrency groups and do not cancel each other. Expensive work
@@ -150,6 +152,14 @@ receipt; the interruption still determines the exit unless an earlier scenario
 failure takes precedence. Original handlers are restored on exit. Secondary
 finalization errors stay attached to the initiating failure. SIGKILL and forced
 runner termination cannot establish cleanup; retain and report incomplete proof.
+
+The capacity fixture owns admission grants and the attempted-task ledger. A fatal
+dispatch failure closes grants before waiting for calls already in flight; those
+calls still record their created task IDs for cleanup. Initial confirmed resource
+refusals keep their single bounded retry. The first confirmed CPU refusal records
+one bounded process-role snapshot in the existing receipt. It is diagnostic,
+not causal attribution or closure evidence. An unjoined diagnostic child prevents
+a successful fixture result. CPU and memory guards remain enabled by default.
 
 ### Focused app and fixture checks
 

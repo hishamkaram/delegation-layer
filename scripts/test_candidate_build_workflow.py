@@ -46,13 +46,13 @@ class CandidateWorkflowTests(unittest.TestCase):
                 self.assertIn(f"name: {name}\n", header)
                 self.assertNotIn("matrix", header)
                 self.assertNotIn("candidate", header)
-        for job in ("skill-package-macos", "checks-macos", "acceptance-macos"):
+        for job in ("skill-package-macos", "checks-macos"):
             header = job_text(self.source, job).split("    steps:", 1)[0]
             self.assertIn("needs: changes", header)
             self.assertIn("needs.changes.outputs.full == 'true'", header)
         for family in ("checks", "acceptance"):
             self.assertIn("runs-on: ubuntu-24.04", job_text(self.source, f"{family}-linux"))
-            self.assertIn("runs-on: macos-latest", job_text(self.source, f"{family}-macos"))
+        self.assertIn("runs-on: macos-latest", job_text(self.source, "checks-macos"))
 
     def test_dispatch_inputs_default_to_no_candidate(self):
         dispatch = self.source.split("  workflow_dispatch:\n", 1)[1].split("\npermissions:", 1)[0]
@@ -314,9 +314,8 @@ class InstallerDownloadTokenWorkflowTests(unittest.TestCase):
         upgrade = "Prove released scheduler upgrades through delegate CLI"
         chain = "Prove consecutive upgrades with legacy inspection journals"
         expected = {"checks-linux": {"Install tools", "Install pinned supervisor test binaries"},
-                    "checks-macos": {"Install platform tools", "Install pinned supervisor test binaries"},
+                    "checks-macos": {"Install platform tools", "Install pinned supervisor test binaries", upgrade, chain},
                     "acceptance-linux": {"Install tools", "Install pinned supervisor test binaries", upgrade, chain},
-                    "acceptance-macos": {"Install platform tools", "Install pinned supervisor test binaries", upgrade, chain},
                     "independent-startup-component": {"Install pinned repository tools"},
                     "remote-ssh": {"Install pinned SSH Go tools", "Install pinned SSH supervisor"},
                     "nested-survival": {"Install pinned tools and supervisor"},
@@ -340,7 +339,7 @@ class InstallerDownloadTokenWorkflowTests(unittest.TestCase):
                 if name not in names:
                     self.assertNotIn("DELEGATE_TOOL_DOWNLOAD_TOKEN", block)
                     self.assertNotIn("github.token", block)
-            if job in ("acceptance-linux", "acceptance-macos"):
+            if job in ("acceptance-linux", "checks-macos"):
                 self.assertRegex(blocks[upgrade], r"(?m)^        run: make acceptance-scheduler-upgrade$")
                 self.assertRegex(blocks[chain], r"(?m)^        run: make acceptance-upgrade-chain$")
 

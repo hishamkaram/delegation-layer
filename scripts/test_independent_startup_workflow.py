@@ -272,7 +272,7 @@ class IndependentStartupWorkflowTests(unittest.TestCase):
 
     def test_native_component_job_keeps_full_ci_selection_without_an_exclusive_mode(self):
         self.assertNotIn("native_startup_component_only", self.source)
-        for name in ("skill-package-macos", "checks-macos", "acceptance-macos", "acceptance-linux",
+        for name in ("skill-package-macos", "checks-macos", "acceptance-linux",
                      "nested-survival", "development-candidate", "ccr"):
             with self.subTest(job=name):
                 condition = job_text(self.source, name).split("    runs-on:", 1)[0]

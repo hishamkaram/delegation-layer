@@ -148,31 +148,40 @@ class WorkflowSelectionTests(unittest.TestCase):
         for platform in ("linux", "macos"):
             gate = job_text(self.workflow, f"gate-{platform}")
             header = gate.split("    steps:", 1)[0]
-            self.assertIn(f"needs: [changes, checks-{platform}, acceptance-{platform}]", header)
+            dependencies = ("changes, checks-linux, acceptance-linux" if platform == "linux"
+                            else "changes, checks-macos")
+            self.assertIn(f"needs: [{dependencies}]", header)
             self.assertIn("if: ${{ always() }}", header)
             self.assertIn("timeout-minutes: 5", header)
             self.assertNotIn("actions/checkout", gate)
             fold = steps(gate)["Require all selected native checks"]
-            for variable, expression in (("SELECTION_RESULT", "changes.result"),
-                                         ("FULL", "changes.outputs.full"),
-                                         ("CHECKS_RESULT", f"checks-{platform}.result"),
-                                         ("ACCEPTANCE_RESULT", f"acceptance-{platform}.result")):
+            bindings = [("SELECTION_RESULT", "changes.result"), ("FULL", "changes.outputs.full"),
+                        ("CHECKS_RESULT", f"checks-{platform}.result")]
+            if platform == "linux":
+                bindings.append(("ACCEPTANCE_RESULT", "acceptance-linux.result"))
+            else:
+                self.assertNotIn("ACCEPTANCE_RESULT", fold)
+            for variable, expression in bindings:
                 self.assertIn(f"{variable}: ${{{{ needs.{expression} }}}}", fold)
             script = "\n".join(line[10:] for line in fold.split("run: |\n", 1)[1].splitlines())
             cases = [("success", full, checks, acceptance)
-                     for full, checks, acceptance in product(("true", "false"), outcomes, outcomes)]
+                     for full, checks, acceptance in product(
+                         ("true", "false"), outcomes, outcomes if platform == "linux" else ("",))]
             cases.extend((selection, full, "success", "success")
                          for selection, full in product(("failure", "cancelled", "skipped", ""),
                                                        ("true", "false", "", "invalid")))
             cases.extend((("success", "", "success", "success"),
                           ("success", "invalid", "success", "success")))
             for selection, full, checks, acceptance in cases:
-                # Requirement-derived matrix, independent of the shell's case arms:
-                # a full run needs both owners; content-only runs need Linux docs.
-                expected = (selection == "success" and
-                            ((full == "true" and checks == acceptance == "success") or
-                             (full == "false" and acceptance == "skipped" and
-                              checks == ("success" if platform == "linux" else "skipped"))))
+                # Full Linux needs both isolated owners; Mac keeps all native
+                # checks/proofs on one VM. Content-only needs Linux docs alone.
+                if platform == "linux":
+                    selected_pass = ((full == "true" and checks == acceptance == "success") or
+                                     (full == "false" and checks == "success" and acceptance == "skipped"))
+                else:
+                    selected_pass = ((full == "true" and checks == "success") or
+                                     (full == "false" and checks == "skipped"))
+                expected = selection == "success" and selected_pass
                 with self.subTest(platform=platform, selection=selection, full=full,
                                   checks=checks, acceptance=acceptance):
                     result = subprocess.run(
@@ -182,7 +191,7 @@ class WorkflowSelectionTests(unittest.TestCase):
                         capture_output=True, text=True, check=False, timeout=10)
                     self.assertEqual(result.returncode, 0 if expected else 1, result.stderr)
 
-    def test_native_owners_are_cancellable_and_independent(self):
+    def test_native_owners_preserve_linux_independence_and_macos_same_vm_order(self):
         acceptance_order = (
             "make acceptance-native-lifetime", "make acceptance-protocol",
             "make acceptance-private-cli", "make acceptance-supervisor-handoff",
@@ -190,24 +199,34 @@ class WorkflowSelectionTests(unittest.TestCase):
             "make acceptance-scheduler-upgrade", "make acceptance-private-cli-default-stop",
             "make acceptance-workspaces", "make acceptance-supervisor",
         )
-        for platform in ("linux", "macos"):
-            for family in ("checks", "acceptance"):
-                job = job_text(self.workflow, f"{family}-{platform}")
-                header = job.split("    steps:", 1)[0]
-                self.assertIn("needs: changes", header)
-                self.assertIn("!cancelled()", header)
-                self.assertNotIn("always()", header)
-                self.assertNotIn("continue-on-error", job)
-            acceptance = job_text(self.workflow, f"acceptance-{platform}")
-            actual = tuple(line.removeprefix("        run: ") for line in acceptance.splitlines()
+        for name in ("checks-linux", "acceptance-linux", "checks-macos"):
+            job = job_text(self.workflow, name)
+            header = job.split("    steps:", 1)[0]
+            self.assertIn("needs: changes", header)
+            self.assertIn("!cancelled()", header)
+            self.assertNotIn("always()", header)
+            self.assertNotIn("continue-on-error", job)
+        self.assertNotIn("\n  acceptance-macos:", self.workflow)
+        for platform, name in (("linux", "acceptance-linux"), ("macos", "checks-macos")):
+            native = job_text(self.workflow, name)
+            actual = tuple(line.removeprefix("        run: ") for line in native.splitlines()
                            if line.startswith("        run: make acceptance-"))
             self.assertEqual(actual, acceptance_order)
-            install = acceptance.index("run: ./scripts/install-test-supervisor.sh")
-            self.assertLess(acceptance.index("run: make tools"), install)
-            self.assertLess(install, acceptance.index("run: make acceptance-native-lifetime"))
-            self.assertNotIn("download-artifact", acceptance)
-            self.assertNotIn("DELEGATE_REPAIR_EDITOR_OWNER", acceptance)
-            self.assertNotIn("run: make acceptance-", job_text(self.workflow, f"checks-{platform}"))
+            install = native.index("run: ./scripts/install-test-supervisor.sh")
+            self.assertLess(native.index("run: make tools"), install)
+            self.assertLess(install, native.index("run: make acceptance-native-lifetime"))
+            self.assertEqual(native.count("run: make tools"), 1)
+            self.assertEqual(native.count("run: ./scripts/install-test-supervisor.sh"), 1)
+            self.assertNotIn("download-artifact", native)
+            if platform == "linux":
+                self.assertNotIn("DELEGATE_REPAIR_EDITOR_OWNER", native)
+                self.assertNotIn("run: make acceptance-", job_text(self.workflow, "checks-linux"))
+            else:
+                self.assertIn("name: Checks and acceptance (macOS)", native)
+                self.assertLess(native.index("Build native repair control owner"), native.index("run: make check-platform"))
+                self.assertLess(native.index("run: make check-platform"), native.index("Retain native TUI acceptance evidence"))
+                self.assertLess(native.index("Retain native TUI acceptance evidence"),
+                                native.index("run: make acceptance-native-lifetime"))
 
     def test_pr_and_main_share_one_selector_and_ccr_has_no_duplicate_auto_triggers(self):
         selector = job_text(self.workflow, "changes")

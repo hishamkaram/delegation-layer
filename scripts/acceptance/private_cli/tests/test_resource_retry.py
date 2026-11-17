@@ -1,6 +1,7 @@
 """Resource-pressure retries preserve logical slots, custody and cleanup evidence."""
 
 from collections import Counter
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import ExitStack, redirect_stdout
 from dataclasses import dataclass, replace
 import io
@@ -19,6 +20,7 @@ from scripts.acceptance.private_cli import admission as admission_impl
 from scripts.acceptance.private_cli.capacity import dispatch as dispatch_impl
 from scripts.acceptance.private_cli import receipt as receipt_impl
 from scripts.acceptance.private_cli.capacity.inputs import CapacityRequest
+from scripts.acceptance.processes.contracts import BoundedCommandError, BoundedCommandResult, CommandFailure
 
 
 class RetryClock:
@@ -141,6 +143,7 @@ class PrivateResourceRetryTests(unittest.TestCase):
         self.first_finished_at = 0.0
         self.first_burst_elapsed = 2.0
         self.barrier: threading.Barrier | None = None
+        self.retry_barrier: threading.Barrier | None = None
         self.status_ids: list[str] = []
         self.status_invocations: list[StatusInvocation] = []
         self.previous_created_by_thread: dict[int, str] = {}
@@ -203,6 +206,8 @@ class PrivateResourceRetryTests(unittest.TestCase):
         try:
             if self.barrier is not None and invocation.attempt == 0 and index < 4:
                 self.barrier.wait(timeout=5)
+            if self.retry_barrier is not None and invocation.attempt == 1 and index < 4:
+                self.retry_barrier.wait(timeout=5)
             return self.dispatch_response(invocation)
         finally:
             self.finish_dispatch(invocation)
@@ -333,6 +338,230 @@ class PrivateResourceRetryTests(unittest.TestCase):
             self.assertIsNone(call.timeout)
             self.assertEqual(call.deadline, self.clock.started + 600)
 
+    def test_terminal_initial_response_fences_queued_slots_before_receipt_creation(self):
+        self.case = replace(self.case, dispatch_workers=1)
+        self.script[0] = [changed_failure(code="supervisor_setup_failed", next_action="stop_and_report")]
+        with self.assertRaises(RuntimeError):
+            self.run_dispatcher()
+        self.assertEqual([call.index for call in self.invocations], [0])
+        self.assertEqual(sorted(path.name for path in self.receipts.glob("dispatch-*.json")), ["dispatch-000.json"])
+        self.assertEqual(self.case.attempted_task_ids, [])
+
+    def test_terminal_retry_response_fences_queued_retries_before_receipt_creation(self):
+        self.case = replace(self.case, dispatch_workers=1)
+        for index in range(3):
+            self.script[index] = [pressure_refusal(), pressure_refusal()]
+        with self.assertRaises(RuntimeError):
+            self.run_dispatcher()
+        self.assertEqual(len(self.invocations), 201)
+        self.assertEqual([call.index for call in self.invocations if call.attempt == 1], [0])
+        self.assertEqual(sorted(path.name for path in self.receipts.glob("*.retry-1.json")), ["dispatch-000.retry-1.json"])
+        self.assert_cleanup_registered()
+
+    def test_out_of_order_failure_joins_and_registers_an_already_granted_created_task(self):
+        self.case = replace(self.case, dispatch_workers=2)
+        release = threading.Event()
+        entered = threading.Barrier(2)
+        dispatch_response = self.dispatch_response
+        original = OSError("first completed invocation failed")
+
+        def response(invocation):
+            if invocation.index in (0, 1):
+                entered.wait(timeout=5)
+            if invocation.index == 1:
+                raise original
+            if invocation.index == 0 and not release.wait(timeout=5):
+                raise AssertionError("in-flight response was not joined")
+            return dispatch_response(invocation)
+
+        def completed(futures):
+            for future in as_completed(futures):
+                release.set()
+                yield future
+
+        try:
+            with patch.object(self, "dispatch_response", side_effect=response), \
+                    patch.object(dispatch_impl, "as_completed", side_effect=completed):
+                with self.assertRaises(OSError) as raised:
+                    self.run_dispatcher()
+            self.assertIs(raised.exception, original)
+            self.assertEqual({call.index for call in self.invocations}, {0, 1})
+            self.assertEqual(self.case.attempted_task_ids, ["%032x" % 1])
+            self.assertEqual(self.in_flight, 0)
+            self.assert_cleanup_registered()
+        finally:
+            release.set()
+
+    def test_first_completed_real_fault_retains_later_fault_and_existing_cause(self):
+        self.case = replace(self.case, dispatch_workers=2)
+        entered = threading.Barrier(2)
+        release = threading.Event()
+        first, later, previous = OSError("fast failure"), OSError("slow failure"), ValueError("earlier cause")
+        first.__cause__ = previous
+
+        def response(invocation):
+            entered.wait(timeout=5)
+            if invocation.index == 1:
+                raise first
+            if not release.wait(timeout=5):
+                raise AssertionError("in-flight fault was not joined")
+            raise later
+
+        def completed(futures):
+            for future in as_completed(futures):
+                release.set()
+                yield future
+
+        try:
+            with patch.object(self, "dispatch_response", side_effect=response), \
+                    patch.object(dispatch_impl, "as_completed", side_effect=completed):
+                with self.assertRaises(OSError) as raised:
+                    self.run_dispatcher()
+            self.assertIs(raised.exception, first)
+            self.assertIsInstance(first.__cause__, BaseExceptionGroup)
+            if isinstance(first.__cause__, BaseExceptionGroup):
+                self.assertEqual(first.__cause__.exceptions, (previous, later))
+            self.assertEqual(len(self.invocations), 2)
+            self.assertEqual(self.in_flight, 0)
+        finally:
+            release.set()
+
+    def test_main_interrupt_seals_before_executor_shutdown_and_joins_granted_calls(self):
+        for interruption in (KeyboardInterrupt(), SystemExit(143)):
+            with self.subTest(interruption=type(interruption).__name__):
+                self.setUp()
+                self.case = replace(self.case, dispatch_workers=2)
+                entered = threading.Barrier(3)
+                release = threading.Event()
+                original_response = self.dispatch_response
+                test = self
+
+                def response(invocation):
+                    if invocation.index in (0, 1):
+                        entered.wait(timeout=5)
+                        if not release.wait(timeout=5):
+                            raise AssertionError("interrupt did not join the granted response")
+                    return original_response(invocation)
+
+                def interrupt(_futures):
+                    entered.wait(timeout=5)
+                    raise interruption
+
+                class Pool(ThreadPoolExecutor):
+                    def shutdown(self, wait=True, *, cancel_futures=False):
+                        if cancel_futures:
+                            try:
+                                dispatcher = test.dispatcher
+                                if dispatcher is None:
+                                    raise AssertionError("dispatcher owner unavailable")
+                                self_result = dispatcher.dispatch_waiting(199)
+                                test.assertIs(self_result, dispatch_impl._DispatchDenied.FENCED)
+                                test.assertFalse((test.receipts / "dispatch-199.json").exists())
+                            finally:
+                                release.set()
+                        return super().shutdown(wait=wait, cancel_futures=cancel_futures)
+
+                try:
+                    with patch.object(self, "dispatch_response", side_effect=response), \
+                            patch.object(dispatch_impl, "as_completed", side_effect=interrupt), \
+                            patch.object(dispatch_impl, "ThreadPoolExecutor", Pool):
+                        with self.assertRaises(type(interruption)) as raised:
+                            self.run_dispatcher()
+                    self.assertIs(raised.exception, interruption)
+                    self.assertEqual({call.index for call in self.invocations}, {0, 1})
+                    self.assertEqual(self.in_flight, 0)
+                    self.assert_cleanup_registered()
+                finally:
+                    release.set()
+
+    def test_first_cpu_refusal_captures_once_outside_dispatch_lock_and_projects_only_roles(self):
+        receipt = self.attach_run_receipt()
+        self.barrier = threading.Barrier(4)
+        for index in range(4):
+            self.script[index] = [changed_failure(reason_code="host_cpu_sustained")]
+
+        def snapshot(*args, **kwargs):
+            dispatcher = self.dispatcher
+            if dispatcher is None:
+                raise AssertionError("dispatcher owner unavailable")
+            self.assertTrue(dispatcher.dispatch_lock.acquire(timeout=5), "diagnostic ran under grant lock")
+            dispatcher.dispatch_lock.release()
+            self.assertEqual(args[0], ["/bin/ps", "-A", "-o", "pcpu=,comm="])
+            self.assertEqual(args[1], {**self.case.env, "LC_ALL": "C"})
+            self.assertEqual(kwargs, {"max_output": 256 * 1024, "capture": True, "timeout": 5,
+                                      "cwd": self.case.workspace})
+            return BoundedCommandResult(0, b"12.5 /installed/delegate\n2.0 /private/not-for-evidence\n")
+
+        with patch.object(dispatch_impl, "run_bounded_command", side_effect=snapshot) as capture:
+            result = self.run_dispatcher()
+        capture.assert_called_once()
+        self.assertEqual(len(result.task_ids), 200)
+        observed = receipt.details["host_cpu_snapshot"]
+        self.assertEqual(observed["status"], "observed")
+        self.assertEqual(observed["listed_process_count"], {"delegate": 1, "other": 1})
+        self.assertEqual(observed["top_cpu"], [{"role": "delegate", "native_cpu_percent": 12.5},
+                                               {"role": "other", "native_cpu_percent": 2.0}])
+        self.assertIs(observed["native_wait"], True)
+        self.assertIs(observed["causal_attribution"], False)
+        self.assertNotIn("/private", json.dumps(observed))
+
+    def test_terminal_cpu_refusal_fences_before_diagnostic_and_preserves_primary_on_unjoined_wait(self):
+        self.case = replace(self.case, parallel_tasks=1)
+        receipt = self.attach_run_receipt()
+        self.script[0] = [pressure_refusal(), changed_failure(reason_code="host_cpu_sustained")]
+        diagnostic = BoundedCommandError(CommandFailure.TERMINATION_TIMEOUT)
+
+        def snapshot(*_args, **_kwargs):
+            dispatcher = self.dispatcher
+            if dispatcher is None:
+                raise AssertionError("dispatcher owner unavailable")
+            self.assertIs(dispatcher.dispatch_waiting(1), dispatch_impl._DispatchDenied.FENCED)
+            self.assertFalse((self.receipts / "dispatch-001.json").exists())
+            raise diagnostic
+
+        with patch.object(dispatch_impl, "run_bounded_command", side_effect=snapshot):
+            with self.assertRaisesRegex(RuntimeError, "failed its single resource retry") as raised:
+                self.run_dispatcher()
+        self.assertEqual(len(self.invocations), 2)
+        self.assertIsInstance(raised.exception.__cause__, BaseExceptionGroup)
+        if isinstance(raised.exception.__cause__, BaseExceptionGroup):
+            self.assertEqual(raised.exception.__cause__.exceptions, (diagnostic,))
+        self.assertIs(receipt.details["host_cpu_snapshot"]["closure_unproven"], True)
+        self.assert_cleanup_registered()
+
+    def test_cpu_snapshot_capture_or_parse_failure_is_bounded_and_nonfatal_after_proved_closure(self):
+        for response, reason in ((BoundedCommandError(CommandFailure.START_FAILED), "command_start_failed"),
+                                 (BoundedCommandResult(0, b"invalid native listing"), "invalid_output"),
+                                 (BoundedCommandResult(7, b"not-for-evidence"), "native_exit_nonzero")):
+            with self.subTest(reason=reason):
+                self.setUp()
+                self.case = replace(self.case, parallel_tasks=1)
+                receipt = self.attach_run_receipt()
+                self.script[0] = [changed_failure(reason_code="host_cpu_sustained")]
+                fault = (patch.object(dispatch_impl, "run_bounded_command", side_effect=response)
+                         if isinstance(response, Exception) else
+                         patch.object(dispatch_impl, "run_bounded_command", return_value=response))
+                with fault:
+                    result = self.run_dispatcher()
+                self.assertEqual(len(result.task_ids), 1)
+                observed = receipt.details["host_cpu_snapshot"]
+                self.assertEqual((observed["status"], observed["reason"]), ("unavailable", reason))
+                self.assertNotIn("not-for-evidence", json.dumps(observed))
+
+    def test_unjoined_diagnostic_child_prevents_an_otherwise_recoverable_cohort_from_passing(self):
+        self.case = replace(self.case, parallel_tasks=1)
+        receipt = self.attach_run_receipt()
+        self.script[0] = [changed_failure(reason_code="host_cpu_sustained")]
+        diagnostic = BoundedCommandError(CommandFailure.TERMINATION_FAILED)
+        with patch.object(dispatch_impl, "run_bounded_command", side_effect=diagnostic):
+            with self.assertRaises(BoundedCommandError) as raised:
+                self.run_dispatcher()
+        self.assertIs(raised.exception, diagnostic)
+        self.assertEqual(len(self.invocations), 1)
+        self.assertEqual(self.clock.sleeps, [])
+        self.assertFalse((self.receipts / "dispatch-batch.json").exists())
+        self.assertIs(receipt.details["host_cpu_snapshot"]["closure_unproven"], True)
+
     def test_second_pressure_refusal_fails_without_third_dispatch(self):
         self.script[17] = [pressure_refusal(), pressure_refusal()]
         with self.assertRaises(RuntimeError):
@@ -381,6 +610,7 @@ class PrivateResourceRetryTests(unittest.TestCase):
     def test_four_repeated_refusals_record_all_eight_before_failing(self):
         receipt = self.attach_run_receipt()
         self.barrier = threading.Barrier(4)
+        self.retry_barrier = threading.Barrier(4)
         for index in range(4):
             self.script[index] = [pressure_refusal(), pressure_refusal()]
         with self.assertRaises(RuntimeError) as failure:
@@ -485,12 +715,18 @@ class PrivateResourceRetryTests(unittest.TestCase):
         self.assert_no_retry()
 
     def test_unknown_task_record_is_not_retried(self):
+        self.case = replace(self.case, dispatch_workers=1)
         response = pressure_refusal()
         response["task_record"] = "unknown"
         self.script[17] = [response]
         with self.assertRaises(RuntimeError):
             self.run_dispatcher()
-        self.assert_no_retry()
+        self.assertTrue(self.counts)
+        self.assertTrue(all(count == 1 for count in self.counts.values()))
+        self.assertEqual(len(self.invocations), 18)
+        self.assertEqual(self.clock.sleeps, [])
+        self.assertEqual(list(self.receipts.glob("*.retry-*.json")), [])
+        self.assert_cleanup_registered()
 
     def assert_rejected_response(self, response):
         self.case = replace(self.case, parallel_tasks=1)
