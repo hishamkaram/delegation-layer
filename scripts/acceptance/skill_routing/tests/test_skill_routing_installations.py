@@ -19,6 +19,9 @@ class InstalledRoutingTests(unittest.TestCase):
         self.selected.write_text("synthetic installed fixture; never execute\n", encoding="utf-8")
         self.selected.chmod(0o700)
         self.case = {"name": "review", "prompt": "Ask Codex for a review.", "external": True}
+        codex_home = patch.dict(gate.os.environ, {"CODEX_HOME": str(self.root / ".codex")})
+        codex_home.start()
+        self.addCleanup(codex_home.stop)
         home = patch.object(gate.Path, "home", return_value=self.root)
         home.start()
         self.addCleanup(home.stop)

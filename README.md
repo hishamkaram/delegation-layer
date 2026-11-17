@@ -33,7 +33,7 @@ exact-session continuation.
 | Managed Git workspaces | Separate parallel writes and review captured changes before landing them. | Available | [Workspaces](skills/agent-integration/references/workspaces.md) |
 | Remote tasks over SSH | Reconnect to the same task, inspect bounded logs, transfer selected files, and explicitly retire retained bytes. | Available | [Remote workflow](docs/remote-delegation.md) |
 | Recurring background tasks | Run immutable schedules with health, optional failure hooks and bounded opt-in quota holds. | Available | [Schedule reliability](skills/agent-integration/references/command-reference.md#schedule-reliability) |
-| Optional Teams | Save scoped Roles, Members and execution defaults; explicitly choose a Member for direct or scheduled work. | Available | [Teams](docs/teams.md) |
+| Optional Teams | Discover configured Teams before deciding which work to keep or assign; choose Members using saved Roles and execution defaults. | Available through the updated integration skill | [Teams](docs/teams.md) |
 
 Fresh dispatches and continuations check CPU and memory pressure by default.
 Use `--cpu-guard=false` or `--memory-guard=false` for an explicit per-command

@@ -439,6 +439,13 @@ try {
     success(hook);
     const output = JSON.parse(hook.stdout).hookSpecificOutput;
     assert.equal(output.hookEventName, event);
+    const noRecruit = "You are a native subagent: do not discover Teams or recruit unless your assignment explicitly authorizes work allocation.";
+    if (event === "SubagentStart") assert.ok(output.additionalContext.includes(noRecruit));
+    else assert.ok(!output.additionalContext.includes(noRecruit));
+    assert.match(output.additionalContext, /^Load the complete agent-integration skill: use the native Skill loader when available/);
+    assert.ok(output.additionalContext.includes("in one read, never an excerpt."));
+    assert.ok(output.additionalContext.includes("before deciding whether to keep or assign substantive"));
+    assert.ok(output.additionalContext.includes("Agents working from bounded briefs or assignments skip discovery unless explicitly authorized to allocate work."));
     assert.match(output.additionalContext, /external agent/);
     assert.ok(output.additionalContext.includes(join(dirname(dirname(helper)), "SKILL.md")));
   }

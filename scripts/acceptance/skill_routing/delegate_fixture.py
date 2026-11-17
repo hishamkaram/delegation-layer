@@ -21,13 +21,14 @@ import os
 import re
 from scripts.acceptance.processes.contracts import BoundedCommandError
 from scripts.acceptance.processes.operations import run_bounded_command
+from scripts.acceptance.skill_routing.teams import backend_environment
 
 
 SYNTHETIC_EVIDENCE = "synthetic-routing-evidence"
 STATE_NAME = "routing-state.json"
 EVENTS_NAME = "routing-events.jsonl"
 TASK_ID_RE = re.compile(r"^[0-9a-f]{32}$")
-COMMANDS = ("dispatch", "status", "collect", "recheck", "models")
+COMMANDS = ("dispatch", "status", "collect", "recheck", "models", "teams")
 PROVIDERS = {
     "antigravity:print",
     "ccr:print",
@@ -542,11 +543,17 @@ def main():
         print(json.dumps(response))
         sys.exit(code)
 
+    command = command_name(argv)
     # Only this child loses provider executables. The initiating harness keeps its
     # normal profile, PATH, and competing integrations, so bypasses remain observable.
     try:
+        environment = backend_environment(runtime, root, command)
+    except ValueError as error:
+        print("routing catalog isolation refused: " + str(error), file=sys.stderr)
+        sys.exit(2)
+    try:
         result = run_bounded_command(
-            [runtime["delegate"], *argv], dict(os.environ, PATH=runtime["path"]),
+            [runtime["delegate"], *argv], environment,
             capture=True, capture_stderr=True, max_output=8 * 1024 * 1024,
         )
     except BoundedCommandError as error:
@@ -554,7 +561,6 @@ def main():
         print("routing fixture validation unavailable: " + error.reason.value, file=sys.stderr)
         sys.exit(1)
 
-    command = command_name(argv)
     normal = parsed_response(result.output, command)
     normal_for_fixture = None if normal is None else dict(normal, _exit_code=result.exit_code)
     synthetic = synthetic_response(root, runtime, argv, command, normal_for_fixture)

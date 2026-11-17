@@ -9,8 +9,13 @@ script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 rule_file="$script_dir/../references/routing-rule.json"
 # Read before emitting anything so a missing asset cannot produce partial JSON.
 rule=$(cat "$rule_file")
+# Native subagents get the same routing guidance plus their assignment boundary.
+case "$event" in
+    SubagentStart) worker_context=' You are a native subagent: do not discover Teams or recruit unless your assignment explicitly authorizes work allocation. ' ;;
+    *) worker_context='' ;;
+esac
 skill_file="$(CDPATH='' cd -- "$script_dir/.." && pwd)/SKILL.md"
-DELEGATE_ROUTING_EVENT="$event" DELEGATE_ROUTING_RULE="$rule" DELEGATE_ROUTING_SKILL="$skill_file" awk '
+DELEGATE_ROUTING_EVENT="$event" DELEGATE_ROUTING_RULE="$rule" DELEGATE_ROUTING_SKILL="$skill_file" DELEGATE_ROUTING_WORKER_CONTEXT="$worker_context" awk '
 BEGIN {
     # Paths are task data, not shell code. Escape every JSON control character.
     for (i = 1; i < 32; i++) escapes[sprintf("%c", i)] = sprintf("\\u%04x", i)
@@ -22,5 +27,5 @@ BEGIN {
         escaped = escaped ((character in escapes) ? escapes[character] : character)
     }
     # The maintained rule is a JSON string. Keep its escaping when prefixing it.
-    printf "{\"hookSpecificOutput\":{\"hookEventName\":\"%s\",\"additionalContext\":\"Read the complete agent-integration skill at %s. %s}}\n", ENVIRON["DELEGATE_ROUTING_EVENT"], escaped, substr(ENVIRON["DELEGATE_ROUTING_RULE"], 2)
+    printf "{\"hookSpecificOutput\":{\"hookEventName\":\"%s\",\"additionalContext\":\"Load the complete agent-integration skill: use the native Skill loader when available, otherwise read the whole file at %s in one read, never an excerpt.%s %s}}\n", ENVIRON["DELEGATE_ROUTING_EVENT"], escaped, ENVIRON["DELEGATE_ROUTING_WORKER_CONTEXT"], substr(ENVIRON["DELEGATE_ROUTING_RULE"], 2)
 }'

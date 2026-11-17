@@ -2,8 +2,12 @@
 
 Teams are optional, reusable task-selection configuration. A Team describes its
 purpose, Roles and Members; a Member may supply provider, model and effort
-defaults. The lead chooses an explicit scoped Team and Member for each request.
-Role descriptions provide context, not permissions or automatic routing rules.
+defaults. The updated agent-integration skill discovers available Teams before
+the lead decides whether to do substantive work itself or assign it, without
+requiring Team wording in the request. The lead chooses an explicit scoped Team
+and Member for each dispatch.
+Role descriptions inform the lead's choice; they grant no permissions and are
+not machine-executed routing rules.
 Ordinary delegation needs no Team setup or catalog access.
 
 For example, ask your agent:
@@ -175,8 +179,18 @@ dispatch and continuation never assign it.
 `teams default show` reports `unset`, `resolved` or `stale`. Deleting its Team
 leaves a diagnosable stale reference. Set another reference or clear it
 explicitly; clearing is idempotent. A missing or stale default does not block
-ordinary direct delegation. The lead still chooses explicit Team/Member flags;
-there is no implicit assignment, Role-only target or automatic Member fan-out.
+ordinary direct delegation. The CLI still requires explicit Team/Member flags;
+it never applies a default implicitly. The allocating lead prefers a suitable
+default Team, considers better-fitting alternatives, and chooses Members for
+research, planning, implementation, testing or review. See the
+[automatic discovery procedure](../skills/agent-integration/references/command-reference.md#automatic-team-discovery)
+for precedence, ambiguity and incomplete results. Team availability does not
+authorize extra work or automatic Member fan-out.
+
+This behavior requires the updated integration skill and routing guidance that
+the harness actually loads; saving a default alone does not activate it. Members
+keep their provider's normal available skills and configuration. Teams do not
+install, copy or synchronize those skills, or grant task permissions and budgets.
 
 ## Latest defaults and saved task identity
 
@@ -218,6 +232,6 @@ Old binaries strictly reject the new saved request fields. Mixed-version
 rolling readers are unsupported; do not run old and new scheduler readers
 against new targeted definitions together.
 
-Teams add no TUI, automatic retries, provider-account management or catalog
+Teams add no automatic retries, provider-account management or catalog
 relocation/synchronization. Provider settings, accounts and native permissions
 remain user/provider-owned; see the [product boundary](../agents/_data/product-boundary.md).

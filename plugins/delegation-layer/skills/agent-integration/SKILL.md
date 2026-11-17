@@ -1,27 +1,38 @@
 ---
 name: agent-integration
-description: Use Delegate for work assigned to another agent, model, or separate harness CLI session. Load this before a provider-specific skill or plugin, including when a user names a CLI for research, implementation, tests, reviews, consultations, comparisons, or debates. Also manage optional Delegate Teams and explicit Member selection. A named destination still routes through Delegate. Ordinary same-harness subagents and questions about tools remain local; respect an explicit choice of another integration. Also route Delegate installation upgrades and upgrade-related recovery.
+description: Load before the lead decides whether to handle substantive research, planning, implementation, testing or review locally or assign it; discover Delegate Teams passively. Use Delegate for work assigned to another agent, model, or separate harness CLI session. Load this before a provider-specific skill or plugin, including when a user names a CLI for research, planning, implementation, tests, reviews, consultations, comparisons, or debates. Also manage optional Delegate Teams and explicit Member selection. A named destination still routes through Delegate. Ordinary same-harness subagents and questions about tools remain local; respect an explicit choice of another integration. Also route Delegate installation upgrades and upgrade-related recovery.
 ---
 
 # Delegation Layer
 
 ## When to use
 
-Load this skill before choosing tools for work assigned to an external agent,
-model, or separate harness session, including collaboration you choose.
+The lead responsible for the user's request loads this skill and discovers
+Teams before deciding whether to keep or assign substantive research, planning,
+implementation, testing or review work, including work it expects to do itself,
+even when no Team, worker or provider is named. Follow the passive procedure
+below. Also load it before choosing tools for external collaboration you choose.
 A named CLI identifies the destination; discover its provider ID through
 Delegate. “CCR” or “Claude Code Router” means `ccr:print`; read
 [CCR guidance](references/ccr.md).
+
+Skip automatic discovery for quick answers, tool or configuration discussion,
+explicit native-only or no-delegation instructions, and named providers, models
+or integrations. Still resolve any explicit Team/Member target. An agent working
+from a bounded brief or assignment skips discovery unless that assignment
+explicitly grants work-allocation authority.
 
 Ordinary subagents inside the current harness remain available, even when that
 harness is named. A separate CLI session uses Delegate, including another
 instance of your current harness. Discussing, documenting, or configuring a
 tool is local work. Respect an explicit user choice of another integration.
 
-For optional Team management or explicit Member selection, use
-[Teams](references/command-reference.md#teams). Management is local configuration
-through Delegate CLI and does not launch a provider. Teams are never required
-for ordinary delegation.
+Teams and native skills complement each other: Teams supply Member execution
+defaults; the selected provider loads its own available skills and configuration
+under the requested permissions. Delegate does not copy or synchronize skills.
+For Team management and selection, use
+[Teams](references/command-reference.md#teams). Management is passive unless an
+explicit mutation is requested; ordinary delegation needs no Team setup.
 
 For recurring tasks, use the [schedule commands](references/command-reference.md#schedules)
 and the independent [scheduler runtime](references/command-reference.md#scheduler-runtime).
@@ -63,19 +74,27 @@ under this skill.
 command -v delegate && delegate --version
 ```
 
-If missing or unusable, report and stop. This skill does not install or repair
-the CLI. A trusted plugin startup hook normally handles bootstrap.
+If missing or unusable, report the blocker and stop dependent discovery and
+external work. Continue independent authorized local work; never substitute it
+or another integration for explicitly requested external work. This skill does
+not install or repair the CLI. A trusted plugin startup hook normally handles bootstrap.
 
-### 2. Discover only when useful
+### 2. Discover Teams before deciding how to handle substantive work
 
-If a Team/Member was requested, inspect the scoped target and follow
-[Member selection](references/command-reference.md#using-a-member). Preserve
-explicit caller choices; do not replace a missing requested Member with another.
-Without a Team target, if no destination was named, use `--auto`. Otherwise resolve the named
-destination through `providers --json` and preserve it with `--provider`.
-Read [providers and capabilities](references/command-reference.md#providers-and-capabilities)
-for discovery and required options. Catalog support is not host readiness;
-a normal task needs no separate preflight.
+The responsible lead follows [automatic Team discovery and Member selection](references/command-reference.md#automatic-team-discovery)
+before deciding whether to keep or assign each substantive phase, even when it
+expects to keep all work local. Read afresh for each new substantive work
+decision or batch; do not require the user to mention Teams. Discovery alone
+starts no work. Prefer a suitable Member for work being assigned to a separate
+worker; keep work the lead retains local.
+An explicit native-only request or another integration choice wins.
+
+Preserve explicit Team/Member targets. A named provider or model without a Team
+stays direct, without automatic Team flags that could change native defaults.
+Resolve named destinations through `providers --json` and existing model
+discovery. Without a selected Member or named destination, ordinary `--auto`
+remains available. Catalog support is not host readiness; normal work needs no
+separate preflight.
 
 Keep provider defaults when model/effort were not requested and are not
 required. For an explicit choice or natural-language model name, read
@@ -93,8 +112,12 @@ For explicit native Codex review, read
 ### 3. Prepare separate paths and a finite brief
 
 Use a supplied brief or write the worker's bounded assignment and acceptance
-criteria to a regular file. Do not copy the orchestration request or ask workers
-to recruit others unless recursive delegation was requested.
+criteria to a regular file. Identify the worker's bounded assignment and explicitly
+forbid further recruitment unless that assignment authorizes decomposition.
+Workers and native subagents do not discover Teams or recruit merely because
+they receive this skill; only the agent assigned to allocate work does so.
+Do not copy the orchestration request into worker briefs. These instructions
+guide the provider; they are not an independent sandbox or recruitment guard.
 
 For ordinary task, schedule, observation, interaction, and continuation commands,
 omit `--root`; the CLI owns default-root resolution for the user's configuration

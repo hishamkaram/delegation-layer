@@ -4,6 +4,7 @@
 Ordinary routing keeps the normal profile and competing integrations. Diagnosis
 handoffs instead use invocation-local isolation to bound paid work. Only
 disposable workspaces receive the candidate skill; no user setup is edited.
+Opt-in prepared contexts also control the native Codex shell for this fixture.
 """
 
 import sys
@@ -27,6 +28,8 @@ import time
 from scripts import skill_eval_cases
 import scripts.acceptance.skill_routing.delegate_fixture as routing_fixture
 import scripts.acceptance.skill_routing.upgrade as upgrade_fixture
+import scripts.acceptance.skill_routing.teams as team_fixture
+import scripts.acceptance.skill_routing.candidate_context as candidate_context
 
 
 
@@ -484,8 +487,9 @@ def _candidate_environment(run, ownership, env, delegate_bin, *, state_root, exp
     source = (REPO / "scripts/acceptance/skill_routing/root_shim.py").read_text(encoding="utf-8")
     executable.write_text("#!" + sys.executable + "\n" + source.split("\n", 1)[1], encoding="utf-8")
     executable.chmod(0o700)
-    calls = run / "fixture/agent-calls.jsonl"
-    calls.parent.mkdir()
+    fixture = run / "fixture"
+    fixture.mkdir()
+    calls = fixture / "agent-calls.jsonl"
     calls.touch(exist_ok=False)
     write_json(candidate_path / "runtime.json", {
         "delegate": str(delegate_bin), "backend": str(delegate_bin),
@@ -507,6 +511,16 @@ def _candidate_shadow_reason(harness) -> str | None:
         personal = Path(os.environ.get("CLAUDE_CONFIG_DIR", str(Path.home() / ".claude"))) / "skills/agent-integration"
         if (personal / "SKILL.md").exists() and candidate_digests(personal) != candidate_digests():
             return "claude_candidate_shadowed_by_personal_skill"
+    if harness == "codex":
+        # Codex can discover personal skills in both native locations. A
+        # configured profile does not change the independent .agents location.
+        home = Path.home()
+        roots = (Path(os.environ.get("CODEX_HOME", str(home / ".codex"))) / "skills",
+                 home / ".agents/skills")
+        for root in roots:
+            personal = root / "agent-integration"
+            if (personal / "SKILL.md").exists() and candidate_digests(personal) != candidate_digests():
+                return "codex_candidate_shadowed_by_personal_skill"
     if harness == "hermes":
         # Installed Hermes reads HERMES_HOME/skills, not project .hermes/skills.
         installed = Path(os.environ.get("HERMES_HOME", str(Path.home() / ".hermes"))) / "skills/agent-integration"
@@ -533,7 +547,22 @@ def _prepare_routing_fixture(run, owner, case, delegate_bin, *, state_root, owne
     private_path.mkdir()
     for name, path in (("pueue", owner.client), ("pueued", owner.daemon_path)):
         (private_path / name).symlink_to(Path(path).resolve())
+    git = shutil.which("git", path=owner.processes.environment.get("PATH", os.defpath))
+    if git is None:
+        raise FileNotFoundError("Git is required for isolated Team project context")
+    (private_path / "git").symlink_to(Path(git).resolve())
+    home = ownership.create("routing backend catalog home", fixture / "catalog-home", fixture).directory
+    catalog_env = team_fixture.catalog_environment(home)
+    scenario = case.get("team_scenario")
+    if scenario is not None:
+        commands = team_fixture.seed_commands(scenario, fixture, run / "workspace")
+        for index, arguments in enumerate(commands):
+            owner.processes.run("team-seed-" + str(index), [str(delegate_bin), *arguments], run / "workspace",
+                                environment={**owner.processes.environment, **catalog_env}, timeout=20, expected=0)
+        if scenario == "corrupt":
+            team_fixture.corrupt_catalog(home)
     write_json(fixture / "runtime.json", {
+        "catalog_environment": catalog_env,
         "delegate": str(delegate_bin), "path": str(private_path),
         "state_root": str(state_root),
         "case": case["name"],
@@ -672,14 +701,52 @@ def routing_prompt(case, state_root):
     return case["prompt"].replace("@ROOT@", str(state_root)) + suffix
 
 
+class TeamDiscoveryFrontdoorMissing(ValueError):
+    """A discovery-positive composite did not use both owned Delegate frontdoors."""
+
+
+def require_composite_discovery(run, case):
+    """The shim's existing original-argv log owns this bounded observation."""
+    if not case.get("team_scenario") or case.get("external_optional") is not True:
+        return
+    observed = set()
+    try:
+        lines = (run / "fixture/agent-calls.jsonl").read_text().splitlines()
+        for line in lines:
+            row = json.loads(line)
+            if not isinstance(row, dict) or "error" not in row or row["error"] is not None:
+                continue
+            argv = row.get("argv")
+            if not isinstance(argv, list) or not all(isinstance(value, str) for value in argv):
+                continue
+            if (routing_fixture.command_name(argv) != "teams"
+                    or sum(value == "--cwd" or value.startswith("--cwd=") for value in argv) != 1):
+                continue
+            cwd = routing_fixture.option_value(argv, "--cwd")
+            if (cwd is None or not Path(cwd).is_absolute()
+                    or Path(cwd).resolve(strict=False) != (run / "workspace").resolve(strict=False)):
+                continue
+            tail = argv[argv.index("teams") + 1:]
+            if tail[:2] == ["default", "show"]:
+                observed.add("default-show")
+            elif tail[:1] == ["list"]:
+                observed.add("list")
+    except (OSError, ValueError):
+        raise TeamDiscoveryFrontdoorMissing("owned Teams discovery calls were not observed") from None
+    if observed != {"default-show", "list"}:
+        raise TeamDiscoveryFrontdoorMissing("owned Teams discovery calls were not observed")
+
+
 def run_case(*, output, harness, model, case, repetition, mode="live", budget=180,
-             routing_context=False, delegate_bin=None):
+             routing_context=False, delegate_bin=None, prepared_context=False):
     run = output / f"{case['name']}-{repetition}"
     run.mkdir(mode=0o700)
     ownership = DirectoryOwner()
     try:
         workspace = run / "workspace"
         workspace = ownership.create("disposable workspace", workspace, run).directory
+        if "team_scenario" in case and mode != "routing":
+            raise ValueError("Team discovery cases require the isolated routing backend")
         upgrade = "upgrade_scenario" in case
         if upgrade and (harness != "codex" or mode != "routing"):
             raise ValueError("upgrade selection/behavior requires verified Codex routing isolation")
@@ -688,6 +755,8 @@ def run_case(*, output, harness, model, case, repetition, mode="live", budget=18
         else:
             prepare_workspace(workspace, harness)
         diagnosis = "paired_case_id" in case
+        if prepared_context and (not routing_context or harness not in ("codex", "claude") or diagnosis or upgrade):
+            raise ValueError("prepared context requires ordinary Claude/Codex routing context")
         if diagnosis and (harness != "codex" or mode != "routing" or not routing_context):
             raise ValueError("paired diagnosis requires Codex routing with candidate context")
         # Keep supervisor state beside the captured evidence. This makes the
@@ -696,6 +765,12 @@ def run_case(*, output, harness, model, case, repetition, mode="live", budget=18
         state = ownership.adopt_created("Delegate state", state_path, output).directory
         env = dict(os.environ)
         env.pop("DELEGATE_PUEUE_CONFIG", None)
+        scratch = ownership.create("native lead scratch", run / "native-scratch", run).directory
+        env["TMPDIR"] = str(scratch)
+        native_shell = None
+        if prepared_context and harness == "codex":
+            native_shell = ownership.create("prepared Codex shell startup", run / "native-shell", run).directory
+            env["ZDOTDIR"] = str(native_shell)
         prompt = routing_prompt(case, state)
         (run / "prompt.txt").write_text(prompt, encoding="utf-8")
         argv, stdin = command(harness, model, prompt, diagnosis=diagnosis or upgrade)
@@ -703,15 +778,19 @@ def run_case(*, output, harness, model, case, repetition, mode="live", budget=18
             argv += diagnosis_arguments(workspace, run / "fixture")
         elif upgrade:
             argv += upgrade_fixture.arguments(workspace, run / "fixture")
-        if routing_context and not diagnosis and not upgrade:
-            argv += routing_hook_arguments(harness, workspace)
+        hook_arguments = []
+        if routing_context and not diagnosis and not upgrade and not (prepared_context and harness == "claude"):
+            hook_arguments = routing_hook_arguments(harness, workspace)
+            argv += hook_arguments
         receipt = {"case": case, "repetition": repetition, "harness": harness,
                    "model_requested": model, "argv": argv, "status": "unreviewed", "mode": mode,
                    "budget_seconds": budget, "state_root": str(state), "candidate": candidate_digests(),
                    "routing_context": routing_context,
+                   "prepared_context": prepared_context,
                    "hook_trust": "disabled" if diagnosis else (
                        "vetted-per-invocation" if routing_context and harness == "codex" else "native"),
-                   "fixture_scenario": case.get("fixture_scenario") if mode == "routing" else None}
+                   "fixture_scenario": case.get("fixture_scenario") if mode == "routing" else None,
+                   "team_scenario": case.get("team_scenario")}
         if delegate_bin is not None:
             delegate_bin = Path(delegate_bin).resolve()
             receipt["delegate_executable"] = str(delegate_bin)
@@ -721,7 +800,7 @@ def run_case(*, output, harness, model, case, repetition, mode="live", budget=18
     owner = None
     try:
         shadow_reason = _candidate_shadow_reason(harness)
-        if shadow_reason is not None:
+        if shadow_reason is not None and not prepared_context:
             receipt.update(status="blocked", reason=shadow_reason)
             return receipt
         delegate_bin = _candidate_environment(run, ownership, env, delegate_bin,
@@ -753,11 +832,30 @@ def run_case(*, output, harness, model, case, repetition, mode="live", budget=18
         elif diagnosis:
             receipt["diagnosis_controls"] = verify_diagnosis_controls(
                 owner, executable, workspace, ownership=ownership, model=model)
+        if prepared_context:
+            prepared = candidate_context.prepare(owner, executable, harness, workspace, REPO, delegate_bin,
+                                                   model=model, routing_arguments=tuple(hook_arguments))
+            argv += list(prepared.arguments)
+            receipt["prepared_controls"] = dict(prepared.evidence)
+            if native_shell is not None:
+                receipt["prepared_controls"]["shell_startup_directory"] = str(native_shell)
         receipt["supervisor_result"] = owner.execute(argv, stdin, budget)
+        require_composite_discovery(run, case)
+        if prepared_context:
+            candidate_context.require_source(prepared.skill, REPO)
+            receipt["prepared_observation"] = candidate_context.verify_run(
+                harness, prepared.evidence, run / "stdout.txt", source_skill=SKILL / "SKILL.md",
+                require_read=case.get("external") is True or case.get("require_candidate_read") is True)
     except FileNotFoundError:
         receipt.update(status="blocked", reason="required_executable_missing")
     except TimeoutError:
         receipt.update(status="failed", reason="supervised_deadline_exceeded")
+    except candidate_context.PreparedSkillConfigurationChanged:
+        receipt.update(status="blocked", reason="prepared_skill_config_replaced",
+                       guidance="Prepare a dedicated native context that preserves unrelated visible skills.")
+    except TeamDiscoveryFrontdoorMissing:
+        receipt.update(status="blocked", reason="team_discovery_frontdoor_missing",
+                       guidance="Both Teams default show and list must use the fixture-controlled Delegate command.")
     except (OSError, ValueError, RuntimeError) as error:
         # Detailed diagnostics stay in the private process evidence.
         receipt.update(status="blocked", reason="prerequisite_or_supervisor_failed",
@@ -769,7 +867,7 @@ def run_case(*, output, harness, model, case, repetition, mode="live", budget=18
 
 
 def summarize(*, output, cases, repetitions, harness, mode="live", model=None, budget=180,
-              routing_context=False, delegate_bin=None):
+              routing_context=False, delegate_bin=None, prepared_context=False):
     rows = []
     for case in cases:
         for repetition in range(1, repetitions + 1):
@@ -781,7 +879,9 @@ def summarize(*, output, cases, repetitions, harness, mode="live", model=None, b
                         or receipt.get("repetition") != repetition
                         or receipt.get("mode") != mode or receipt.get("model_requested") != model
                         or receipt.get("routing_context", False) != routing_context
+                        or receipt.get("prepared_context", False) != prepared_context
                         or receipt.get("fixture_scenario") != (case.get("fixture_scenario") if mode == "routing" else None)
+                        or receipt.get("team_scenario") != case.get("team_scenario")
                         or (delegate_bin is not None
                             and receipt.get("delegate_executable") != str(Path(delegate_bin).resolve()))
                         or receipt.get("candidate") != candidate_digests()
@@ -805,6 +905,28 @@ def summarize(*, output, cases, repetitions, harness, mode="live", model=None, b
                             raise ValueError(f"changed transcript: {run / name}")
                     if receipt["status"] in ("failed", "blocked") and judgment["status"] == "passed":
                         raise ValueError(f"unsuccessful capture cannot pass: {run}")
+                    if judgment["status"] == "passed":
+                        require_composite_discovery(run, case)
+                    if prepared_context and judgment["status"] == "passed":
+                        controls = receipt.get("prepared_controls")
+                        if not isinstance(controls, dict):
+                            raise ValueError(f"prepared candidate context was not verified: {run}")
+                        observation = candidate_context.verify_run(
+                            harness, controls, run / "stdout.txt", source_skill=SKILL / "SKILL.md",
+                            require_read=case.get("external") is True or case.get("require_candidate_read") is True)
+                        if observation != receipt.get("prepared_observation"):
+                            raise ValueError(f"prepared candidate observation changed: {run}")
+                        for capture, field in (("prepared-native-context", "context_sha256"),
+                                               ("prepared-discovery-context", "discovery_sha256"),
+                                               ("prepared-plugin-bootstrap", "bootstrap_stdout_sha256")):
+                            if field in controls and controls[field] != digest(run / capture / "stdout.txt"):
+                                raise ValueError(f"prepared candidate control evidence changed: {run}")
+                        if harness == "codex":
+                            if controls.get("visible_skill_comparison") != "baseline-with-target-replaced":
+                                raise ValueError(f"native baseline skill preservation was not verified: {run}")
+                            candidate_context.verify_visible_skill_selection(
+                                read_json(run / "prepared-discovery-context/stdout.txt"),
+                                read_json(run / "prepared-native-context/stdout.txt"), Path(controls["candidate_skill"]))
                     if "paired_case_id" in case and judgment["status"] == "passed":
                         controls = receipt.get("diagnosis_controls")
                         if (not isinstance(controls, dict)
@@ -853,6 +975,8 @@ def main():
     parser.add_argument("--delegate-bin", type=Path, default=REPO / "bin/delegate")
     parser.add_argument("--routing-context", action="store_true",
                         help="exercise candidate context hooks; Codex trust is vetted only for this invocation")
+    parser.add_argument("--prepared-context", action="store_true",
+                        help="use a fixture-controlled candidate context; require native identity/read evidence")
     parser.add_argument("--mode", choices=("routing", "live"), default="routing")
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--split", choices=("development", "validation", "all"), default="all")
@@ -863,6 +987,8 @@ def main():
     args = parser.parse_args()
     if args.routing_context and args.harness == "hermes":
         parser.error("Hermes currently supports skill-only acceptance")
+    if args.prepared_context and (not args.routing_context or args.harness == "hermes" or args.suite != "delegation"):
+        parser.error("prepared context requires delegation-suite Claude/Codex with --routing-context")
     if args.suite == "upgrade" and (args.harness != "codex" or args.mode != "routing" or args.routing_context):
         parser.error("upgrade suite requires Codex routing without context hooks; other harness containment is unverified")
     suite = upgrade_fixture.cases() if args.suite == "upgrade" else read_json(CASES)["cases"]
@@ -872,6 +998,14 @@ def main():
         parser.error("positive repetitions and known case names are required")
     cases = [c for c in suite if (args.split == "all" or c["split"] == args.split)
              and (not args.case or c["name"] in args.case)]
+    if args.mode != "routing":
+        if args.case and any("team_scenario" in case for case in cases):
+            parser.error("Team discovery cases require --mode routing")
+        cases = [case for case in cases if "team_scenario" not in case]
+    if args.prepared_context:
+        if args.case and any("paired_case_id" in case for case in cases):
+            parser.error("prepared context does not apply to paired diagnosis cases")
+        cases = [case for case in cases if "paired_case_id" not in case]
     if args.harness != "codex" or args.mode != "routing" or not args.routing_context:
         if args.case and any("paired_case_id" in case for case in cases):
             parser.error("paired diagnosis requires Codex routing with candidate context")
@@ -882,14 +1016,15 @@ def main():
     if args.summarize:
         report = summarize(output=output, cases=cases, repetitions=args.repetitions, harness=args.harness,
             mode=args.mode, model=args.model, budget=args.budget_seconds, routing_context=args.routing_context,
-            delegate_bin=args.delegate_bin)
+            delegate_bin=args.delegate_bin, prepared_context=args.prepared_context)
         print(json.dumps(report, indent=2))
         return {"passed": 0, "failed": 1, "blocked": 2}[report["status"]]
     output.mkdir(parents=True, exist_ok=False, mode=0o700)
     for case in cases:
         for repetition in range(1, args.repetitions + 1):
             receipt = run_case(output=output, harness=args.harness, model=args.model, case=case, repetition=repetition,
-                mode=args.mode, budget=args.budget_seconds, routing_context=args.routing_context, delegate_bin=args.delegate_bin)
+                mode=args.mode, budget=args.budget_seconds, routing_context=args.routing_context,
+                delegate_bin=args.delegate_bin, prepared_context=args.prepared_context)
             if receipt.get("reason") == "supervisor_cleanup_unproven":
                 return 1
     # Executing a harness is not proof of routing success.

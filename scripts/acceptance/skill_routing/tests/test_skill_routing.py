@@ -8,6 +8,7 @@ import tempfile
 import unittest
 from unittest.mock import patch, Mock
 import sys
+import subprocess
 
 
 import scripts.acceptance.skill_routing.cli as gate
@@ -29,6 +30,9 @@ class RoutingTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name).resolve()
+        codex_home = patch.dict(gate.os.environ, {"CODEX_HOME": str(self.root / ".codex")})
+        codex_home.start()
+        self.addCleanup(codex_home.stop)
         home = patch.object(gate.Path, "home", return_value=self.root)
         home.start()
         self.addCleanup(home.stop)
@@ -56,7 +60,7 @@ class RoutingTests(unittest.TestCase):
             "status": "unreviewed", "case": case, "harness": "codex", "repetition": 1,
             "mode": mode, "model_requested": None, "budget_seconds": 180,
             "candidate": gate.candidate_digests(),
-            "fixture_scenario": fixture_scenario,
+            "fixture_scenario": fixture_scenario, "team_scenario": case.get("team_scenario"),
             "stdout.txt_sha256": gate.digest(run / "stdout.txt")})
         return run
 
@@ -300,6 +304,17 @@ class RoutingTests(unittest.TestCase):
         self.assertTrue(any(value.startswith("hooks.SubagentStart=") for value in codex))
         with self.assertRaisesRegex(ValueError, "supported only"):
             gate.routing_hook_arguments("hermes", workspace)
+        for event in ("SessionStart", "SubagentStart"):
+            result = subprocess.run(["/bin/sh", str(gate.SKILL / "scripts/delegate-routing-context.sh"), event],
+                                    input="{}", text=True, capture_output=True, timeout=10,
+                                    env={"PATH": "/usr/bin:/bin"}, check=True)
+            context = json.loads(result.stdout)["hookSpecificOutput"]["additionalContext"]
+            self.assertIn("use the native Skill loader when available", context)
+            self.assertIn("read the whole file at " + str(gate.SKILL / "SKILL.md") + " in one read, never an excerpt.", context)
+            self.assertIn("before deciding whether to keep or assign substantive", context)
+            self.assertIn("Agents working from bounded briefs or assignments skip discovery unless explicitly authorized to allocate work.", context)
+            self.assertIn("explicit native-only or no-delegation instructions", context)
+            self.assertIn("still resolve any explicit Team/Member target", context)
 
     def test_hook_and_binary_receipts_cannot_masquerade_as_other_modes(self):
         self.judgment(self.receipt())
@@ -590,6 +605,14 @@ class RoutingTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "receipt selection mismatch"):
             gate.summarize(output=self.root, cases=[changed], repetitions=1, harness="codex", mode="routing")
 
+    def test_changed_team_fixture_cannot_reuse_routing_evidence(self):
+        case = dict(self.case, name="teams-review", team_scenario="default")
+        run = self.receipt(case, mode="routing")
+        self.judgment(run)
+        with self.assertRaisesRegex(ValueError, "receipt selection mismatch"):
+            gate.summarize(output=self.root, cases=[dict(case, team_scenario="empty")], repetitions=1,
+                           harness="codex", mode="routing")
+
     def test_supervised_deadline_retains_running_work_without_signaling(self):
         owner = object.__new__(gate.AttemptSupervisor)
         owner.run = self.root
@@ -865,7 +888,7 @@ class RoutingTests(unittest.TestCase):
         self.assertEqual({case["paired_case_id"] for case in diagnosis}, set(leaves))
         self.assertEqual(len({case["fixture_scenario"] for case in diagnosis}), 6)
         self.assertTrue(all(case["external"] is False for case in diagnosis))
-        cases = [case for case in cases if "paired_case_id" not in case]
+        cases = [case for case in cases if "paired_case_id" not in case and "team_scenario" not in case]
         holdouts = [c for c in cases if c.get("holdout")]
         self.assertEqual({c["name"] for c in holdouts}, {
             "recheck-recoverable", "recheck-still-rejected",
