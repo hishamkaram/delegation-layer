@@ -1,4 +1,4 @@
-// Package resultread verifies a complete committed payload before releasing a bounded range.
+// Package resultread verifies committed payloads for bounded reads or caller-owned files.
 package resultread
 
 import (
@@ -43,6 +43,22 @@ func Read(ctx context.Context, source io.Reader, descriptor task.PayloadDescript
 	return Range{Descriptor: descriptor, Offset: offset, Data: verification.selected, NextOffset: next, EOF: next == descriptor.Length}, nil
 }
 
+// copyVerified verifies the complete payload while copying to a private staging writer.
+// Save publishes staged bytes only after verification and both file closes succeed.
+func copyVerified(ctx context.Context, source io.Reader, descriptor task.PayloadDescriptor, destination io.Writer) error {
+	if destination == nil {
+		return errors.New("result destination writer is required")
+	}
+	if ctx == nil {
+		return context.Canceled
+	}
+	if err := task.ValidatePayloadDescriptor(descriptor); err != nil {
+		return err
+	}
+	verification := payloadVerification{expectedLength: descriptor.Length, expectedSHA256: descriptor.SHA256, digest: sha256.New(), destination: destination}
+	return verification.scan(ctx, source)
+}
+
 // One invocation owns incremental verification state and its bounded selection.
 type payloadVerification struct {
 	expectedLength      int64
@@ -50,6 +66,7 @@ type payloadVerification struct {
 	offset, end, length int64
 	digest              hash.Hash
 	selected            []byte
+	destination         io.Writer
 }
 
 func (v *payloadVerification) scan(ctx context.Context, source io.Reader) error {
@@ -89,6 +106,15 @@ func (v *payloadVerification) consume(data []byte) error {
 	}
 	if _, err := v.digest.Write(data); err != nil {
 		return err
+	}
+	if v.destination != nil {
+		n, err := v.destination.Write(data)
+		if err != nil {
+			return err
+		}
+		if n != len(data) {
+			return io.ErrShortWrite
+		}
 	}
 	next := v.length + int64(len(data))
 	begin, end := max(v.length, v.offset), min(next, v.end)

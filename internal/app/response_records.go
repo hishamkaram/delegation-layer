@@ -40,7 +40,11 @@ type ControlFactResponse struct {
 	NextAction   string `json:"next_action"`
 }
 
+// SavedResult describes a verified caller-owned output, not a new task outcome.
+type SavedResult = resultread.Saved
+
 type Response struct {
+	Saved                  *SavedResult                   `json:"saved,omitempty"`
 	ControlFact            *ControlFactResponse           `json:"control_fact,omitempty"`
 	ResultRange            *resultread.Range              `json:"result_range,omitempty"`
 	Settlement             *SettlementResponse            `json:"settlement,omitempty"`

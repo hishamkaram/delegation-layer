@@ -19,6 +19,7 @@ The main skill owns [root selection](../SKILL.md#3-prepare-separate-paths-and-a-
 | `collect TASK [--watch DURATION] --json` | Read or wait for publication | No launch |
 | `wait [--any\|--all] [--watch DURATION] TASK... --json` | Passively wait for several local tasks | None |
 | `result read TASK --expected-descriptor ABS --json` | [Bounded committed local answer](#result-read) | None |
+| `result save TASK --expected-descriptor ABS --output ABS --json` | [Complete verified local answer](#result-save) | Caller-selected output file only |
 | `logs TASK --json` | Read stream descriptors; remote handles support explicit bounded snapshots | No launch |
 | `cancel TASK --json` | Record an explicit stop | No launch |
 | `continue --task TASK ... --json` | Create an exact-session successor | At most one successor launch attempt |
@@ -333,9 +334,9 @@ payload, including bytes outside that page, before returning any answer bytes.
 No private task layout or answer path is needed. Use `--json` to consume bytes;
 the existing human format is a summary. Assemble decoded byte pages in order
 before interpreting UTF-8, since a page boundary can split a character. Codex
-leads use the [sandboxed decoder example](../examples/codex-lead.md#read-a-complete-result-in-bounded-pages)
-to assemble pages without exposing base64 to the model, then bounded native
-text reads to avoid tool-output truncation.
+leads can instead use [result save](#result-save) to verify and save the whole
+answer in one pass without passing base64 through the model, then use bounded
+native text reads to avoid tool-output truncation.
 
 No connector guards selects the ordinary route. A task with connector origin
 or context requires its full existing connector guards; partial guard sets
@@ -351,6 +352,40 @@ does not match the committed outcome is a request conflict. Ordinary
 timeouts do not create a connector `failure` envelope. Guarded reads retain
 their existing exit codes. No launch, collection, retry, repair or storage
 initialization occurs.
+
+## Result save
+
+Save a complete committed ordinary local answer to a new caller-owned file:
+
+```text
+delegate result save TASK_ID --expected-descriptor /absolute/workspace/payload.json --output /absolute/workspace/answer.txt --json
+```
+
+The exact committed `payload` descriptor from `collect` is required, as with
+`result read`; `--expected-descriptor -` reads it from stdin. `--output` must be
+an absolute clean path in an existing directory, outside the selected state
+root and its descendants, including aliases. Saving does not create missing
+parents or initialize state. Connector guards and page-selection flags are not
+accepted; connector-owned tasks and remote handles cannot use this command.
+
+The command verifies the complete payload once while writing a private stage,
+then publishes with atomic no-clobber linking. Existing files, directories,
+symlinks and racing writers are preserved. `--control-timeout` retains its
+finite positive default of `30s`. This exports a derived file; it does not add
+a power-loss durability guarantee to canonical task state.
+
+Success exits `0` and returns `publication: committed` and
+`saved: {path, length, sha256}`. JSON contains no answer bytes. Before
+publication, an error leaves no final file. After publication, a cleanup error
+exits `1` with `result_saved_cleanup_incomplete` and retains `saved`; preserve
+the verified output and report the error without retrying. An existing target
+returns `result_destination_exists`. Verification timeout returns
+`result_verification_timeout`. Usage errors and request conflicts retain exit
+`2`; other operational failures exit `1`.
+
+The command is available in builds newer than v0.7.0. See the
+[Codex lead example](../examples/codex-lead.md#save-and-read-a-complete-result)
+for sandboxed use and complete bounded text consumption.
 
 ## Schedules
 

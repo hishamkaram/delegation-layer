@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/hishamkaram/delegation-layer/internal/app"
@@ -21,9 +22,10 @@ import (
 // System is allowed only compiled provider discovery, never native probes.
 type backendProbe struct {
 	*app.Workbench
-	staticCalls int
-	devices     []app.Arguments
-	preflights  []app.Arguments
+	doctorReport app.DoctorReport
+	staticCalls  int
+	devices      []app.Arguments
+	preflights   []app.Arguments
 }
 
 func (p *backendProbe) Providers() app.ProviderResponse {
@@ -192,5 +194,17 @@ func TestSchedulerMigrationActionRespectsLiveHostLease(t *testing.T) {
 	}
 	if !errors.Is(openErr, os.ErrNotExist) {
 		t.Fatalf("refused migration initialized storage: %v", openErr)
+	}
+}
+
+func (p *backendProbe) Doctor(_ app.Arguments) (app.DoctorReport, int) { return p.doctorReport, 0 }
+
+func TestDoctorIncludesSchedulerAdvisoriesWithoutChangingExitPolicy(t *testing.T) {
+	probe := &backendProbe{doctorReport: app.DoctorReport{Scheduler: app.DoctorScheduler{Issues: []app.DoctorIssue{{Area: "scheduler", Code: "migration_required", NextStep: "run scheduler migrate"}}}}}
+	section := NewSection(probe, app.Arguments{}, t.TempDir())
+	action := findAction(t, section.Actions, "doctor")
+	feedback := action.Run(t.Context(), app.Arguments{})
+	if feedback.Err != nil || !strings.Contains(feedback.Body, "migration_required") || !strings.Contains(feedback.Body, "run scheduler migrate") {
+		t.Fatalf("scheduler advisory missing: %+v", feedback)
 	}
 }

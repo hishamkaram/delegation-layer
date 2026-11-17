@@ -1620,3 +1620,246 @@ func TestOrdinaryResultReadRefusesRejectedPublication(t *testing.T) {
 		t.Fatalf("rejected result returned bytes: code=%d response=%+v", code, response)
 	}
 }
+
+type resultSaveFixture struct {
+	root, id, taskDir, descriptor, answer string
+	payload                               task.PayloadDescriptor
+}
+
+func newResultSaveFixture(t *testing.T) resultSaveFixture {
+	t.Helper()
+	store, directory, request := newAppTestTask(t, false)
+	answer := strings.Repeat("verified answer€\n", 1200)
+	outcome := commitConnectorFixtureResult(t, &connectorFixture{task: directory}, answer)
+	descriptor := filepath.Join(t.TempDir(), "descriptor.json")
+	data, err := task.MarshalCanonical(outcome.Payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeAppTestFile(t, descriptor, data)
+	return resultSaveFixture{root: store.Root, id: request.TaskID, taskDir: directory.Dir, descriptor: descriptor, answer: answer, payload: outcome.Payload}
+}
+
+func (f resultSaveFixture) run(t *testing.T, output string, extra ...string) (Response, int) {
+	t.Helper()
+	args := []string{"result", "save", f.id, "--root", f.root, "--expected-descriptor", f.descriptor, "--output", output, "--json"}
+	args = append(args, extra...)
+	var stdout, stderr bytes.Buffer
+	code := Run(args, &stdout, &stderr, Dependencies{Environment: []string{}})
+	var response Response
+	if stdout.Len() > 0 {
+		if decodeErr := json.Unmarshal(stdout.Bytes(), &response); decodeErr != nil {
+			t.Fatalf("response: %v %s", decodeErr, stdout.String())
+		}
+	}
+	return response, code
+}
+
+func assertNoResultStages(t *testing.T, parent string) {
+	t.Helper()
+	entries, err := os.ReadDir(parent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		if strings.HasSuffix(entry.Name(), ".partial") {
+			t.Fatalf("left stage %s", entry.Name())
+		}
+	}
+}
+
+func TestOrdinaryResultSave(t *testing.T) {
+	f := newResultSaveFixture(t)
+	parent := t.TempDir()
+	output := filepath.Join(parent, "answer.txt")
+	var stdout, stderr bytes.Buffer
+	code := Run([]string{"result", "save", f.id, "--root", f.root, "--expected-descriptor", f.descriptor, "--output", output, "--json"}, &stdout, &stderr, Dependencies{Environment: []string{}})
+	var response Response
+	if err := json.Unmarshal(stdout.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	t.Run("literal saved wire keys", func(t *testing.T) {
+		var wire struct {
+			Saved map[string]json.RawMessage `json:"saved"`
+		}
+		if err := json.Unmarshal(stdout.Bytes(), &wire); err != nil {
+			t.Fatal(err)
+		}
+		if len(wire.Saved) != 3 {
+			t.Fatalf("saved metadata has %d keys: %s", len(wire.Saved), stdout.String())
+		}
+		for _, key := range []string{"path", "length", "sha256"} {
+			if _, present := wire.Saved[key]; !present {
+				t.Fatalf("saved metadata missing literal key %q: %s", key, stdout.String())
+			}
+		}
+	})
+	wantSaved := &SavedResult{Path: output, Length: int64(len(f.answer)), SHA256: f.payload.SHA256}
+	if code != 0 || !reflect.DeepEqual(response.Saved, wantSaved) || response.Publication != "committed" || response.ResultRange != nil || response.Connector != nil {
+		t.Fatalf("save code%d response%+v", code, response)
+	}
+	got, err := os.ReadFile(output)
+	if err != nil || string(got) != f.answer {
+		t.Fatalf("saved bytes: %v", err)
+	}
+	info, err := os.Stat(output)
+	if err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("saved mode: %v %v", info, err)
+	}
+
+	assertNoResultStages(t, parent)
+}
+
+func TestOrdinaryResultSavePreservesExistingFile(t *testing.T) {
+	f := newResultSaveFixture(t)
+	parent := t.TempDir()
+	output := filepath.Join(parent, "answer")
+	if err := os.WriteFile(output, []byte(f.answer), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	response, code := f.run(t, output)
+	if code != 1 || response.Saved != nil || response.Failure == nil || response.Failure.Code != "result_destination_exists" {
+		t.Fatalf("overwrite: code%d %+v", code, response)
+	}
+	got, err := os.ReadFile(output)
+	if err != nil || string(got) != f.answer {
+		t.Fatal("existing answer changed")
+	}
+	assertNoResultStages(t, parent)
+}
+
+func TestOrdinaryResultSaveRejectsUnsafePaths(t *testing.T) {
+	f := newResultSaveFixture(t)
+	parent := t.TempDir()
+	alias := filepath.Join(parent, "root-alias")
+	if err := os.Symlink(f.root, alias); err != nil {
+		t.Fatal(err)
+	}
+	for _, output := range []string{filepath.Join(f.root, "result.txt"), filepath.Join(f.taskDir, "saved.txt"), filepath.Join(parent, "missing", "answer.txt"), filepath.Join(alias, "answer")} {
+		response, code := f.run(t, output)
+		if code == 0 || response.Saved != nil {
+			t.Fatalf("unsafe path accepted: %s %+v", output, response)
+		}
+		if _, err := os.Lstat(output); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("unsafe output created: %v", err)
+		}
+	}
+	assertNoResultStages(t, parent)
+}
+
+func TestOrdinaryResultSavePreservesSymlinkAndRejectsFlags(t *testing.T) {
+	f := newResultSaveFixture(t)
+	parent := t.TempDir()
+	link := filepath.Join(parent, "dangling")
+	if err := os.Symlink("missing-target", link); err != nil {
+		t.Fatal(err)
+	}
+	response, code := f.run(t, link)
+	if code != 1 || response.Saved != nil {
+		t.Fatal("existing symlink overwritten")
+	}
+	if target, err := os.Readlink(link); err != nil || target != "missing-target" {
+		t.Fatalf("symlink changed: %q %v", target, err)
+	}
+	for _, flags := range [][]string{{"--offset", "0"}, {"--limit", "1"}, {"--expected-root", ""}} {
+		_, code = f.run(t, filepath.Join(parent, "unused"), flags...)
+		if code != 2 {
+			t.Fatalf("save accepted flags%v code%d", flags, code)
+		}
+	}
+	assertNoResultStages(t, parent)
+}
+
+func TestOrdinaryResultSaveDeadline(t *testing.T) {
+	store, _, request := newAppTestTask(t, false)
+	input, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := errors.Join(input.Close(), writer.Close()); err != nil {
+			t.Error(err)
+		}
+	})
+	args := Arguments{Command: "result", Root: store.Root, TaskID: request.TaskID, Connector: ConnectorArguments{Action: "save", DescriptorFile: "-", OutputFile: filepath.Join(t.TempDir(), "answer"), ControlTimeout: 20 * time.Millisecond}}
+	result := runCommandContext(t.Context(), args, Dependencies{Environment: []string{}, Input: input}.normalized())
+	if !errors.Is(result.err, context.DeadlineExceeded) || result.code != 1 || result.response.Saved != nil || result.response.Failure == nil || result.response.Failure.Code != "result_verification_timeout" {
+		t.Fatalf("deadline response%+v err%v", result.response, result.err)
+	}
+}
+
+func TestSavedResultCleanupFailureRetainsPublicationFact(t *testing.T) {
+	saved := &SavedResult{Path: "caller-owned-answer", Length: 8, SHA256: task.ComputeSHA256([]byte("complete"))}
+	response := newResponse("result")
+	response.Saved = saved
+	response.Publication = "committed"
+	result := resultSaveFailure(response, errors.New("owned stage cleanup failed"))
+	if result.code != 1 || result.response.Saved != saved || result.response.Publication != "committed" || result.response.Failure == nil || result.response.Failure.Code != "result_saved_cleanup_incomplete" {
+		t.Fatalf("saved fact lost: %+v", result.response)
+	}
+}
+
+func TestResultSaveHelpAndMissingRoot(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := Run([]string{"help", "result", "save"}, &stdout, &stderr, Dependencies{Environment: []string{}})
+	for _, wanted := range []string{"TASK_ID", "--expected-descriptor", "--output", "--control-timeout"} {
+		if code != 0 || !strings.Contains(stdout.String(), wanted) {
+			t.Fatalf("missing help%q code%d output%s", wanted, code, stdout.String())
+		}
+	}
+	if strings.Contains(stdout.String(), "--offset") || strings.Contains(stdout.String(), "--expected-root") {
+		t.Fatal("save advertises page/guard flags")
+	}
+	root := filepath.Join(t.TempDir(), "missing-state")
+	output := filepath.Join(t.TempDir(), "answer")
+	stdout.Reset()
+	stderr.Reset()
+	code = Run([]string{"result", "save", strings.Repeat("a", 32), "--root", root, "--expected-descriptor", filepath.Join(t.TempDir(), "absent-descriptor"), "--output", output, "--json"}, &stdout, &stderr, Dependencies{Environment: []string{}})
+	if code == 0 {
+		t.Fatal("missing root accepted")
+	}
+	if _, err := os.Lstat(root); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("read initialized root: %v", err)
+	}
+	if _, err := os.Lstat(output); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("failed read created output: %v", err)
+	}
+}
+
+func TestOrdinaryResultSaveRefusesConnectorAuthority(t *testing.T) {
+	f := newConnectorFixture(t)
+	outcome := commitConnectorFixtureResult(t, f, "guarded answer")
+	descriptor := filepath.Join(t.TempDir(), "descriptor.json")
+	data, err := task.MarshalCanonical(outcome.Payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeAppTestFile(t, descriptor, data)
+	output := filepath.Join(t.TempDir(), "answer")
+	fixture := resultSaveFixture{root: f.store.Root, id: f.task.TaskID, descriptor: descriptor}
+	response, code := fixture.run(t, output)
+	if code == 0 || response.Saved != nil || response.Connector != nil {
+		t.Fatalf("connector authority bypass: %d %+v", code, response)
+	}
+	if _, err := os.Lstat(output); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("guarded output created: %v", err)
+	}
+}
+
+func TestOrdinaryResultSaveHumanOutput(t *testing.T) {
+	f := newResultSaveFixture(t)
+	output := filepath.Join(t.TempDir(), "answer")
+	var stdout, stderr bytes.Buffer
+	code := Run([]string{"result", "save", f.id, "--root", f.root, "--expected-descriptor", f.descriptor, "--output", output}, &stdout, &stderr, Dependencies{Environment: []string{}})
+	if code != 0 {
+		t.Fatalf("save: %d %s", code, stderr.String())
+	}
+	for _, metadata := range []string{"saved path=", output, "length=", "sha256=" + f.payload.SHA256} {
+		if !strings.Contains(stdout.String(), metadata) {
+			t.Fatalf("missing %q in %s", metadata, stdout.String())
+		}
+	}
+	if strings.Contains(stdout.String(), f.answer) {
+		t.Fatal("human control response contains answer bytes")
+	}
+}

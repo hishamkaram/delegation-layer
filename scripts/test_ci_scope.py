@@ -1,5 +1,6 @@
 """Conservative CI selection against real Git ranges, file modes and command failures."""
 
+from itertools import product
 from pathlib import Path
 import os
 import subprocess
@@ -94,8 +95,8 @@ class WorkflowSelectionTests(unittest.TestCase):
         self.workflow = (self.root / ".github/workflows/ci.yml").read_text()
 
     def test_required_linux_guard_executes_and_refuses_failed_or_invalid_selection(self):
-        gate = job_text(self.workflow, "gate-linux")
-        self.assertIn("if: ${{ always() }}", gate.split("    steps:", 1)[0])
+        gate = job_text(self.workflow, "checks-linux")
+        self.assertIn("if: ${{ !cancelled() }}", gate.split("    steps:", 1)[0])
         guard = steps(gate)["Require a valid check selection"]
         self.assertIn("SELECTION_RESULT: ${{ needs.changes.result }}", guard)
         self.assertIn("FULL: ${{ needs.changes.outputs.full }}", guard)
@@ -111,23 +112,121 @@ class WorkflowSelectionTests(unittest.TestCase):
                     text=True, check=False, timeout=10)
                 self.assertEqual(observed.returncode, expected, observed.stderr)
 
+    def test_only_superseded_pr_runs_share_a_cancellable_workflow_group(self):
+        # These expressions are the hosted scheduling contract. The shell matrix
+        # above separately proves selection failures cannot turn into a green gate.
+        header = self.workflow.split("\njobs:\n", 1)[0]
+        self.assertIn("\nconcurrency:\n", header)
+        concurrency = header.split("\nconcurrency:\n", 1)[1]
+        self.assertEqual(
+            concurrency.strip(),
+            "group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' "
+            "&& format('pr-{0}', github.event.pull_request.number) "
+            "|| format('run-{0}', github.run_id) }}\n"
+            "  cancel-in-progress: ${{ github.event_name == 'pull_request' }}",
+        )
+        self.assertEqual(self.workflow.count("\nconcurrency:\n"), 1)
+        self.assertNotRegex(self.workflow.split("\njobs:\n", 1)[1], r"(?m)^ +concurrency:")
+
     def test_light_gate_runs_content_checks_and_full_only_steps_have_conditions(self):
-        gate_steps = steps(job_text(self.workflow, "gate-linux"))
+        gate_steps = steps(job_text(self.workflow, "checks-linux"))
         light = gate_steps["Check documentation, skills and diagrams"]
         self.assertIn("needs.changes.outputs.full == 'false'", light)
         self.assertIn("run: make check-docs", light)
-        full_steps = (
-            "Install tools", "Run gate checks",
-            "Prove selected native lifetime backend", "Run protocol acceptance",
-            "Install pinned supervisor test binaries", "Prove private supervisor bootstrap through delegate CLI",
-            "Prove external inspection handoff through delegate CLI",
-            "Prove private supervisor upgrade recovery through delegate CLI",
-            "Prove default user and budget stops through delegate CLI",
-            "Prove managed workspace fixtures through delegate CLI", "Run supervisor acceptance",
-        )
-        for name in full_steps:
+        for name in ("Install tools", "Run gate checks", "Install pinned supervisor test binaries",
+                     "Build native repair control owner"):
             with self.subTest(step=name):
                 self.assertIn("needs.changes.outputs.full == 'true'", gate_steps[name])
+        acceptance = job_text(self.workflow, "acceptance-linux")
+        header = acceptance.split("    steps:", 1)[0]
+        self.assertIn("needs.changes.result == 'success'", header)
+        self.assertIn("needs.changes.outputs.full == 'true'", header)
+        self.assertNotIn("run: make check-docs", acceptance)
+
+    def test_required_gates_execute_strict_scope_and_child_result_folds(self):
+        outcomes = ("success", "failure", "cancelled", "skipped", "", "unexpected")
+        for platform in ("linux", "macos"):
+            gate = job_text(self.workflow, f"gate-{platform}")
+            header = gate.split("    steps:", 1)[0]
+            dependencies = ("changes, checks-linux, acceptance-linux" if platform == "linux"
+                            else "changes, checks-macos")
+            self.assertIn(f"needs: [{dependencies}]", header)
+            self.assertIn("if: ${{ always() }}", header)
+            self.assertIn("timeout-minutes: 5", header)
+            self.assertNotIn("actions/checkout", gate)
+            fold = steps(gate)["Require all selected native checks"]
+            bindings = [("SELECTION_RESULT", "changes.result"), ("FULL", "changes.outputs.full"),
+                        ("CHECKS_RESULT", f"checks-{platform}.result")]
+            if platform == "linux":
+                bindings.append(("ACCEPTANCE_RESULT", "acceptance-linux.result"))
+            else:
+                self.assertNotIn("ACCEPTANCE_RESULT", fold)
+            for variable, expression in bindings:
+                self.assertIn(f"{variable}: ${{{{ needs.{expression} }}}}", fold)
+            script = "\n".join(line[10:] for line in fold.split("run: |\n", 1)[1].splitlines())
+            cases = [("success", full, checks, acceptance)
+                     for full, checks, acceptance in product(
+                         ("true", "false"), outcomes, outcomes if platform == "linux" else ("",))]
+            cases.extend((selection, full, "success", "success")
+                         for selection, full in product(("failure", "cancelled", "skipped", ""),
+                                                       ("true", "false", "", "invalid")))
+            cases.extend((("success", "", "success", "success"),
+                          ("success", "invalid", "success", "success")))
+            for selection, full, checks, acceptance in cases:
+                # Full Linux needs both isolated owners; Mac keeps all native
+                # checks/proofs on one VM. Content-only needs Linux docs alone.
+                if platform == "linux":
+                    selected_pass = ((full == "true" and checks == acceptance == "success") or
+                                     (full == "false" and checks == "success" and acceptance == "skipped"))
+                else:
+                    selected_pass = ((full == "true" and checks == "success") or
+                                     (full == "false" and checks == "skipped"))
+                expected = selection == "success" and selected_pass
+                with self.subTest(platform=platform, selection=selection, full=full,
+                                  checks=checks, acceptance=acceptance):
+                    result = subprocess.run(
+                        ["bash", "-euo", "pipefail", "-c", script],
+                        env={**os.environ, "SELECTION_RESULT": selection, "FULL": full,
+                             "CHECKS_RESULT": checks, "ACCEPTANCE_RESULT": acceptance},
+                        capture_output=True, text=True, check=False, timeout=10)
+                    self.assertEqual(result.returncode, 0 if expected else 1, result.stderr)
+
+    def test_native_owners_preserve_linux_independence_and_macos_same_vm_order(self):
+        acceptance_order = (
+            "make acceptance-native-lifetime", "make acceptance-protocol",
+            "make acceptance-private-cli", "make acceptance-supervisor-handoff",
+            "make acceptance-supervisor-upgrade-recovery", "make acceptance-upgrade-chain",
+            "make acceptance-scheduler-upgrade", "make acceptance-private-cli-default-stop",
+            "make acceptance-workspaces", "make acceptance-supervisor",
+        )
+        for name in ("checks-linux", "acceptance-linux", "checks-macos"):
+            job = job_text(self.workflow, name)
+            header = job.split("    steps:", 1)[0]
+            self.assertIn("needs: changes", header)
+            self.assertIn("!cancelled()", header)
+            self.assertNotIn("always()", header)
+            self.assertNotIn("continue-on-error", job)
+        self.assertNotIn("\n  acceptance-macos:", self.workflow)
+        for platform, name in (("linux", "acceptance-linux"), ("macos", "checks-macos")):
+            native = job_text(self.workflow, name)
+            actual = tuple(line.removeprefix("        run: ") for line in native.splitlines()
+                           if line.startswith("        run: make acceptance-"))
+            self.assertEqual(actual, acceptance_order)
+            install = native.index("run: ./scripts/install-test-supervisor.sh")
+            self.assertLess(native.index("run: make tools"), install)
+            self.assertLess(install, native.index("run: make acceptance-native-lifetime"))
+            self.assertEqual(native.count("run: make tools"), 1)
+            self.assertEqual(native.count("run: ./scripts/install-test-supervisor.sh"), 1)
+            self.assertNotIn("download-artifact", native)
+            if platform == "linux":
+                self.assertNotIn("DELEGATE_REPAIR_EDITOR_OWNER", native)
+                self.assertNotIn("run: make acceptance-", job_text(self.workflow, "checks-linux"))
+            else:
+                self.assertIn("name: Checks and acceptance (macOS)", native)
+                self.assertLess(native.index("Build native repair control owner"), native.index("run: make check-platform"))
+                self.assertLess(native.index("run: make check-platform"), native.index("Retain native TUI acceptance evidence"))
+                self.assertLess(native.index("Retain native TUI acceptance evidence"),
+                                native.index("run: make acceptance-native-lifetime"))
 
     def test_pr_and_main_share_one_selector_and_ccr_has_no_duplicate_auto_triggers(self):
         selector = job_text(self.workflow, "changes")

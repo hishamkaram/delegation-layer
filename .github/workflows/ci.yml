@@ -27,6 +27,12 @@ on:
 permissions:
   contents: read
 
+# PR runs supersede only that PR. Main and manual runs keep independent groups,
+# including pending runs, which GitHub otherwise replaces within a shared group.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || format('run-{0}', github.run_id) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   changes:
     name: Change scope
@@ -91,10 +97,10 @@ jobs:
       - name: Check the installable skill package on Node 18
         run: make skill-package-check
 
-  gate-linux:
-    name: Gate (Linux ubuntu-24.04)
+  checks-linux:
+    name: Checks (Linux)
     needs: changes
-    if: ${{ always() }}
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     steps:
@@ -171,6 +177,54 @@ jobs:
       - name: Check documentation, skills and diagrams
         if: ${{ needs.changes.outputs.full == 'false' }}
         run: make check-docs
+
+  acceptance-linux:
+    name: Acceptance (Linux)
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.result == 'success' && needs.changes.outputs.full == 'true' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
+        with:
+          go-version-file: '.go-version'
+          cache: false
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.12'
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '22.x'
+
+      - name: Log environment details
+        run: |
+          uname -a
+          go version
+          go env GOHOSTOS GOHOSTARCH
+          python3 --version
+
+      - name: Install tools
+        if: ${{ needs.changes.outputs.full == 'true' }}
+        env:
+          DELEGATE_TOOL_DOWNLOAD_TOKEN: ${{ github.token }}
+        run: make tools
+
+      - name: Install pinned supervisor test binaries
+        if: ${{ needs.changes.outputs.full == 'true' }}
+        env:
+          DELEGATE_TOOL_DOWNLOAD_TOKEN: ${{ github.token }}
+        run: ./scripts/install-test-supervisor.sh
 
       - name: Prove selected native lifetime backend
         id: native_lifetime
@@ -316,14 +370,45 @@ jobs:
           retention-days: 7
           if-no-files-found: error
 
-  gate-macos:
-    # Keep this required check name for existing branch protection; the runner follows latest.
-    name: Gate (macOS macos-15)
+  gate-linux:
+    # Keep the required check identity; native work belongs to the children above.
+    name: Gate (Linux ubuntu-24.04)
+    needs: [changes, checks-linux, acceptance-linux]
+    if: ${{ always() }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Require all selected native checks
+        env:
+          SELECTION_RESULT: ${{ needs.changes.result }}
+          FULL: ${{ needs.changes.outputs.full }}
+          CHECKS_RESULT: ${{ needs.checks-linux.result }}
+          ACCEPTANCE_RESULT: ${{ needs.acceptance-linux.result }}
+        run: |
+          test "$SELECTION_RESULT" = success || { echo 'Change selection did not succeed'; exit 1; }
+          case "$FULL" in
+            true) expected_checks=success; expected_acceptance=success ;;
+            false) expected_checks=success; expected_acceptance=skipped ;;
+            *) echo 'Change selection returned an invalid scope'; exit 1 ;;
+          esac
+          test "$CHECKS_RESULT" = "$expected_checks" || { echo 'Checks did not satisfy the selected scope'; exit 1; }
+          test "$ACCEPTANCE_RESULT" = "$expected_acceptance" || { echo 'Acceptance did not satisfy the selected scope'; exit 1; }
+
+  checks-macos:
+    name: Checks and acceptance (macOS)
     needs: changes
-    if: ${{ needs.changes.outputs.full == 'true' }}
+    if: ${{ !cancelled() && needs.changes.result == 'success' && needs.changes.outputs.full == 'true' }}
     runs-on: macos-latest
     timeout-minutes: 90
     steps:
+      - name: Require a valid check selection
+        env:
+          SELECTION_RESULT: ${{ needs.changes.result }}
+          FULL: ${{ needs.changes.outputs.full }}
+        run: |
+          test "$SELECTION_RESULT" = success || { echo 'Change selection did not succeed'; exit 1; }
+          case "$FULL" in true|false) ;; *) echo 'Change selection returned an invalid scope'; exit 1 ;; esac
+
       - name: Checkout repository
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
@@ -515,6 +600,28 @@ jobs:
           path: ${{ runner.temp }}/supervisor-failure-evidence.tar.gz
           retention-days: 7
           if-no-files-found: error
+
+  gate-macos:
+    # Keep the required check identity; its macOS owner runs the native work.
+    name: Gate (macOS macos-15)
+    needs: [changes, checks-macos]
+    if: ${{ always() }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Require all selected native checks
+        env:
+          SELECTION_RESULT: ${{ needs.changes.result }}
+          FULL: ${{ needs.changes.outputs.full }}
+          CHECKS_RESULT: ${{ needs.checks-macos.result }}
+        run: |
+          test "$SELECTION_RESULT" = success || { echo 'Change selection did not succeed'; exit 1; }
+          case "$FULL" in
+            true) expected_checks=success ;;
+            false) expected_checks=skipped ;;
+            *) echo 'Change selection returned an invalid scope'; exit 1 ;;
+          esac
+          test "$CHECKS_RESULT" = "$expected_checks" || { echo 'Checks did not satisfy the selected scope'; exit 1; }
 
   independent-startup-component:
     name: Native infrastructure component (${{ matrix.os }})

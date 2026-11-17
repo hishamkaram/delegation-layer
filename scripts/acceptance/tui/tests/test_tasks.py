@@ -10,7 +10,9 @@ from unittest.mock import MagicMock, patch
 
 from scripts.acceptance.directories.operations import DirectoryOwner
 from scripts.acceptance.processes.operations import Processes
+from scripts.acceptance.testing.fixture_cleanup import closing_preserving_primary
 from scripts.acceptance.tui.tasks import Keyboard, TaskClosureUnproven, TaskProof, preview_identity
+from scripts.acceptance.tui.terminal import plain_text
 
 
 class NativeTaskProofTests(unittest.TestCase):
@@ -18,43 +20,101 @@ class NativeTaskProofTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="tui-history-phase-") as temporary:
             root = Path(temporary)
             owner = DirectoryOwner()
-            book = Processes(root / "captures", environment={}, owner=owner, environment_keys_only=True)
-            proof = TaskProof(book, root / "delegate", root / "pueue", root / "pueued", root)
-            task_id = "a" * 32
-            keyboard = MagicMock(spec=Keyboard)
-            terminal = keyboard.terminal = MagicMock()
-            # The initial frame already contains a detail caption. It cannot
-            # prove that the later applied query selected this exact task.
-            terminal.data = bytearray(b"Task ID Admission Request/context old task")
-            phase = {"state": "initial"}
+            with closing_preserving_primary(owner.rollback):
+                book = Processes(root / "captures", environment={}, owner=owner, environment_keys_only=True)
+                proof = TaskProof(book, root / "delegate", root / "pueue", root / "pueued", root)
+                task_id = "a" * 32
+                keyboard = MagicMock(spec=Keyboard)
+                terminal = keyboard.terminal = MagicMock()
+                # The initial frame already contains a detail caption. It cannot
+                # prove that the later applied query selected this exact task.
+                terminal.data = bytearray(b"Task ID Admission Request/context old task")
+                phase = {"state": "initial"}
 
-            def send(data):
-                terminal.data.extend(data)
-                if data == b"?":
-                    self.assertEqual(phase["state"], "applied", "readback advanced before query acknowledgement")
-                elif data == b"\x1b":
-                    self.assertEqual(phase["state"], "help", "readback returned before a distinct body was observed")
-                    phase["state"] = "returned"
+                def send(data):
+                    terminal.data.extend(data)
+                    if data == b"?":
+                        self.assertEqual(phase["state"], "applied", "readback advanced before query acknowledgement")
+                    elif data == b"\x1b":
+                        self.assertEqual(phase["state"], "help", "readback returned before a distinct body was observed")
+                        phase["state"] = "returned"
 
-            def observe(text, *, after=0, **_kwargs):
-                if text == task_id + "  (/ edit)":
-                    self.assertGreater(after, 0)
-                    phase["state"] = "applied"
-                elif text == "Delegate terminal workbench":
-                    phase["state"] = "help"
-                elif text in ("Request/context", "Task: " + task_id):
-                    self.assertGreater(after, 0)
-                    self.assertEqual(phase["state"], "returned", "retained caption was accepted as fresh task detail")
+                def observe(text, *, after=0, **_kwargs):
+                    if text == task_id + "  (/ edit)":
+                        self.assertGreater(after, 0)
+                        phase["state"] = "applied"
+                    elif text == "Delegate terminal workbench":
+                        phase["state"] = "help"
+                    elif text in ("Request/context", "Task: " + task_id):
+                        self.assertGreater(after, 0)
+                        self.assertEqual(phase["state"], "returned", "retained caption was accepted as fresh task detail")
 
-            terminal.send.side_effect = send
-            terminal.wait_text.side_effect = observe
-            keyboard.process = MagicMock()
-            keyboard.process.stderr_path = root / "stderr"
-            keyboard.process.stderr_path.write_bytes(b"")
-            with patch("scripts.acceptance.tui.tasks.Keyboard", return_value=keyboard):
-                proof._history_table_case(task_id, 170, 40)
-            self.assertEqual(phase["state"], "returned")
-            keyboard.close.assert_called_once_with()
+                terminal.send.side_effect = send
+                terminal.wait_text.side_effect = observe
+                keyboard.process = MagicMock()
+                keyboard.process.stderr_path = root / "stderr"
+                keyboard.process.stderr_path.write_bytes(b"")
+                with patch("scripts.acceptance.tui.tasks.Keyboard", return_value=keyboard):
+                    proof._history_table_case(task_id, 170, 40)
+                self.assertEqual(phase["state"], "returned")
+                keyboard.close.assert_called_once_with()
+
+    def test_narrow_history_readback_repaints_incremental_caption_and_rejects_broken_pan(self):
+        for broken_pan in (False, True):
+            with self.subTest(broken_pan=broken_pan), tempfile.TemporaryDirectory(prefix="tui-history-pan-") as temporary:
+                root = Path(temporary)
+                owner = DirectoryOwner()
+                with closing_preserving_primary(owner.rollback):
+                    book = Processes(root / "captures", environment={}, owner=owner, environment_keys_only=True)
+                    proof = TaskProof(book, root / "delegate", root / "pueue", root / "pueued", root)
+                    task_id = "a" * 32
+                    keyboard = MagicMock(spec=Keyboard)
+                    terminal = keyboard.terminal = MagicMock()
+                    terminal.data = bytearray(("Task ID Provider Admission Dated ▶ " + task_id[:11]).encode())
+                    state = {"left_sent": False, "help": False, "detail": False}
+
+                    def send(data):
+                        if data.startswith(b"/"):
+                            terminal.data.extend((task_id + "  (/ edit)").encode())
+                        elif data == b"\x1b[C" * 4:
+                            terminal.data.extend("◀ +2 Publication Created".encode())
+                        elif data == b"\x1b[D" * 4:
+                            state["left_sent"] = True
+                            # A valid diff keeps the old initial P on screen and
+                            # writes only the changed suffix, absent a full redraw.
+                            terminal.data.extend(b"\x1b[5Crovider Admission Liveness" if not broken_pan else b"Created")
+                        elif data == b"?":
+                            self.assertTrue(state["left_sent"])
+                            state["help"] = True
+                            terminal.data.extend(b"Delegate terminal workbench")
+                        elif data == b"\x1b" and state["help"]:
+                            state["help"] = False
+                            terminal.data.extend(b"Publication Created" if broken_pan else b"Task ID Provider Admission Liveness")
+                        elif data == b"\r":
+                            state["detail"] = True
+                            terminal.data.extend(("Task: " + task_id).encode())
+                        elif data == b"\x1b" and state["detail"]:
+                            terminal.data.extend(b"Task ID")
+
+                    def observe(text, *, after=0, **_kwargs):
+                        if text not in plain_text(bytes(terminal.data[after:])):
+                            raise RuntimeError("terminal did not display " + repr(text))
+
+                    terminal.send.side_effect = send
+                    terminal.wait_text.side_effect = observe
+                    keyboard.process = MagicMock()
+                    keyboard.process.stderr_path = root / "stderr"
+                    keyboard.process.stderr_path.write_bytes(b"")
+                    with patch("scripts.acceptance.tui.tasks.Keyboard", return_value=keyboard):
+                        if broken_pan:
+                            with self.assertRaisesRegex(RuntimeError, "terminal did not display 'Provider'"):
+                                proof._history_table_case(task_id, 80, 24)
+                        else:
+                            proof._history_table_case(task_id, 80, 24)
+                            self.assertTrue(state["detail"], "full task identity was not read back")
+                    terminal.send.assert_any_call(b"\x1b[C" * 4)
+                    terminal.send.assert_any_call(b"\x1b[D" * 4)
+                    keyboard.close.assert_called_once_with()
 
     def test_keyboard_sets_requested_dimensions_before_child_start(self):
         owner = DirectoryOwner()

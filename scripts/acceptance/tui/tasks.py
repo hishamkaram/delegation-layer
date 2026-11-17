@@ -278,6 +278,13 @@ class TaskProof:
                 terminal.wait_text("Created", after=start)
                 start = len(terminal.data)
                 terminal.send(b"\x1b[D" * 4)
+                # Panning may retain the header's initial P from Publication.
+                # Reuse the help overlay to require a fresh complete caption;
+                # a broken left pan still returns columns without Provider.
+                terminal.send(b"?")
+                terminal.wait_text("Delegate terminal workbench", after=start)
+                start = len(terminal.data)
+                terminal.send(b"\x1b")
                 terminal.wait_text("Provider", after=start)
                 start = len(terminal.data)
                 terminal.send(b"\r")

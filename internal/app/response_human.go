@@ -14,6 +14,9 @@ func writeHumanResponse(w io.Writer, response Response) error {
 	if response.Command != "schedule" {
 		writeHumanSummary(&output, response)
 	}
+	if saved := response.Saved; saved != nil {
+		fmt.Fprintf(&output, "saved path=%q length=%d sha256=%s\n", saved.Path, saved.Length, saved.SHA256)
+	}
 	writeHumanWait(&output, response.Wait)
 	writeHumanMaintenanceFacts(&output, response.ControlFact, response.Settlement)
 	if settled := response.Settlement; settled != nil {

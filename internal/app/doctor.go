@@ -240,6 +240,13 @@ func doctorIncomplete(err error) bool {
 	})
 }
 
+// AllIssues derives renderer order without exposing the report's backing slices.
+func (r DoctorReport) AllIssues() []DoctorIssue {
+	issues := make([]DoctorIssue, 0, len(r.Scheduler.Issues)+len(r.Issues))
+	issues = append(issues, r.Scheduler.Issues...)
+	return append(issues, r.Issues...)
+}
+
 func writeDoctorHuman(w io.Writer, report DoctorReport) error {
 	var output strings.Builder
 	fmt.Fprintf(&output, "doctor: installation=%s compatibility=%s\nroot=%s status=%s\nsupervisor binding=%s liveness=%s active_work=%s\n", report.Installation.Status, report.Installation.Compatibility, report.Root.Path, report.Root.Status, report.Supervisor.Binding, report.Supervisor.Liveness, report.Supervisor.ActiveWork)
@@ -254,10 +261,7 @@ func writeDoctorHuman(w io.Writer, report DoctorReport) error {
 		fmt.Fprintf(&output, "provider=%s status=%s authentication=%s\n", report.Provider.ID, report.Provider.Status, report.Provider.Authentication)
 	}
 	fmt.Fprintf(&output, "scheduler compatibility=%s verification=%s\n", report.Scheduler.Compatibility, report.Scheduler.Verification)
-	for _, issue := range report.Scheduler.Issues {
-		fmt.Fprintf(&output, "%s: %s; %s\n", issue.Area, issue.Code, issue.NextStep)
-	}
-	for _, issue := range report.Issues {
+	for _, issue := range report.AllIssues() {
 		fmt.Fprintf(&output, "%s: %s; %s\n", issue.Area, issue.Code, issue.NextStep)
 	}
 	return writeAll(w, []byte(output.String()))

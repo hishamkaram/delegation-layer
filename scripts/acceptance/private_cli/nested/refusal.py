@@ -1,6 +1,7 @@
 """Real warm-supervisor cleanup after one finite injected leader refusal."""
 
 from pathlib import Path
+from collections.abc import Callable
 import sys
 import time
 import uuid
@@ -20,6 +21,7 @@ from scripts.acceptance.private_cli.nested.policy import require_backend
 from scripts.acceptance.private_cli.receipt import AcceptanceReceipt
 from scripts.acceptance.private_cli.root_cleanup import remove_private_acceptance_root
 from scripts.acceptance.private_cli.supervisor import selected_owner_subject
+from scripts.acceptance.testing.fixture_cleanup import closing_preserving_primary
 
 
 class RefusedLeaderCase(NestedCase):
@@ -152,7 +154,9 @@ def dispose_retained_root(case, before):
             "fresh_closure": closure, "selected_owner": selected, "native_absence": observations}
 
 
-def run_refused_leader(args, responses, receipt):
+def run_refused_leader(args, responses, receipt, *,
+                       begin_cleanup: Callable[[BaseException | None], None] | None = None,
+                       current_failure: Callable[[BaseException | None], BaseException | None] | None = None):
     lifetime = FixtureLifetime(DirectoryOwner(), DirectoryOwner())
     inner_receipt = AcceptanceReceipt(args.output.with_suffix(".inner.json"), 3, 1,
                                       {"pueue": args.pueue, "pueued": args.pueued,
@@ -180,8 +184,13 @@ def run_refused_leader(args, responses, receipt):
         failure = error
         inner_receipt.add_details(failure_phase=inner_receipt.current_phase)
     finally:
+        # The expected injected refusal is a control result, not a primary error
+        # that may swallow an interruption during inner or outer cleanup.
+        cleanup_primary = None if expected else failure
+        if begin_cleanup is not None:
+            begin_cleanup(cleanup_primary)
         try:
-            finalize_fixture(args, failure, lifetime, inner_receipt, False)
+            finalize_fixture(args, failure, lifetime, inner_receipt, False, current_failure=current_failure)
         except BaseException as cleanup_error:
             finalization_failure = cleanup_error
             expected = False
@@ -198,6 +207,10 @@ def run_refused_leader(args, responses, receipt):
         require(cleanup["status"] == "passed", "outer owner did not freshly prove and dispose the retained root")
         receipt.add_details(refused_leader={"inner": inner, "commands": case.commands,
                                             "warm_task_ids": lifetime.attempted_task_ids[:-1]})
+        # Sample the pending interruption at the existing outer receipt decision.
+        primary = current_failure(cleanup_primary) if current_failure is not None else cleanup_primary
+        if isinstance(primary, (KeyboardInterrupt, SystemExit)):
+            raise primary
         receipt.write("PASS", cleanup)
         print("PASS real refused-leader cleanup: " + str(args.output))
     except BaseException as error:
@@ -207,7 +220,15 @@ def run_refused_leader(args, responses, receipt):
         if finalization_failure is not None:
             context["finalization"] = type(finalization_failure).__name__
         receipt.add_details(refused_leader={"inner": inner, "failure_context": context}, retained_root=str(lifetime.base))
-        receipt.write("FAIL", cleanup, error)
+        primary = current_failure(cleanup_primary) if current_failure is not None else failure
+        reported_error = primary if isinstance(primary, (KeyboardInterrupt, SystemExit)) else error
+        with closing_preserving_primary(lambda: receipt.write("FAIL", cleanup, reported_error)):
+            if isinstance(primary, (KeyboardInterrupt, SystemExit)):
+                if finalization_failure is not None:
+                    raise primary from finalization_failure
+                if error is not primary and error.__cause__ is not primary:
+                    raise primary from error
+                raise primary from None
         if not inner and failure is not None:
             raise error from failure
         raise

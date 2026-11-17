@@ -72,7 +72,7 @@ A successful parser check does not override a managed denial or establish
 that live nested dispatch works in your native execution context.
 
 If an older setup also granted `[ABS, "result", "read"]`, that extra grant is
-unnecessary for the sandboxed read pipeline below. Existing files are never
+unnecessary for the sandboxed result commands below. Existing files are never
 edited automatically; the user may review and remove just that extra rule.
 
 This is an explicit grant to run those commands outside Codex's sandbox.
@@ -102,7 +102,7 @@ codex execpolicy check --rules /absolute/path/to/delegate.rules --resolve-host-e
   substitutions, conditionals, pipes, redirections or heredocs. Prepare brief
   and descriptor files in separate steps. Capture that call's stdout and exit
   status once through the tool; do not redispatch to recover output. The passive
-  result-read pipeline below intentionally stays inside the sandbox.
+  result-saving command below intentionally stays inside the sandbox.
 - Use the approved absolute executable path before the subcommand. Ordinarily
   omit `--root`; let the CLI resolve its default. For an explicitly supplied or
   recorded custom root, put its exact `--root ABS` after the subcommand on
@@ -130,113 +130,45 @@ codex execpolicy check --rules /absolute/path/to/delegate.rules --resolve-host-e
   may be unavailable in the lead's shell. Diagnose the returned failure;
   do not inject credentials or change the native environment policy.
 
-## Read a complete result in bounded pages
+## Save and read a complete result
 
-After committed publication, save the exact `payload` descriptor from
-`collect` to a regular file in the workspace using a separate tool call.
-Do not infer a private task-directory path or use raw logs as the answer.
-An ordinary local task can then be read without connector guards. Use this
-sandboxed Python recipe to assemble the answer without sending base64 through
-the model. The user must have a working `python3`; on macOS an installer stub
-is not a working interpreter. If Python or native read access is unavailable,
-stop and report it. Do not add readable/writable state roots or change rules.
+`result save` requires a build newer than v0.7.0. Check `delegate help result save`
+for your installed build. Users of v0.7.0 can use its
+[historical decoding recipe](https://github.com/hishamkaram/delegation-layer/blob/v0.7.0/skills/agent-integration/examples/codex-lead.md#read-a-complete-result-in-bounded-pages).
 
-Replace the executable, task ID, descriptor and lead-owned destination directory
-below. A recorded custom root needs its exact `--root ABS` in the subprocess
-argv after the task ID. The script calls Delegate directly, checks every exit
-status and page, and publishes the answer only after whole-file verification.
-A pre-existing `.partial` or final answer is preserved rather than overwritten.
+After committed publication, save the exact `payload` descriptor from `collect`
+to a regular file using a separate native tool call. Then run the Go command:
 
 ```sh
-python3 - /opt/homebrew/bin/delegate TASK_ID /absolute/workspace/worker-payload.json /absolute/workspace <<'PYRESULT'
-import base64, hashlib, json, os, subprocess, sys, time
-from pathlib import Path
-
-executable, task, descriptor_file, directory = sys.argv[1:]
-if len(task) != 32 or any(c not in "0123456789abcdef" for c in task):
-    raise SystemExit("invalid task ID")
-expected = json.loads(Path(descriptor_file).read_text(encoding="utf-8"))
-length = expected["length"]
-if type(length) is not int or length < 0:
-    raise SystemExit("invalid payload length")
-final = Path(directory) / (task + ".answer")
-partial = final.with_suffix(".answer.partial")
-if final.exists() or final.is_symlink():
-    raise SystemExit("answer exists; inspect the existing file")
-owned = False
-deadline = time.monotonic() + 300
-try:
-    with partial.open("xb") as output:
-        owned = True
-        offset, digest = 0, hashlib.sha256()
-        while True:
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                raise SystemExit("result reading deadline expired")
-            result = subprocess.run(
-                [executable, "result", "read", task, "--expected-descriptor", descriptor_file,
-                 "--offset", str(offset), "--limit", "65536", "--json"],
-                capture_output=True, check=False, timeout=min(45, remaining))
-            if result.returncode != 0:
-                try:
-                    fault = json.loads(result.stdout)
-                except (json.JSONDecodeError, UnicodeDecodeError):
-                    detail = "no valid JSON error response"
-                else:
-                    detail = fault.get("error") if isinstance(fault, dict) else None
-                    if not isinstance(detail, str):
-                        detail = "no control error message"
-                raise SystemExit(f"result read failed with exit {result.returncode}: {detail[:500]}; no answer published")
-            response = json.loads(result.stdout)
-            if not isinstance(response, dict):
-                raise SystemExit("invalid control JSON object")
-            page = response.get("result_range")
-            if response.get("error") or response.get("publication") != "committed" or not isinstance(page, dict):
-                raise SystemExit("no committed result page")
-            if page.get("descriptor") != expected or type(page.get("offset")) is not int or page["offset"] != offset:
-                raise SystemExit("unexpected result descriptor or offset")
-            data = base64.b64decode(page["data_base64"], validate=True)
-            next_offset, eof = page.get("next_offset"), page.get("eof")
-            if type(next_offset) is not int or type(eof) is not bool or next_offset != offset + len(data) or next_offset > length:
-                raise SystemExit("inconsistent result cursor")
-            if not data and not eof:
-                raise SystemExit("result cursor made no progress")
-            output.write(data)
-            digest.update(data)
-            offset = next_offset
-            if eof:
-                if offset != length or digest.hexdigest() != expected["sha256"]:
-                    raise SystemExit("assembled answer failed verification")
-                break
-    os.link(partial, final)
-    partial.unlink()
-    owned = False
-    print(json.dumps({"path": str(final), "length": length, "verified": True}))
-finally:
-    if owned:
-        partial.unlink(missing_ok=True)
-PYRESULT
+/opt/homebrew/bin/delegate result save TASK_ID --expected-descriptor /absolute/workspace/worker-payload.json --output /absolute/workspace/TASK_ID.answer --json
 ```
 
-Keep this native tool call in the foreground until it finishes. Where the tool
-has a killing timeout, allow more than the script's 300-second budget. If it
-yields an execution-session handle instead, keep waiting on that same handle;
-do not rerun a reader that is still running or delete its partial file.
+Replace the executable, task ID and workspace paths. A recorded custom root
+needs its exact `--root ABS` after the task ID. Keep this native call in the
+foreground; when it yields a session handle, await that same handle. Saving
+runs inside the sandbox and does not need an outside-sandbox execution grant.
+Do not add `result save` to the seven-command rule or broaden writable roots.
+The command itself does not require Python.
 
-This call intentionally runs inside the sandbox and does not match the seven
-control-command rules. Its 65536-byte pages stay inside the decoder; only the
-verified path and length reach the model. Answer-data digests are permitted;
-installed executable contents are never read or hashed. The script owns only
-its exclusively created partial file and removes it on handled failure. A
-forced process termination may retain that partial; report it to the owner
-rather than blindly deleting a pre-existing file on the next attempt.
+Success returns `publication: committed` and `saved` containing `path`, `length`
+and `sha256`, without answer bytes. The Go reader verifies the complete payload
+in one pass before publishing the caller-owned file. The parent must already
+exist, the destination must be outside the selected state root, and an existing
+file, directory or symlink is never overwritten. Task state remains read-only;
+saving never launches, repairs or retries provider work.
 
-Read the completed UTF-8 answer with bounded native text reads, roughly **8192
-characters or less** per call, until every part has been read. Treat actual tool
-truncation as a failed text read and repeat that range with a smaller chunk.
-Never assess only the first or last section. Character decoding happens after
-byte assembly, preserving UTF-8 characters split across result pages.
+If `result_saved_cleanup_incomplete` is returned with `saved`, the complete,
+verified output already exists. Preserve it and report the cleanup error;
+do not retry or delete the output. A forced process termination can retain an
+owned partial file; report it rather than blindly removing other files.
 
-Each Delegate read verifies the entire payload before returning a page. Pending,
-rejected, mismatched or corrupt evidence fails without publishing an answer;
-connector-owned tasks still require full guards.
+Read the saved UTF-8 answer with bounded native text reads, roughly **8192
+characters or less** per call, until every part has been read. Treat tool-output
+truncation as an incomplete read and repeat that text range with a smaller
+chunk. Never assess only the first or last section. UTF-8 interpretation happens
+after complete byte verification, preserving characters across buffer boundaries.
+
+[`result read`](../references/command-reference.md#result-read) remains available
+for consumers needing bounded byte ranges. Connector tasks retain their full
+guards and cannot use the ordinary save route. Missing, pending, rejected,
+mismatched, corrupt or timed-out evidence fails without publishing an answer.

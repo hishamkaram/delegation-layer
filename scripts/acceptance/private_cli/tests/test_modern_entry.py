@@ -63,7 +63,7 @@ class ModernEntryTests(unittest.TestCase):
                 self.assertIs(lifetime, calls[0][1])
                 calls.append(("modern", lifetime))
 
-            def finalize(args, failure, lifetime, receipt, success):
+            def finalize(args, failure, lifetime, receipt, success, *, current_failure=None):
                 self.assertIsNone(failure)
                 self.assertTrue(success)
                 self.assertIs(lifetime, calls[0][1])
