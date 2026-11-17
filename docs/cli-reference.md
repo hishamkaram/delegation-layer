@@ -454,6 +454,8 @@ still lack native closure, so `active_work: "none"` does not make migration safe
 its `next_action`; `human_review_task` requires inspecting that task rather than
 waiting for more queue activity or launching replacement work. Unknown queue
 state or unreadable evidence cannot establish a clear maintenance assessment.
+Pure contention on a work owner reports `owner_busy` with
+`wait_for_legacy_work`; let that owner finish before retrying maintenance.
 After a resident failure, `diagnostic_snapshot_at` identifies a later local
 observation; it does not replace the original error or prove its cause.
 
