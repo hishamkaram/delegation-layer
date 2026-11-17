@@ -266,7 +266,14 @@ func TestConcurrentCreateTaskDuringRunLockInitialization(t *testing.T) {
 var _ LockFaultInjector = (*initializationLockBarrier)(nil)
 
 func TestCreateTaskPreservesInitializationErrorContext(t *testing.T) {
-	for _, injected := range []error{os.ErrNotExist, task.ErrLockBusy} {
+	for _, testCase := range []struct {
+		cause  error
+		reason string
+	}{
+		{cause: os.ErrNotExist, reason: "evidence_missing"},
+		{cause: task.ErrLockBusy, reason: "evidence_unreadable"},
+	} {
+		injected := testCase.cause
 		t.Run(injected.Error(), func(t *testing.T) {
 			store := testStore(t)
 			req, meta, brief := preparedInput(t, store)
@@ -288,11 +295,7 @@ func TestCreateTaskPreservesInitializationErrorContext(t *testing.T) {
 				}
 			}
 			var fact *task.ControlFactError
-			reason := "evidence_unreadable"
-			if errors.Is(injected, os.ErrNotExist) {
-				reason = "evidence_missing"
-			}
-			if !errors.As(err, &fact) || fact.ResourceKind != "task" || fact.ResourceID != req.TaskID || fact.FactKind != "evidence_record" || fact.Name != ".admission.lock" || fact.ReasonCode != reason || fact.NextAction != "inspect_evidence" {
+			if !errors.As(err, &fact) || fact.ResourceKind != "task" || fact.ResourceID != req.TaskID || fact.FactKind != "evidence_record" || fact.Name != ".admission.lock" || fact.ReasonCode != testCase.reason || fact.NextAction != "inspect_evidence" {
 				t.Fatalf("initialization failure lost its named lock fact: %v", err)
 			}
 		})
