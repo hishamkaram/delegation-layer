@@ -11,7 +11,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hishamkaram/delegation-layer/internal/guardian"
 	"github.com/hishamkaram/delegation-layer/internal/inspection"
+	"github.com/hishamkaram/delegation-layer/internal/lifetime"
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
 	"github.com/hishamkaram/delegation-layer/internal/supervisor"
 	"github.com/hishamkaram/delegation-layer/internal/supervisor/testsupport"
@@ -137,6 +139,87 @@ func TestRuntimeQuiescenceQueueRowsCannotHideActiveOrAmbiguousWork(t *testing.T)
 	}
 }
 
+func TestRecoverableInspectionNonCandidatesRemainBusyWithoutSettlement(t *testing.T) {
+	for _, kind := range []string{"intent-only", "registered-before-worker", "exact", "previous-boot-cooperative"} {
+		t.Run(kind, func(t *testing.T) {
+			store := runtimeRecoverableInspection(t, kind)
+			before := testsupport.SnapshotStore(t, store.Root)
+			err := supervisor.CheckRuntimeQuiescence(t.Context(), store, runtimeTestBinding(store), nil)
+			var fact *task.ControlFactError
+			if !supervisor.MaintenanceBusy(err) || !errors.Is(err, guardian.ErrProofPending) || errors.As(err, &fact) {
+				t.Fatalf("valid tracked inspection became a settlement refusal: %v", err)
+			}
+			if after := testsupport.SnapshotStore(t, store.Root); !reflect.DeepEqual(before, after) {
+				t.Fatal("passive recoverable inspection observation changed evidence")
+			}
+		})
+	}
+}
+
+func runtimeRecoverableInspection(t *testing.T, kind string) *taskdir.Store {
+	t.Helper()
+	store, auxiliary := runtimeAuxiliaryFixture(t, "inspection", time.Now().Add(time.Minute))
+	operation, ok := auxiliary.(*inspection.Operation)
+	if !ok {
+		t.Fatal("inspection fixture returned another operation family")
+	}
+	boot, err := lifetime.BootID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	scope, assurance := task.LifetimeScopeProcessGroup, task.LifetimeAssuranceCooperative
+	if kind == "exact" {
+		scope, assurance = task.LifetimeScopeCgroupV2, task.LifetimeAssuranceExact
+	}
+	if kind == "previous-boot-cooperative" {
+		boot = runtimePreviousBoot(t, boot)
+	}
+	owner, err := operation.TryAcquireLifetimeOwner(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if releaseErr := owner.Release(); releaseErr != nil {
+			t.Error(releaseErr)
+		}
+	}()
+	_, err = operation.RecordLifetimeIntentContext(t.Context(), taskdir.LifetimeIntentFacts{ScopeKind: scope, Assurance: assurance, ScopePlan: "tracked-inspection", BootID: boot, Deadline: operation.Deadline()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if kind == "intent-only" {
+		return store
+	}
+	// These saved facts test observation policy; no cgroup or process is created.
+	_, err = operation.RecordLifetimeRegistrationContext(t.Context(), taskdir.LifetimeRegistrationFacts{ScopeKind: scope, Assurance: assurance, ScopeID: "tracked-inspection", BootID: boot, Deadline: operation.Deadline()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if kind == "registered-before-worker" {
+		return store
+	}
+	_, err = operation.RecordLifetimeWorkerContext(t.Context(), taskdir.LifetimeWorkerFacts{PID: 1 << 30, ProcessStart: "tracked-worker", BootID: boot})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return store
+}
+
+func runtimePreviousBoot(t *testing.T, current string) string {
+	t.Helper()
+	separator := strings.LastIndex(current, ":")
+	if separator >= 0 {
+		for _, uuid := range []string{"00000000-0000-0000-0000-000000000000", "11111111-1111-1111-1111-111111111111"} {
+			previous := current[:separator+1] + uuid
+			if lifetime.CompareBootIDs(previous, current) == lifetime.BootDifferent {
+				return previous
+			}
+		}
+	}
+	t.Fatal("native boot identity cannot establish the previous-boot fixture")
+	return ""
+}
+
 type runtimeAuxiliary interface {
 	Close() error
 	SealLifetimeUnlaunchedContext(context.Context) (*task.LifetimeUnlaunchedRecord, error)
@@ -221,8 +304,14 @@ func TestFencedRuntimeAuxiliaryPreparationDoesNotPublishClosure(t *testing.T) {
 			if err := supervisor.CheckRuntimeQuiescence(t.Context(), store, binding, nil); !errors.Is(err, supervisor.ErrRuntimeQuiescenceBusy) {
 				t.Fatalf("initial auxiliary preparation returned %v", err)
 			}
-			if err := supervisor.CheckMaintenanceQuiescence(t.Context(), store, binding, nil); err != nil {
-				t.Fatalf("fenced auxiliary preparation returned %v", err)
+			err := supervisor.CheckMaintenanceQuiescence(t.Context(), store, binding, nil)
+			if family == "inspection" {
+				var pending *supervisor.MaintenanceError
+				if !errors.As(err, &pending) || pending.Assessment.FirstBlocker == nil || pending.Assessment.FirstBlocker.ReasonCode != "awaiting_deadline" {
+					t.Fatalf("unexpired inspection did not retain its exact deadline blocker: %v", err)
+				}
+			} else if err != nil {
+				t.Fatalf("fenced workspace preparation returned %v", err)
 			}
 			if after := testsupport.SnapshotStore(t, store.Root); !reflect.DeepEqual(before, after) {
 				t.Fatal("fenced auxiliary observation created a closure or owner inode")

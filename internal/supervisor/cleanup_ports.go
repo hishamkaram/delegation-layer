@@ -34,12 +34,17 @@ type InspectionCustody interface {
 // A false result leaves the label for the inspection journal owner.
 type WorkspaceInspector func(context.Context, *taskdir.Store, inspection.GroupRequestRecord, string, pueue.Job) (bool, error)
 
+// WorkspaceRecovery enters the workspace lifecycle owner for one rowless
+// operation under an existing maintenance fence. It grants no row removal.
+type WorkspaceRecovery func(context.Context, *taskdir.Store, string) error
+
 // Cleanup owns queue-row eligibility. Its evidence ports are immutable; queue
 // mutation and leases remain owned by the existing supervisor client.
 type Cleanup struct {
-	report     func(error)
-	inspection InspectionEvidence
-	workspace  WorkspaceInspector
+	report            func(error)
+	inspection        InspectionEvidence
+	workspace         WorkspaceInspector
+	workspaceRecovery WorkspaceRecovery
 	// custody is the evidence's optional InspectionCustody, resolved once.
 	custody InspectionCustody
 }
@@ -79,5 +84,12 @@ func (c *Cleanup) removalGate() func(context.Context, *inspection.Operation) err
 func (c *Cleanup) WithDiagnosticReporter(report func(error)) *Cleanup {
 	copy := *c
 	copy.report = report
+	return &copy
+}
+
+// WithWorkspaceRecovery binds the application-owned workspace recovery port.
+func (c *Cleanup) WithWorkspaceRecovery(recover WorkspaceRecovery) *Cleanup {
+	copy := *c
+	copy.workspaceRecovery = recover
 	return &copy
 }

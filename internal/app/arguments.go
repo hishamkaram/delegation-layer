@@ -21,6 +21,7 @@ import (
 
 // Arguments contains requested values only. Parsing grants no external authority.
 type Arguments struct {
+	SettlementKind            string
 	SettlementPrepare         bool
 	SettlementConfirm         string
 	Gateway                   gatewaycommand.Arguments
@@ -184,6 +185,7 @@ func registerCommandFlags(fs *flag.FlagSet, a *Arguments, watch *string) {
 	}
 	fs.BoolVar(&a.JSON, "json", false, "emit versioned JSON")
 	if a.Command == "settle" {
+		fs.StringVar(&a.SettlementKind, "kind", "task", "local maintenance target: task or inspection")
 		fs.BoolVar(&a.SettlementPrepare, "prepare", false, "prepare an exact maintenance-only challenge without changing task state")
 		fs.StringVar(&a.SettlementConfirm, "confirm", "", "explicit human approval of the exact reviewed challenge")
 		return

@@ -92,7 +92,11 @@ func TestStatusConcreteFaultCarriesNoAutomaticContinuation(t *testing.T) {
 			if err != nil || !strings.Contains(string(commands), "status") {
 				t.Fatalf("supervisor preparation did not run before the fault: commands=%q err=%v", commands, err)
 			}
-			requireFaultedStatusResponse(t, code, response, wantDiagnostic.Error())
+			requireFaultedStatusResponse(t, code, response, "supervisor.ref.json")
+			requireNamedStatusFact(t, response, ControlFactResponse{ResourceKind: "task", ResourceID: fixture.req.TaskID, FactKind: "evidence_record", Name: "supervisor.ref.json", ReasonCode: "supervisor_receipt_unavailable", NextAction: "inspect_task"})
+			if strings.Contains(response.Error, wantDiagnostic.Error()) {
+				t.Fatal("status published the unrestricted decoder cause")
+			}
 		})
 	}
 }

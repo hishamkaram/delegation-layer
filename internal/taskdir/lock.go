@@ -107,7 +107,12 @@ func (s *Store) openExistingLock(path string, level LockLevel) (*LockFile, error
 	return s.openRootedLock(path, level, false)
 }
 
-func (s *Store) openRootedLock(path string, level LockLevel, create bool) (*LockFile, error) {
+func (s *Store) openRootedLock(path string, level LockLevel, create bool) (_ *LockFile, resultErr error) {
+	defer func() {
+		if resultErr != nil {
+			resultErr = s.recordFactError(path, resultErr)
+		}
+	}()
 	f, err := openLockInode(func(flags int) (*os.File, error) {
 		return s.openFile(path, flags)
 	}, create)

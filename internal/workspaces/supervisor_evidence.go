@@ -65,3 +65,15 @@ func ReconcileEndedWorkspaceOperation(ctx context.Context, operation *workspace.
 	_, err := ReadOperationProof(ctx, operation)
 	return err
 }
+
+// RecoverPrivateOperation enters the existing workspace closure owner without
+// inventing a queue row or granting removal, result or reuse authority.
+func RecoverPrivateOperation(ctx context.Context, store *taskdir.Store, id string) (resultErr error) {
+	operation, err := workspace.LoadOperation(ctx, store, id)
+	if err != nil {
+		return err
+	}
+	defer func() { resultErr = errors.Join(resultErr, operation.Close()) }()
+	_, err = OperationClosed(ctx, operation)
+	return err
+}

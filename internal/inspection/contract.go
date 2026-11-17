@@ -16,23 +16,27 @@ const (
 )
 
 type (
-	Binding                    = contract.Binding
-	RequestRecord              = contract.RequestRecord
-	SubmissionRecord           = contract.SubmissionRecord
-	StartRecord                = contract.StartRecord
-	ManagedWorkerUpgradeRecord = contract.ManagedWorkerUpgradeRecord
-	GroupRequestRecord         = contract.GroupRequestRecord
-	GroupMigrationRecord       = contract.GroupMigrationRecord
-	GroupCreationRecord        = contract.GroupCreationRecord
-	GroupObservationRecord     = contract.GroupObservationRecord
-	ResultReason               = contract.ResultReason
-	ReceiptRecord              = contract.ReceiptRecord
-	ResultRecord               = contract.ResultRecord
-	CompletionRecord           = contract.CompletionRecord
-	WorkerObservationRecord    = contract.WorkerObservationRecord
-	StopRequestRecord          = contract.StopRequestRecord
-	StopReplyRecord            = contract.StopReplyRecord
-	StopObservationRecord      = contract.StopObservationRecord
+	MaintenanceQueue              = contract.MaintenanceQueue
+	MaintenanceQueueState         = contract.MaintenanceQueueState
+	MaintenanceDispositionSubject = contract.MaintenanceDispositionSubject
+	MaintenanceDispositionRecord  = contract.MaintenanceDispositionRecord
+	Binding                       = contract.Binding
+	RequestRecord                 = contract.RequestRecord
+	SubmissionRecord              = contract.SubmissionRecord
+	StartRecord                   = contract.StartRecord
+	ManagedWorkerUpgradeRecord    = contract.ManagedWorkerUpgradeRecord
+	GroupRequestRecord            = contract.GroupRequestRecord
+	GroupMigrationRecord          = contract.GroupMigrationRecord
+	GroupCreationRecord           = contract.GroupCreationRecord
+	GroupObservationRecord        = contract.GroupObservationRecord
+	ResultReason                  = contract.ResultReason
+	ReceiptRecord                 = contract.ReceiptRecord
+	ResultRecord                  = contract.ResultRecord
+	CompletionRecord              = contract.CompletionRecord
+	WorkerObservationRecord       = contract.WorkerObservationRecord
+	StopRequestRecord             = contract.StopRequestRecord
+	StopReplyRecord               = contract.StopReplyRecord
+	StopObservationRecord         = contract.StopObservationRecord
 )
 
 var (
@@ -58,3 +62,8 @@ func ValidateRequestRecord(record RequestRecord, expectedRoot string) error {
 }
 
 func TimeoutForRevision(revision string) time.Duration { return contract.TimeoutForRevision(revision) }
+
+const (
+	MaintenanceQueueAbsent = contract.MaintenanceQueueAbsent
+	MaintenanceQueueEnded  = contract.MaintenanceQueueEnded
+)

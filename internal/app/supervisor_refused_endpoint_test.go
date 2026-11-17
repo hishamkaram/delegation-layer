@@ -42,14 +42,14 @@ func newRefusedEndpointAppFixture(t *testing.T) refusedEndpointAppFixture {
 	t.Helper()
 	store, deps, original, owner := newOwnedSupervisorProbeTestFixture(t)
 	deps = withSupervisorProbeRouting(t, deps, owner)
-	fixture := refusePrivateAppEndpoint(t, store.Root, original.Binding())
+	fixture := refusePrivateAppEndpoint(t, owner, store.Root, original.Binding())
 	fixture.store, fixture.deps = store, deps
 	return fixture
 }
 
 // refusePrivateAppEndpoint replaces the published private generation's
 // endpoint with a refused socket inode and removes its readiness marker.
-func refusePrivateAppEndpoint(t *testing.T, root string, published task.SupervisorRef) refusedEndpointAppFixture {
+func refusePrivateAppEndpoint(t *testing.T, owner *componentSupervisorFixture, root string, published task.SupervisorRef) refusedEndpointAppFixture {
 	t.Helper()
 	fixture := refusedEndpointAppFixture{
 		root:       root,
@@ -57,8 +57,9 @@ func refusePrivateAppEndpoint(t *testing.T, root string, published task.Supervis
 		base:       filepath.Dir(published.ConfigPath),
 		socketPath: strings.TrimPrefix(published.Endpoint, "unix:"),
 	}
-	// The fixture listener keeps its unlinked inode until cleanup; the path
-	// now names only a refused socket left behind by the stopped daemon.
+	// Close and join the actual observation listener before replacing its
+	// path. An unlinked listener is still live native authority.
+	owner.closeEndpointForRefusal(t, fixture.socketPath)
 	for _, path := range []string{fixture.socketPath, filepath.Join(fixture.base, "ready")} {
 		if err := os.Remove(path); err != nil {
 			t.Fatal(err)
@@ -90,6 +91,33 @@ func refusePrivateAppEndpoint(t *testing.T, root string, published task.Supervis
 		t.Fatalf("closed fixture socket is not a proven refusal: %v", dialErr)
 	}
 	return fixture
+}
+
+func (f *componentSupervisorFixture) closeEndpointForRefusal(t *testing.T, path string) {
+	t.Helper()
+	var endpoint *componentSupervisorEndpoint
+	for _, candidate := range f.endpoints {
+		if candidate.listener.Addr().String() == path {
+			if endpoint != nil {
+				t.Fatal("refused endpoint has multiple component-owned listeners")
+			}
+			endpoint = candidate
+		}
+	}
+	if endpoint == nil {
+		t.Fatal("refused endpoint has no component-owned listener")
+	}
+	listener, ok := endpoint.listener.(*net.UnixListener)
+	if !ok {
+		t.Fatalf("component endpoint listener type = %T, want *net.UnixListener", endpoint.listener)
+	}
+	// Keep path removal in the refusal transition. The owner's later cleanup
+	// tolerates this closed listener and joins the same completed accept loop.
+	listener.SetUnlinkOnClose(false)
+	if err := listener.Close(); err != nil {
+		t.Fatal(err)
+	}
+	<-endpoint.done
 }
 
 func (fixture refusedEndpointAppFixture) assertSocketPreserved(t *testing.T) {
@@ -208,7 +236,7 @@ func TestDispatchReportsRefusedEndpointOwnerReason(t *testing.T) {
 
 func TestMigrateRefusedEndpointWithoutRecordedPIDStops(t *testing.T) {
 	store, deps, original, owner := newOwnedSupervisorProbeTestFixture(t)
-	fixture := refusePrivateAppEndpoint(t, store.Root, original.Binding())
+	fixture := refusePrivateAppEndpoint(t, owner, store.Root, original.Binding())
 	fixture.store, fixture.deps = store, withSupervisorProbeRouting(t, deps, owner)
 	fixture.removeRecordedPID(t)
 	fixture.deps.SupervisorOptions.PrivateMigrationAuthorizer = authorizePrivateMigrationQueue
@@ -294,7 +322,7 @@ func newRefusedEndpointContinueFixture(t *testing.T) (*outputUpgradeFixture, ref
 	}
 	fixture.deps = withSupervisorProbeRouting(t, fixture.deps, owner)
 	fixture.createPredecessor(t)
-	return fixture, refusePrivateAppEndpoint(t, fixture.root, fixture.supervisor.Binding())
+	return fixture, refusePrivateAppEndpoint(t, owner, fixture.root, fixture.supervisor.Binding())
 }
 
 // bindRefusedContinuePair binds a live private generation of the finite pair
@@ -471,7 +499,7 @@ func newRefusedPairFixture(t *testing.T) refusedPairFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	refused := refusePrivateAppEndpoint(t, root, client.Binding())
+	refused := refusePrivateAppEndpoint(t, owner, root, client.Binding())
 	refused.store = owner.store
 	refused.deps = withSupervisorProbeRouting(t, Dependencies{ResourceChecker: fixtureResources, InitialSupervisorExecutable: clientPath, SupervisorOptions: options}, owner)
 	return refusedPairFixture{

@@ -13,7 +13,7 @@ import sys
 import tempfile
 import time
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 
 repository_root = str(Path(__file__).resolve().parents[5])
@@ -910,6 +910,27 @@ class SchedulerAcceptanceTests(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, "canonical"):
                     case.collect(row)
         self.assertEqual(case.receipt.counts["collected_task_count"], 0)
+
+    def test_collection_selected_task_reader_does_not_replace_root_disposal_reader(self):
+        case = self.case(self.service())
+        row = Occurrence(FIRST_ID, SCHEDULE_ID, MINUTE_NS)
+        outcome = {"root_id": ROOT_ID, "task_id": FIRST_ID}
+        collected = {**outcome, "publication": "committed"}
+        closure = {"root_id": ROOT_ID, "tasks": {FIRST_ID: {
+            "worker_wait": {"result": "success"}, "termination": {"scope_empty": True},
+        }}}
+        selected_reader = Mock(return_value=closure)
+        case.task_closure_reader = selected_reader
+        with (patch.object(case, "await_admitted"), patch.object(case, "command", return_value=collected),
+              patch.object(cases, "verify_collected_outcome", return_value=(outcome, cases.EXPECTED_PAYLOAD)),
+              patch.object(cases, "await_managed_lifetime_closure") as root_reader,
+              patch.object(cases, "await_managed_lifetime_closure_until", side_effect=
+                           lambda state, ids, _deadline, *, reader: reader(state, ids))):
+            case.collect(row)
+        selected_reader.assert_called_once_with(self.state, (FIRST_ID,))
+        root_reader.assert_not_called()
+        self.assertIsNone(case.lifetime.closure_reader)
+        self.assertEqual(case.receipt.counts["collected_task_count"], 1)
 
     def test_public_timestamp_keeps_nanoseconds_and_utc_semantics(self):
         self.assertEqual(timestamp_ns("1970-01-01T00:01:00.000000001Z"), MINUTE_NS + 1)

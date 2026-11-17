@@ -9,21 +9,37 @@ import (
 )
 
 func canonicalExecutable(path string) (string, error) {
+	observation := observeCanonicalExecutable(path)
+	return observation.path, observation.resultErr
+}
+
+// Executable observation owns the original metadata failure separately from
+// the contextual error graph. Named diagnostics classify that exact fact;
+// ordinary callers retain the complete configuration and filesystem causes.
+type executablePathObservation struct {
+	path           string
+	observationErr error
+	resultErr      error
+}
+
+func observeCanonicalExecutable(path string) executablePathObservation {
 	if !filepath.IsAbs(path) {
-		return "", fmt.Errorf("%w: executable must be absolute", ErrConfiguration)
+		err := fmt.Errorf("%w: executable must be absolute", ErrConfiguration)
+		return executablePathObservation{observationErr: err, resultErr: err}
 	}
 	resolved, err := filepath.EvalSymlinks(path)
 	if err != nil {
-		return "", fmt.Errorf("%w: executable unavailable: %w", ErrConfiguration, err)
+		return executablePathObservation{observationErr: err, resultErr: fmt.Errorf("%w: executable unavailable: %w", ErrConfiguration, err)}
 	}
 	info, err := os.Stat(resolved)
 	if err != nil {
-		return "", err
+		return executablePathObservation{observationErr: err, resultErr: err}
 	}
 	if !info.Mode().IsRegular() || info.Mode().Perm()&0o111 == 0 {
-		return "", fmt.Errorf("%w: executable must be an executable regular file", ErrConfiguration)
+		err = fmt.Errorf("%w: executable must be an executable regular file", ErrConfiguration)
+		return executablePathObservation{observationErr: err, resultErr: err}
 	}
-	return resolved, nil
+	return executablePathObservation{path: resolved}
 }
 
 func (c *Client) resolution() (ResolutionContext, error) {

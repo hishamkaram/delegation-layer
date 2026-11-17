@@ -96,6 +96,7 @@ func TestStatusPreparationConcreteFaultSuppressesUncertaintyContinuation(t *test
 		inject       func(*testing.T, *rebootFixture, string)
 		wantCommands string
 		diagnostics  []string
+		namedRecord  bool
 	}{
 		{
 			name: "malformed repair scan",
@@ -111,7 +112,8 @@ func TestStatusPreparationConcreteFaultSuppressesUncertaintyContinuation(t *test
 				writeRunnerRepairReceipt(t, fixture, receipt, malformed)
 			},
 			wantCommands: "A status\nA status\n",
-			diagnostics:  []string{decodeErr.Error()},
+			diagnostics:  []string{"evidence_unreadable"},
+			namedRecord:  true,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -124,6 +126,12 @@ func TestStatusPreparationConcreteFaultSuppressesUncertaintyContinuation(t *test
 
 			code, response := runRebootStatusJSON(t, fixture)
 			requireFaultedStatusResponse(t, code, response, tc.diagnostics...)
+			if tc.namedRecord {
+				requireNamedStatusFact(t, response, ControlFactResponse{ResourceKind: "root", ResourceID: fixture.store.RootID, FactKind: "evidence_record", Name: receipt, ReasonCode: "evidence_unreadable", NextAction: "inspect_evidence"})
+				if strings.Contains(response.Error, decodeErr.Error()) {
+					t.Fatal("status published the unrestricted decoder cause")
+				}
+			}
 			if response.Pending != nil || response.Supervisor != nil {
 				t.Fatalf("faulted status pending=%+v supervisor=%+v, want neither", response.Pending, response.Supervisor)
 			}

@@ -136,18 +136,33 @@ set -e
   echo "ERROR: bootstrap accepted a shadowed delegate." >&2
   exit 1
 }
-[[ -x "${SHADOW_INSTALL_DIR}/delegate" ]] || {
-  echo "ERROR: bootstrap did not install the bundle behind the shadowing command." >&2
+[[ ! -e "${SHADOW_INSTALL_DIR}/delegate" ]] || {
+  echo "ERROR: bootstrap installed behind a broken selected command." >&2
   exit 1
 }
 grep -q 'stale delegate' "${SHADOW_DIR}/delegate" || {
   echo "ERROR: bootstrap overwrote the shadowing delegate." >&2
   exit 1
 }
-grep -q 'resolves delegate to' "${ROOT}/shadow-error.out" || {
+grep -q 'installation_missing' "${ROOT}/shadow-error.out" || {
   echo "ERROR: shadowing PATH guidance is missing." >&2
   exit 1
 }
+
+DANGLING_DIR="${ROOT}/dangling"
+mkdir -p "${DANGLING_DIR}"
+ln -s "${ROOT}/removed-keg/delegate" "${DANGLING_DIR}/delegate"
+if env HOME="${HOME}" DELEGATION_LAYER_INSTALL_DIR="${SHADOW_INSTALL_DIR}" \
+  PATH="${DANGLING_DIR}:${SYSTEM_PATH}" PLUGIN_ROOT="${PLUGIN_ROOT}" \
+  "${PLUGIN_ROOT}/scripts/ensure-delegate.sh" >"${ROOT}/dangling.out" 2>&1; then
+  echo "ERROR: dangling installation accepted." >&2
+  exit 1
+fi
+[[ ! -e "${SHADOW_INSTALL_DIR}/delegate" ]] || {
+  echo "ERROR: dangling installation triggered a new installer." >&2
+  exit 1
+}
+grep -q 'installation_missing' "${ROOT}/dangling.out"
 
 rm -f "${PATH_BIN}/delegate" "${PATH_BIN}/delegate-run" "${PATH_BIN}/pueue" "${PATH_BIN}/pueued" "${PATH_BIN}/installer-marker"
 rm -rf "${INSTALL_DIR}"

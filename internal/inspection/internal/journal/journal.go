@@ -19,6 +19,7 @@ import (
 // Operation owns one task-bound inspection journal and its immutable request.
 // Its control directory is always outside ordinary task records.
 type Operation struct {
+	store    *taskdir.Store
 	control  *taskdir.ControlDir
 	request  contract.RequestRecord
 	digest   string
@@ -64,7 +65,7 @@ func LoadOperationContext(ctx context.Context, store *taskdir.Store, taskID stri
 	if err != nil {
 		return nil, err
 	}
-	return &Operation{control: control, request: contract.CloneRequestRecord(request), digest: digest, deadline: deadline}, nil
+	return &Operation{store: store, control: control, request: contract.CloneRequestRecord(request), digest: digest, deadline: deadline}, nil
 }
 
 func readOperationRequestTx(ctx context.Context, tx *taskdir.ControlTransaction, store *taskdir.Store, taskID string) (contract.RequestRecord, string, time.Time, error) {
@@ -171,7 +172,7 @@ func openOperationContext(ctx context.Context, store *taskdir.Store, request tas
 	if err != nil {
 		return nil, err
 	}
-	op := &Operation{control: control, request: contract.CloneRequestRecord(record), digest: digest, deadline: deadline}
+	op := &Operation{store: store, control: control, request: contract.CloneRequestRecord(record), digest: digest, deadline: deadline}
 	closeOnError = false
 	return op, nil
 }

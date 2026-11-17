@@ -195,7 +195,7 @@ for operator details.
 ## Administrative settlement
 
 An exact human-confirmed maintenance permission is separate from native closure
-and publication. `status` can report `administratively_settled` with a separate
+and publication. Task `status` can report `administratively_settled` with a separate
 `settlement` object; exit `0` means the observation completed. Native execution
 remains unknown and no accepted answer is implied. `collect` stops with exit `1`;
 `wait --all` does so when any member is settled and the condition is unmet.

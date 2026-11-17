@@ -215,6 +215,27 @@ jobs:
         if: ${{ needs.changes.outputs.full == 'true' }}
         run: make acceptance-supervisor-upgrade-recovery
 
+      - name: Prove consecutive upgrades with legacy inspection journals
+        id: upgrade_chain
+        if: ${{ needs.changes.outputs.full == 'true' }}
+        env:
+          DELEGATE_TEST_PUEUE: ${{ github.workspace }}/bin/test-supervisor/pueue
+          DELEGATE_TEST_PUEUED: ${{ github.workspace }}/bin/test-supervisor/pueued
+          DELEGATE_TOOL_DOWNLOAD_TOKEN: ${{ github.token }}
+        run: make acceptance-upgrade-chain
+
+      - name: Retain consecutive upgrade evidence
+        if: >-
+          always() && (steps.upgrade_chain.outcome == 'success' ||
+          steps.upgrade_chain.outcome == 'failure' ||
+          steps.upgrade_chain.outcome == 'cancelled')
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: upgrade-chain-${{ runner.os }}-${{ github.run_attempt }}
+          path: bin/upgrade-chain.*/results/
+          retention-days: 7
+          if-no-files-found: error
+
       - name: Prove released scheduler upgrades through delegate CLI
         id: scheduler_upgrade
         if: ${{ needs.changes.outputs.full == 'true' }}
@@ -398,6 +419,26 @@ jobs:
 
       - name: Prove private supervisor upgrade recovery through delegate CLI
         run: make acceptance-supervisor-upgrade-recovery
+
+      - name: Prove consecutive upgrades with legacy inspection journals
+        id: upgrade_chain
+        env:
+          DELEGATE_TEST_PUEUE: ${{ github.workspace }}/bin/test-supervisor/pueue
+          DELEGATE_TEST_PUEUED: ${{ github.workspace }}/bin/test-supervisor/pueued
+          DELEGATE_TOOL_DOWNLOAD_TOKEN: ${{ github.token }}
+        run: make acceptance-upgrade-chain
+
+      - name: Retain consecutive upgrade evidence
+        if: >-
+          always() && (steps.upgrade_chain.outcome == 'success' ||
+          steps.upgrade_chain.outcome == 'failure' ||
+          steps.upgrade_chain.outcome == 'cancelled')
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: upgrade-chain-${{ runner.os }}-${{ github.run_attempt }}
+          path: bin/upgrade-chain.*/results/
+          retention-days: 7
+          if-no-files-found: error
 
       - name: Prove released scheduler upgrades through delegate CLI
         id: scheduler_upgrade

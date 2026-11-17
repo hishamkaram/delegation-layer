@@ -15,6 +15,7 @@ func writeHumanResponse(w io.Writer, response Response) error {
 		writeHumanSummary(&output, response)
 	}
 	writeHumanWait(&output, response.Wait)
+	writeHumanMaintenanceFacts(&output, response.ControlFact, response.Settlement)
 	if settled := response.Settlement; settled != nil {
 		fmt.Fprintf(&output, "settlement administrative_state=%s native_execution=%s permission=%s challenge=%s confirmed_at=%s held_claims=%s\n", settled.AdministrativeState, settled.NativeExecution, settled.Permission, settled.Challenge, settled.ConfirmedAt, strings.Join(settled.HeldClaims, ","))
 	}
@@ -191,4 +192,13 @@ func writeHumanStop(output *strings.Builder, prefix string, stop StopResponse) {
 		fmt.Fprintf(output, " acknowledged=%t", *stop.Acknowledged)
 	}
 	output.WriteByte('\n')
+}
+
+func writeHumanMaintenanceFacts(output *strings.Builder, controlFact *ControlFactResponse, settlement *SettlementResponse) {
+	if fact := controlFact; fact != nil {
+		fmt.Fprintf(output, "control_fact kind=%s id=%s fact=%s name=%q reason_code=%s next_action=%s\n", fact.ResourceKind, fact.ResourceID, fact.FactKind, fact.Name, fact.ReasonCode, fact.NextAction)
+	}
+	if settled := settlement; settled != nil && settled.TargetKind != "" {
+		fmt.Fprintf(output, "settlement_target kind=%s operation_id=%s acknowledged_missing_facts=%s\n", settled.TargetKind, settled.OperationID, strings.Join(settled.AcknowledgedMissingFacts, ","))
+	}
 }

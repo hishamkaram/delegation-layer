@@ -172,6 +172,7 @@ type upgradeHostFaultCase struct {
 	want      UpgradeCondition
 	fault     bool
 	retained  bool
+	named     bool
 }
 
 func TestUpgradeHostUnhandledErrorsOverridePendingWithoutLosingProgress(t *testing.T) {
@@ -179,6 +180,7 @@ func TestUpgradeHostUnhandledErrorsOverridePendingWithoutLosingProgress(t *testi
 		{name: "handled-pending", condition: UpgradePending, want: UpgradePending},
 		{name: "pending-with-fs-fault", condition: UpgradePending, want: UpgradeFault, fault: true},
 		{name: "busy-with-retained-cleanup", condition: UpgradeBusy, want: UpgradeFault, fault: true, retained: true},
+		{name: "named-record-fault", condition: UpgradePending, want: UpgradeFault, fault: true, named: true},
 	} {
 		t.Run(test.name, func(t *testing.T) { checkUpgradeHostFault(t, test) })
 	}
@@ -198,6 +200,9 @@ func checkUpgradeHostFault(t *testing.T, test upgradeHostFaultCase) {
 	var hostError error
 	if test.fault {
 		hostError = fault
+	}
+	if test.named {
+		hostError = &task.ControlFactError{ResourceKind: "inspection", ResourceID: ownerWireRoot, FactKind: "evidence_file", Name: ".operation.lock", ReasonCode: "evidence_unreadable", NextAction: "inspect_evidence", Cause: fault}
 	}
 	if test.retained {
 		hostError = &residentEntryCleanupError{entry: f.entry, cause: fault}
@@ -221,10 +226,57 @@ func checkUpgradeHostFault(t *testing.T, test upgradeHostFaultCase) {
 	if f.server.isClosing() != test.retained {
 		t.Fatal("retained cleanup fault did not preserve admission closure")
 	}
+	if test.named {
+		assertUpgradeNamedFailure(t, outcome, f.server.diagnostic(), fault)
+	}
 	if test.retained {
 		var retained *residentEntryCleanupError
 		if !errors.As(f.server.fault(), &retained) || retained.entry != f.entry || !errors.Is(retained, fault) {
 			t.Fatal("Host cleanup fault lost the actual owner graph")
 		}
+	}
+}
+
+func assertUpgradeNamedFailure(t *testing.T, outcome UpgradeOutcome, retained, cause error) {
+	t.Helper()
+	expected := UpgradeFailureFact{ResourceKind: "inspection", ResourceID: ownerWireRoot, FactKind: "evidence_file", Name: ".operation.lock", ReasonCode: "evidence_unreadable", NextAction: "inspect_evidence"}
+	if outcome.FailureFact != expected || !errors.Is(retained, cause) {
+		t.Fatalf("named failure lost its diagnostic or private cause: fact=%+v retained=%v", outcome.FailureFact, retained)
+	}
+	wire, err := task.MarshalCanonical(outcome)
+	if err != nil || bytes.Contains(wire, []byte(cause.Error())) {
+		t.Fatalf("upgrade wire exposed unrestricted error text: %v", err)
+	}
+}
+
+func TestUpgradeFailureFactRejectsUnsafeBoundaryData(t *testing.T) {
+	valid := UpgradeFailureFact{ResourceKind: "inspection", ResourceID: ownerWireRoot, FactKind: "evidence_file", Name: ".operation.lock", ReasonCode: "evidence_unreadable", NextAction: "inspect_evidence"}
+	for _, mutate := range []func(*UpgradeFailureFact){
+		func(f *UpgradeFailureFact) { f.Name = "/private/record.json" },
+		func(f *UpgradeFailureFact) { f.Name = "record.json\ninherited-private-environment" },
+		func(f *UpgradeFailureFact) { f.ResourceID = "unvalidated target" },
+		func(f *UpgradeFailureFact) { f.FactKind = "unrestricted_diagnostic" },
+	} {
+		invalid := valid
+		mutate(&invalid)
+		if err := invalid.Validate(); err == nil {
+			t.Fatalf("unsafe upgrade fact accepted: %+v", invalid)
+		}
+	}
+	outcome := UpgradeOutcome{Condition: UpgradePending, Preflight: UpgradePreflight{State: UpgradePreflightPassed}, FailureFact: valid}
+	if err := outcome.Validate(); err == nil {
+		t.Fatal("failure diagnostic was accepted as pending or permission")
+	}
+	outcome.Condition = UpgradeFault
+	if err := outcome.Validate(); err != nil {
+		t.Fatalf("bounded fault projection refused: %v", err)
+	}
+	legacy := ownerRequestFixture()
+	request := ownerUpgradeRequest{Protocol: ownerUpgradeProtocolVersion, RootID: legacy.RootID, Owner: legacy.Owner, PublicationSHA256: legacy.PublicationSHA256, Client: legacy.Client, Deadline: legacy.Deadline, Request: UpgradeRequest{Action: UpgradeStatus, Context: LaunchContextReference{SHA256: ownerWireDigest}}}
+	if err := request.validate(); err != nil {
+		t.Fatalf("passive request fixture was invalid: %v", err)
+	}
+	if err := upgradeReply(request, outcome).validate(); err == nil {
+		t.Fatal("passive preflight accepted a hook failure diagnostic")
 	}
 }

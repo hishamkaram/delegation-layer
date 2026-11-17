@@ -12,12 +12,13 @@ import (
 )
 
 type (
-	Operation        = inspectionjournal.Operation
-	GroupJournal     = inspectionjournal.GroupJournal
-	GroupPermit      = inspectionjournal.GroupPermit
-	StopPermit       = inspectionjournal.StopPermit
-	SubmissionPermit = inspectionjournal.SubmissionPermit
-	StartPermit      = inspectionjournal.StartPermit
+	Operation              = inspectionjournal.Operation
+	MaintenanceObservation = inspectionjournal.MaintenanceObservation
+	GroupJournal           = inspectionjournal.GroupJournal
+	GroupPermit            = inspectionjournal.GroupPermit
+	StopPermit             = inspectionjournal.StopPermit
+	SubmissionPermit       = inspectionjournal.SubmissionPermit
+	StartPermit            = inspectionjournal.StartPermit
 )
 
 func ProbeGroupContext(ctx context.Context, store *taskdir.Store, binding task.SupervisorRef, snapshot pueue.QueueSnapshot) (ready bool, resultErr error) {
@@ -114,4 +115,8 @@ func PreparedGroupMigrationSuccessors(ctx context.Context, store *taskdir.Store)
 
 func OpenGroupWithMigration(ctx context.Context, store *taskdir.Store, binding task.SupervisorRef, check func(context.Context, contract.GroupRequestRecord) error) (*GroupJournal, error) {
 	return inspectionjournal.OpenGroupWithMigration(ctx, store, binding, check)
+}
+
+func ObserveMaintenanceContext(ctx context.Context, store *taskdir.Store, id string, queue contract.MaintenanceQueue, native taskdir.OperatorDispositionNative, observe func(MaintenanceObservation) error) error {
+	return inspectionjournal.ObserveMaintenanceContext(ctx, store, id, queue, native, observe)
 }

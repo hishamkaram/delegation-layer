@@ -311,13 +311,14 @@ class InstallerDownloadTokenWorkflowTests(unittest.TestCase):
     def test_ci_token_is_scoped_to_only_the_named_installer_steps(self):
         source = WORKFLOW.read_text()
         upgrade = "Prove released scheduler upgrades through delegate CLI"
-        expected = {"gate-linux": {"Install tools", "Install pinned supervisor test binaries", upgrade},
-                    "gate-macos": {"Install platform tools", "Install pinned supervisor test binaries", upgrade},
+        chain = "Prove consecutive upgrades with legacy inspection journals"
+        expected = {"gate-linux": {"Install tools", "Install pinned supervisor test binaries", upgrade, chain},
+                    "gate-macos": {"Install platform tools", "Install pinned supervisor test binaries", upgrade, chain},
                     "independent-startup-component": {"Install pinned repository tools"},
                     "remote-ssh": {"Install pinned SSH Go tools", "Install pinned SSH supervisor"},
                     "nested-survival": {"Install pinned tools and supervisor"},
                     "development-candidate": {"Install pinned tools"}}
-        self.assertEqual(source.count("DELEGATE_TOOL_DOWNLOAD_TOKEN"), 11)
+        self.assertEqual(source.count("DELEGATE_TOOL_DOWNLOAD_TOKEN"), sum(len(names) for names in expected.values()))
         workflow_header = source.split("jobs:\n", 1)[0]
         self.assertNotIn("DELEGATE_TOOL_DOWNLOAD_TOKEN", workflow_header)
         self.assertNotIn("github.token", workflow_header)
@@ -338,6 +339,7 @@ class InstallerDownloadTokenWorkflowTests(unittest.TestCase):
                     self.assertNotIn("github.token", block)
             if job in ("gate-linux", "gate-macos"):
                 self.assertRegex(blocks[upgrade], r"(?m)^        run: make acceptance-scheduler-upgrade$")
+                self.assertRegex(blocks[chain], r"(?m)^        run: make acceptance-upgrade-chain$")
 
     def test_ccr_token_does_not_reach_provider_postinstall_or_proofs(self):
         source = WORKFLOW.with_name("ccr-integration.yml").read_text()

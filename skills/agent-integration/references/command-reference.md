@@ -556,14 +556,25 @@ delegate settle TASK_ID --prepare --json
 delegate settle TASK_ID --confirm CHALLENGE --json
 ```
 
-Exactly one local task and one flag are required. Prepare is read-only and may
-observe the existing queue. Before confirm, obtain a human's approval of that
-exact task, returned challenge and maintenance-only effect. Never auto-confirm
-a real task. Confirm requires fresh, exact ended private queue and same-boot
-native absence evidence; unsupported/unknown/conflicting facts refuse.
+Use `--kind inspection` for an inspection operation; task is the default.
+Complete historical journals and expired unstarted inspections follow automatic
+maintenance recovery. Manual inspection permission requires a valid unresolved
+cooperative lifetime, free existing owner, same-boot native absence, and an exact
+ended or positively absent label under the current canonical generation mapping.
+Unknown legacy execution cannot be waived. Inspection permission never grants
+row deletion, native closure or successful admission proof. Read the bundled
+[upgrade workflow](delegate-upgrade.md) when an installation handoff is blocked.
+
+Exactly one local ID and one action flag are required. Prepare is read-only and
+may observe the existing queue. Before confirm, obtain a human's approval of the
+exact resource, returned challenge and maintenance-only effect. Never auto-confirm
+a real challenge. Task confirmation requires the exact ended private row;
+inspection confirmation accepts its exact ended or positively absent label.
+Both require same-boot native absence; unsupported or conflicting facts refuse.
 
 `settlement` separates `administrative_state`, `native_execution`, `permission`,
-`challenge`, optional `confirmed_at` and `held_claims`. The immutable permission
+`challenge`, optional `confirmed_at` and `held_claims`. Inspection responses also
+identify `target_kind`, `operation_id` and `acknowledged_missing_facts`. The immutable permission
 allows supervisor maintenance only; scheduler/resource/session/workspace/custody/
 deletion claims stay held. No result, native closure, retry or continuation is
 created. A matching confirm retry returns the same winner. Follow

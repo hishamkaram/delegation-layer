@@ -286,8 +286,14 @@ func TestCreateTaskPreservesInitializationErrorContext(t *testing.T) {
 				if !strings.Contains(err.Error(), "opening task locks") {
 					t.Fatalf("missing initialization stage: %v", err)
 				}
-			} else if err.Error() != injected.Error() {
-				t.Fatalf("non-ENOENT message changed: %v", err)
+			}
+			var fact *task.ControlFactError
+			reason := "evidence_unreadable"
+			if errors.Is(injected, os.ErrNotExist) {
+				reason = "evidence_missing"
+			}
+			if !errors.As(err, &fact) || fact.ResourceKind != "task" || fact.ResourceID != req.TaskID || fact.FactKind != "evidence_record" || fact.Name != ".admission.lock" || fact.ReasonCode != reason || fact.NextAction != "inspect_evidence" {
+				t.Fatalf("initialization failure lost its named lock fact: %v", err)
 			}
 		})
 	}

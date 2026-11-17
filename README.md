@@ -13,6 +13,7 @@ exact-session continuation.
 · [Terminal workbench](docs/terminal-workbench.md)
 · [Teams](https://github.com/hishamkaram/delegation-layer/blob/main/docs/teams.md)
 · [Start recurring tasks](docs/getting-started.md#recurring-tasks)
+· [Upgrade Delegate](skills/delegate-upgrade/SKILL.md)
 · [Docs](https://github.com/hishamkaram/delegation-layer/blob/main/docs/README.md)
 
 <p align="center">

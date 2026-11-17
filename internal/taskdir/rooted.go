@@ -148,7 +148,12 @@ func (s *Store) exists(path string) (bool, error) {
 	return true, f.Close()
 }
 
-func (s *Store) readRecord(path string, dst any) error {
+func (s *Store) readRecord(path string, dst any) (resultErr error) {
+	defer func() {
+		if resultErr != nil {
+			resultErr = s.recordFactError(path, resultErr)
+		}
+	}()
 	f, err := s.openFile(path, unix.O_RDONLY)
 	if err != nil {
 		return err
@@ -346,4 +351,30 @@ func (s *Store) entryExists(path string) (bool, error) {
 		return false, nil
 	}
 	return err == nil, err
+}
+
+// recordFactError preserves the OS/decode cause while naming only the bounded
+// control record, never its contents or an inherited environment.
+func (s *Store) recordFactError(path string, cause error) error {
+	var existing *task.ControlFactError
+	if errors.As(cause, &existing) {
+		return cause
+	}
+	kind, id := "root", s.RootID
+	rel, err := filepath.Rel(s.Root, path)
+	if err == nil {
+		parts := strings.Split(rel, string(filepath.Separator))
+		if len(parts) > 2 && (parts[0] == "tasks" || parts[0] == "inspections") {
+			kind, id = "task", parts[1]
+			if parts[0] == "inspections" {
+				kind = "inspection"
+				id = filepath.Base(filepath.Dir(path))
+			}
+		}
+	}
+	reason := "evidence_unreadable"
+	if task.RecordAbsent(cause) {
+		reason = "evidence_missing"
+	}
+	return &task.ControlFactError{ResourceKind: kind, ResourceID: id, FactKind: "evidence_record", Name: filepath.Base(path), ReasonCode: reason, NextAction: "inspect_evidence", Cause: cause}
 }

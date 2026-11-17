@@ -388,7 +388,7 @@ func selectRecoveryExecutable(saved, fallback string) (string, error) {
 		if _, err := os.Stat(saved); err == nil {
 			return saved, nil
 		} else if !errors.Is(err, os.ErrNotExist) {
-			return "", fmt.Errorf("%w: inspect saved supervisor executable: %w", ErrBinding, err)
+			return "", fmt.Errorf("%w: inspect saved supervisor executable: %w", ErrBinding, supervisorExecutableFact("recorded_client", saved, err))
 		}
 	}
 	if fallback == "" {
@@ -405,7 +405,7 @@ func selectRecoveryClient(saved task.SupervisorRef, fallback string) (string, er
 		if fallback == "" {
 			return "", fmt.Errorf("%w: historical supervisor copy requires an installed client", ErrBinding)
 		}
-		return canonicalExecutable(fallback)
+		return canonicalSupervisorExecutable("selected_client", fallback)
 	}
 	return selectRecoveryExecutable(saved.ClientExecutable, fallback)
 }
@@ -418,13 +418,13 @@ func selectRecoveryDaemon(saved task.SupervisorRef, fallback string) (string, er
 		if _, err := os.Stat(saved.DaemonExecutable); err == nil {
 			return savedDaemon(saved)
 		} else if !errors.Is(err, os.ErrNotExist) {
-			return "", fmt.Errorf("%w: inspect saved supervisor daemon: %w", ErrBinding, err)
+			return "", fmt.Errorf("%w: inspect saved supervisor daemon: %w", ErrBinding, supervisorExecutableFact("recorded_daemon", saved.DaemonExecutable, err))
 		}
 	}
 	if fallback == "" {
 		return "", fmt.Errorf("%w: installed supervisor daemon is unavailable", ErrBinding)
 	}
-	resolved, err := canonicalExecutable(fallback)
+	resolved, err := canonicalSupervisorExecutable("selected_daemon", fallback)
 	if err != nil {
 		return "", fmt.Errorf("%w: installed supervisor daemon is unavailable: %w", ErrBinding, err)
 	}
@@ -707,9 +707,31 @@ func savedDaemon(saved task.SupervisorRef) (string, error) {
 	if path == "" {
 		path = filepath.Join(filepath.Dir(saved.ClientExecutable), "pueued")
 	}
-	resolved, err := canonicalExecutable(path)
+	resolved, err := canonicalSupervisorExecutable("recorded_daemon", path)
 	if err != nil {
 		return "", fmt.Errorf("%w: saved supervisor daemon is unavailable: %w", ErrBinding, err)
 	}
 	return resolved, nil
+}
+
+// The caller names the selected/recorded executable boundary. Do not infer
+// executable roles from arbitrary filesystem errors elsewhere in recovery.
+func supervisorExecutableFact(role, path string, cause error) error {
+	return supervisorExecutableObservationFact(role, path, cause, cause)
+}
+
+func canonicalSupervisorExecutable(role, path string) (string, error) {
+	observation := observeCanonicalExecutable(path)
+	return observation.path, supervisorExecutableObservationFact(role, path, observation.observationErr, observation.resultErr)
+}
+
+func supervisorExecutableObservationFact(role, path string, observation, cause error) error {
+	if cause == nil {
+		return nil
+	}
+	reason := "installation_unusable"
+	if task.RecordAbsent(observation) {
+		reason = "installation_missing"
+	}
+	return &task.ControlFactError{ResourceKind: "supervisor", ResourceID: role, FactKind: "executable", Name: path, ReasonCode: reason, NextAction: "repair_installation", Cause: cause}
 }

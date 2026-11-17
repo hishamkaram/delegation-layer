@@ -428,11 +428,11 @@ func prepareExactPublishedPair(ctx context.Context, candidate task.SupervisorRef
 	if isLegacyStateSupervisorClient(candidate) {
 		return prepareCurrentHistoricalPrivateTarget(ctx, candidate, options)
 	}
-	selected, err := canonicalExecutable(candidate.ClientExecutable)
+	selected, err := canonicalSupervisorExecutable("recorded_client", candidate.ClientExecutable)
 	if err != nil || selected != candidate.ClientExecutable {
 		return nil, errors.Join(ErrBinding, err)
 	}
-	daemon, err := canonicalExecutable(candidate.DaemonExecutable)
+	daemon, err := canonicalSupervisorExecutable("recorded_daemon", candidate.DaemonExecutable)
 	if err != nil || daemon != candidate.DaemonExecutable {
 		return nil, errors.Join(ErrBinding, err)
 	}

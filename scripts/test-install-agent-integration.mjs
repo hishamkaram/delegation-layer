@@ -288,6 +288,16 @@ try {
   assert.equal(emptyHarness.status, 2);
   assert.match(emptyHarness.stderr, /at least one harness name/);
 
+  const upgradeHome = join(root, "upgrade-bundle-home");
+  const upgradeTarget = join(upgradeHome, ".agents", "skills", "delegate-upgrade");
+  await mkdir(upgradeTarget, { recursive: true });
+  await writeFile(join(upgradeTarget, "SKILL.md"), "user upgrade skill");
+  const bundleConflict = runInstaller(["install", "--harness", "universal", "--yes"], { cwd: project, home: upgradeHome, path: bin });
+  assert.equal(bundleConflict.status, 1);
+  await assert.rejects(readFile(join(upgradeHome, ".agents", "skills", "agent-integration", "SKILL.md")), { code: "ENOENT" });
+  const bundleInstall = runInstaller(["install", "--harness", "universal", "--yes", "--force"], { cwd: project, home: upgradeHome, path: bin });
+  assert.equal(bundleInstall.status, 0, bundleInstall.stderr);
+  assert.deepEqual(await readFile(join(upgradeTarget, "SKILL.md")), await readFile(join(repositoryRoot, "skills", "delegate-upgrade", "SKILL.md")));
   console.log("Agent integration installer behavior checks passed.");
 } finally {
   if (unresolvedChild) console.error(`Retained installer fixture with unresolved child: ${root}`);

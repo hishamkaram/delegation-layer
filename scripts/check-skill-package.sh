@@ -28,6 +28,13 @@ if ! tar -tzf "${PACKAGE_TARBALL}" | grep -Fx 'package/skills/agent-integration/
     echo "ERROR: package archive does not contain the canonical agent skill." >&2
     exit 1
 fi
+for upgrade_file in SKILL.md references/workflow.md; do
+    if ! tar -tzf "${PACKAGE_TARBALL}" | grep -Fx "package/skills/delegate-upgrade/${upgrade_file}" >/dev/null; then
+        echo "ERROR: package archive does not contain upgrade skill/${upgrade_file}." >&2
+        exit 1
+    fi
+done
+cmp "${REPO_ROOT}/skills/delegate-upgrade/references/workflow.md" "${REPO_ROOT}/skills/agent-integration/references/delegate-upgrade.md"
 for skill_file in references/interaction.md references/command-reference.md references/result-handling.md references/continuation.md examples/read-only-task.md examples/workspace-write-task.md examples/json-results.md evals/evals.json; do
     if ! tar -tzf "${PACKAGE_TARBALL}" | grep -Fx "package/skills/agent-integration/${skill_file}" >/dev/null; then
         echo "ERROR: package archive does not contain skill/${skill_file}." >&2

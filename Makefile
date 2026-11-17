@@ -213,7 +213,7 @@ acceptance-private-cli: tool-versions
 		--dispatch-workers 4 \
 		--output "$$receipt_dir/receipt.json"
 
-.PHONY: acceptance-scheduler acceptance-scheduler-upgrade
+.PHONY: acceptance-scheduler acceptance-scheduler-upgrade acceptance-upgrade-chain
 acceptance-scheduler: tool-versions
 	@receipt_dir=$$(mktemp -d "$(BIN_DIR)/scheduler-acceptance.XXXXXX"); \
 	echo "Scheduler acceptance output: $$receipt_dir/results"; \
@@ -227,6 +227,14 @@ acceptance-scheduler-upgrade: tool-versions
 	@receipt_dir=$$(mktemp -d "$(BIN_DIR)/scheduler-upgrade.XXXXXX"); \
 	python3 -m scripts.acceptance.private_cli.scheduler.upgrade \
 		--source-root "$(CURDIR)" --baseline all \
+		--pueue "$${DELEGATE_TEST_PUEUE:-$(BIN_DIR)/test-supervisor/pueue}" \
+		--pueued "$${DELEGATE_TEST_PUEUED:-$(BIN_DIR)/test-supervisor/pueued}" \
+		--output "$$receipt_dir/results"
+
+acceptance-upgrade-chain: tool-versions
+	@receipt_dir=$$(mktemp -d "$(BIN_DIR)/upgrade-chain.XXXXXX"); \
+	python3 -m scripts.acceptance.private_cli.scheduler.recovery_chain \
+		--source-root "$(CURDIR)" \
 		--pueue "$${DELEGATE_TEST_PUEUE:-$(BIN_DIR)/test-supervisor/pueue}" \
 		--pueued "$${DELEGATE_TEST_PUEUED:-$(BIN_DIR)/test-supervisor/pueued}" \
 		--output "$$receipt_dir/results"

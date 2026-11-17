@@ -71,6 +71,21 @@ func combineMaintenance(assessment MaintenanceAssessment, queueErr, rootErr erro
 }
 
 func runtimeMaintenanceBlocker(cause error, busy bool) *MaintenanceBlocker {
+	var classified *MaintenanceError
+	if busy && errors.As(cause, &classified) && classified.Assessment.FirstBlocker != nil {
+		copy := *classified.Assessment.FirstBlocker
+		return &copy
+	}
+	var fact *task.ControlFactError
+	if errors.As(cause, &fact) && task.AllErrorCauses(cause, func(err error) bool { return errors.Is(err, task.ErrEvidenceFault) }) {
+		blocker := &MaintenanceBlocker{Kind: fact.ResourceKind, ReasonCode: fact.ReasonCode, NextAction: fact.NextAction}
+		if fact.ResourceKind == "task" {
+			blocker.TaskID = fact.ResourceID
+		} else {
+			blocker.OperationID = fact.ResourceID
+		}
+		return blocker
+	}
 	blocker := &MaintenanceBlocker{Kind: "observation", ReasonCode: "runtime_evidence_unreadable", NextAction: "stop_and_report"}
 	var resource *RuntimeMaintenanceError
 	if errors.As(cause, &resource) {
@@ -80,6 +95,10 @@ func runtimeMaintenanceBlocker(cause error, busy bool) *MaintenanceBlocker {
 		} else {
 			blocker.OperationID = resource.ID
 		}
+	}
+	if busy && errors.Is(cause, task.ErrLockBusy) {
+		blocker.ReasonCode, blocker.NextAction = "owner_busy", "wait_for_legacy_work"
+		return blocker
 	}
 	if busy {
 		blocker.ReasonCode = "runtime_closure_unproven"

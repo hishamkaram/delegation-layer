@@ -21,6 +21,10 @@ func newResponse(command string) Response {
 func (r *Response) setError(err error) {
 	if err != nil {
 		r.Error = err.Error()
+		var fact *task.ControlFactError
+		if errors.As(err, &fact) {
+			r.ControlFact = &ControlFactResponse{ResourceKind: fact.ResourceKind, ResourceID: fact.ResourceID, FactKind: fact.FactKind, Name: fact.Name, ReasonCode: fact.ReasonCode, NextAction: fact.NextAction}
+		}
 	}
 }
 

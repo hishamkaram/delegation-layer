@@ -20,7 +20,7 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 )
 
-func TestExternalInspectionHandoffPublicConsumersPreserveActiveWork(t *testing.T) {
+func TestExternalInspectionHandoffPublicConsumersPreserveUnobservableLegacyWork(t *testing.T) {
 	store, deps, current, owner := newOwnedSupervisorProbeTestFixture(t)
 	deps = withSupervisorProbeRouting(t, deps, owner)
 	assertSupervisorProbeTestNoAdmissionAuthority(t, store)
@@ -63,8 +63,8 @@ func TestExternalInspectionHandoffPublicConsumersPreserveActiveWork(t *testing.T
 	schedulingPath := privateOrdinarySchedulingTestPath(store.Root)
 	schedulingBytes := readSupervisorProbeTestFile(t, schedulingPath)
 	after := supervisorCommand(Arguments{Root: store.Root, SupervisorAction: "status"}, deps)
-	assertHandoffSupervisorResult(t, after, "migrated", "wait_for_legacy_work")
-	assertActiveExternalInspectionBlocksMaintenance(t, after.response.SupervisorControl, requestBefore.TaskID)
+	assertUnobservableExternalInspectionFact(t, after, requestBefore.TaskID)
+	assertUnobservableExternalInspectionBlocksMaintenance(t, after.response.SupervisorControl, requestBefore.TaskID)
 	assertSupervisorProbeTestFile(t, schedulingPath, schedulingBytes)
 	assertExternalHandoffHead(t, store, legacy, current.Binding())
 	assertSupervisorProbeTestFile(t, requestPath, requestBytes)
@@ -77,14 +77,22 @@ func TestExternalInspectionHandoffPublicConsumersPreserveActiveWork(t *testing.T
 	finishExternalHandoffInspection(t, store, requestBefore)
 }
 
-func assertActiveExternalInspectionBlocksMaintenance(t *testing.T, control *SupervisorControlResponse, id string) {
+func assertUnobservableExternalInspectionFact(t *testing.T, result commandResult, id string) {
 	t.Helper()
-	if control.ObservedAt == "" || control.MigrationReadiness != "blocked" || control.ActiveWork != "none" || control.FirstBlocker == nil {
-		t.Fatalf("status did not distinguish the active external inspection from the empty private queue: %+v", control)
+	var fact *task.ControlFactError
+	if result.code != 1 || !errors.As(result.err, &fact) || fact.ResourceKind != "inspection" || fact.ResourceID != id || fact.Name != ".lifetime-owner.lock" || fact.ReasonCode != "missing_evidence_record" || !errors.Is(result.err, task.ErrEvidenceFault) {
+		t.Fatalf("unobservable legacy inspection lost its named refusal: code=%d error=%v", result.code, result.err)
+	}
+}
+
+func assertUnobservableExternalInspectionBlocksMaintenance(t *testing.T, control *SupervisorControlResponse, id string) {
+	t.Helper()
+	if control.ObservedAt == "" || control.State != "unavailable" || control.MigrationReadiness != "unknown" || control.ActiveWork != "none" || control.FirstBlocker == nil || control.NextAction != "stop_and_report" {
+		t.Fatalf("status treated unobservable legacy work as settleable or closed: %+v", control)
 	}
 	blocker := control.FirstBlocker
-	if blocker.Kind != "inspection" || blocker.OperationID != id || blocker.ReasonCode != "runtime_closure_unproven" || blocker.NextAction != "wait_for_legacy_work" {
-		t.Fatalf("status lost the exact active external inspection: %+v", blocker)
+	if blocker.Kind != "inspection" || blocker.OperationID != id || blocker.ReasonCode != "missing_evidence_record" || blocker.NextAction != "stop_and_report" {
+		t.Fatalf("status lost the exact unobservable external inspection: %+v", blocker)
 	}
 }
 

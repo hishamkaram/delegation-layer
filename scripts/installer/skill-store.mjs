@@ -1,5 +1,5 @@
 import { mkdir } from "node:fs/promises";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import {
   assertNoSymlinkComponents,
   copySkillTree,
@@ -43,5 +43,5 @@ export async function installSkill({ sourceDirectory, target, force, report }) {
   }
   await mkdir(target, { recursive: true });
   await copySkillTree(sourceDirectory, target, files, force);
-  report(`Installed agent integration skill: ${join(target, "SKILL.md")}`);
+  report(`Installed ${basename(sourceDirectory)} skill: ${join(target, "SKILL.md")}`);
 }
