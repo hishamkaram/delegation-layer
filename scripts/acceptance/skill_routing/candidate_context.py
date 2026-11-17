@@ -295,7 +295,10 @@ def _codex_read(events: list[dict], skill: Path, source: str, workspace: Path) -
     # This is the harness's recorded submission workspace, not a shell CWD
     # evaluator or a claim about arbitrary per-call path/inode identity.
     relative = ".agents/skills/agent-integration/SKILL.md"
-    relative_candidate = relative if workspace.is_absolute() and skill == workspace / relative else None
+    relative_candidate = (
+        relative if workspace.is_absolute() and skill.is_absolute() and skill.parts[-4:] == Path(relative).parts
+        and skill.parents[3].resolve(strict=False) == workspace.resolve(strict=False) else None
+    )
     for event in events:
         item = event.get("item")
         if (event.get("type") != "item.completed" or not isinstance(item, dict)

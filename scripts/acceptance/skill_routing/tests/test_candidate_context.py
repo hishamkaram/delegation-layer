@@ -156,8 +156,12 @@ class PreparedContextTests(unittest.TestCase):
             candidate.skill_paths(ambiguous)
 
     def test_clean_profile_personal_symlink_to_other_profile_cache_is_not_an_active_plugin(self):
-        profile = self.root / "clean-profile"
-        external = self.root / "other-profile/plugins/cache/market/plugin/0.7.0/skills/agent-integration/SKILL.md"
+        physical = self.root / "physical-parent"
+        physical.mkdir()
+        logical = self.root / "logical-parent"
+        logical.symlink_to(physical, target_is_directory=True)
+        profile = logical / "clean-profile"
+        external = logical / "other-profile/plugins/cache/market/plugin/0.7.0/skills/agent-integration/SKILL.md"
         external.parent.mkdir(parents=True)
         external.write_text("old personal skill target")
         personal = profile / "skills/agent-integration/SKILL.md"
@@ -177,7 +181,8 @@ class PreparedContextTests(unittest.TestCase):
         if not isinstance(disabled, list):
             raise AssertionError("prepared context did not record its disabled skill paths")
         self.assertIn(str(personal), disabled)
-        self.assertIn(str(external), disabled)
+        self.assertNotEqual(str(external), str(external.resolve()))
+        self.assertIn(str(external.resolve(strict=True)), disabled)
         self.assertFalse(any(argument.startswith("plugins.") for argument in prepared.arguments))
         self.assertEqual([argument for argument in prepared.arguments if argument.startswith("features.")], [
             "features.shell_snapshot=false", "features.shell_snapshot_v2=false",
@@ -281,6 +286,41 @@ class PreparedContextTests(unittest.TestCase):
         elsewhere = {**self.controls, "candidate_skill": str(self.root / "elsewhere" / relative)}
         with self.assertRaisesRegex(ValueError, "successful candidate skill read"):
             candidate.verify_run("codex", elsewhere, self.transcript, source_skill=self.source_skill, require_read=True)
+
+    def test_codex_relative_read_anchors_parent_aliases_without_accepting_other_workspaces(self):
+        physical = self.root / "physical-parent"
+        physical.mkdir()
+        logical = self.root / "logical-parent"
+        logical.symlink_to(physical, target_is_directory=True)
+        relative = ".agents/skills/agent-integration/SKILL.md"
+        skill = logical / "workspace" / relative
+        skill.parent.mkdir(parents=True)
+        skill.write_text(self.text)
+        controls = {**self.controls, "candidate_skill": str(skill)}
+        transcript = logical / "stdout.txt"
+        events = [self.codex_event(command="cat " + relative)]
+        transcript.write_text(json.dumps(events[0]) + "\n")
+        self.assertNotEqual(skill, skill.resolve())
+        self.assertTrue(candidate.verify_run("codex", controls, transcript, source_skill=self.source_skill,
+                                             require_read=True)["candidate_read"])
+        for candidate_skill, workspace in ((skill, physical / "workspace"), (skill.resolve(), logical / "workspace")):
+            with self.subTest(candidate_skill=candidate_skill, workspace=workspace):
+                self.assertTrue(candidate._codex_read(events, candidate_skill, self.text, workspace))
+        for changed in ({"command": "cat ./" + relative}, {"command": "cat ../" + relative},
+                        {"command": 'cat "$candidate"'}, {"command": "cd /other; cat " + relative},
+                        {"aggregated_output": self.text[:10]}, {"exit_code": 1}):
+            with self.subTest(changed=changed):
+                event = self.codex_event(**{"command": "cat " + relative, **changed})
+                transcript.write_text(json.dumps(event) + "\n")
+                with self.assertRaisesRegex(ValueError, "successful candidate skill read"):
+                    candidate.verify_run("codex", controls, transcript, source_skill=self.source_skill, require_read=True)
+        elsewhere = self.root / "distinct-workspace" / relative
+        elsewhere.parent.mkdir(parents=True)
+        elsewhere.write_text(self.text)
+        transcript.write_text(json.dumps(events[0]) + "\n")
+        with self.assertRaisesRegex(ValueError, "successful candidate skill read"):
+            candidate.verify_run("codex", {**controls, "candidate_skill": str(elsewhere)}, transcript,
+                                 source_skill=self.source_skill, require_read=True)
 
     def test_negative_case_may_avoid_read_but_still_requires_current_candidate_identity(self):
         self.write_events([])
