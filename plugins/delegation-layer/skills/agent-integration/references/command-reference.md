@@ -211,7 +211,8 @@ delegate teams default clear --cwd ABS [--project-root ABS] --json
   as the exclusive `--after` cursor, retaining the same project context.
 - Default commands always require project context. Set references a user Team
   or a Team in that project. Show reports `unset`, `resolved` or `stale`;
-  clear is idempotent. The preference never selects a Member automatically.
+  clear is idempotent. The CLI never selects a Member automatically; the allocating
+  lead may choose one under the procedure below.
 - List, show and default show are passive; they neither initialize/migrate/repair
   storage nor inspect provider readiness. A missing catalog lists as empty;
   unreadable/corrupt storage remains an error. Safe partial listings carry
@@ -237,11 +238,20 @@ failure is not permission to repeat it. Inspect the same target/default first.
 For a revision conflict, inspect the current revision; for uncertain storage
 or close errors, inspect durable state before deciding on another mutation.
 
+### Automatic Team discovery
+
+Read the [complete discovery and Member selection procedure](team-selection.md)
+before deciding whether to keep or assign substantive work.
+
 ### Using a Member
 
-The lead inspects list/show and optional project-default guidance, then passes
+After discovery or an explicit target request, the lead passes
 all three target flags on dispatch or schedule creation. Match a named provider
 through the existing provider catalog; preserve exact caller model/effort IDs.
+For a schedule, explain that the selected Member becomes its durable target:
+later project-default changes do not retarget it. Each occurrence still resolves
+that Member's latest defaults. This selection grants no recurring-work authority
+beyond the user's request; consequential ambiguity follows the discovery rule.
 Models are advisory, not an admission allowlist. Blocked optional discovery
 does not prevent registration of a valid supported definition.
 

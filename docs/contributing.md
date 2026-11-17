@@ -396,6 +396,46 @@ workflow. The private capacity scenario proves concurrent live owner leases and
 scopes, not merely queue depth. Its four dispatch callers are a load-generator
 setting, not a product limit or a 200-call burst guarantee.
 
+For a focused Team admission check, use the existing private CLI driver:
+
+```sh
+python3 -m scripts.acceptance.private_cli.cli \
+  --source-root "$PWD" --pueue "$PWD/bin/test-supervisor/pueue" \
+  --pueued "$PWD/bin/test-supervisor/pueued" \
+  --output "$PWD/bin/team-admission-receipt.json" \
+  --scenario teams --parallel-tasks 1 --dispatch-workers 1 --runtime-only
+```
+
+Choose a new output path for each invocation. This scenario owns an isolated
+catalog, registers a project Team, and checks real Member admission, saved
+defaults, workspace create/edit/command artifacts and native closure. Its Pi
+provider is a finite fixture; it does not prove a native model discovers Teams.
+The separate skill-routing cases capture that lead behavior, with only the
+fixture backend's catalog isolated from the lead's normal authentication.
+
+For native lead discovery, select the two `teams-composite-*` cases in
+`scripts.acceptance.skill_routing.cli`. They ask for ordinary coding/testing/review
+or research/planning work, without prescribing delegation. Inspect actual
+candidate loading and passive catalog calls before judging the allocation;
+retaining work locally is valid. The five role-specific cases separately cover
+requests to assign work. A routing attempt does not prove provider execution.
+
+`--prepared-context --routing-context` selects candidate skills only for that
+test invocation, keeps native authentication and writes no global configuration.
+Claude loads the candidate plugin; Codex requires a profile without conflicting
+installed integration plugins, then compares its native visible skill list before
+and after selecting the candidate. Unrelated skill changes or a conflicting plugin
+block with `prepared_skill_config_replaced`; prepare a dedicated native context
+instead of bypassing that check. These controls test the candidate
+guidance, not ordinary installation or hook trust. Native helpers and leads use
+an owned scratch directory, removed through the existing finalizer.
+Prepared Codex checks also disable login shells and shell snapshots and use an
+empty owned zsh startup directory to preserve the fixture CLI on `PATH`.
+This controls shell startup only for the fixture; it does not prove default-shell
+compatibility or change user shell files.
+The composite cases require both scoped discovery calls through the owned CLI
+shim; calls to another installation cannot satisfy the check.
+
 The nested-survival fixture runs each topology in a fresh owned root and stops
 on the first non-passing case. It uses three-minute leaders and ten-minute
 workers; queued admission does not start the worker's execution deadline.

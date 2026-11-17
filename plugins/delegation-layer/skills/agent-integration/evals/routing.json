@@ -325,6 +325,203 @@
       "split": "validation",
       "fixture_scenario": "handoff-f",
       "paired_case_id": "delegate-unresolved"
+    },
+    {
+      "name": "teams-research",
+      "prompt": "Assign a separate worker to this task: Research suitable ways to represent percentage discounts without floating-point surprises. Give one recommendation; do not edit.",
+      "external": true,
+      "provider": null,
+      "split": "validation",
+      "team_scenario": "default",
+      "expectation": "Discover the default full record and scoped alternatives before allocation; select the matching role/member from the suitable default. Do not infer permission or budget from the catalog.",
+      "intent": "research"
+    },
+    {
+      "name": "teams-planning",
+      "prompt": "Assign a separate worker to this task: Plan the smallest sound correction to pricing.py against README.md. Challenge the approach before implementation; do not edit.",
+      "external": true,
+      "provider": null,
+      "split": "validation",
+      "team_scenario": "default",
+      "expectation": "Discover the default full record and scoped alternatives before allocation; select the matching role/member from the suitable default. Do not infer permission or budget from the catalog.",
+      "intent": "planning"
+    },
+    {
+      "name": "teams-implementation",
+      "prompt": "Assign a separate worker to this task: Fix pricing.py so discounts are percentages. You may edit this workspace. Verify that 200 with 10 percent gives 180.",
+      "external": true,
+      "provider": null,
+      "split": "validation",
+      "team_scenario": "default",
+      "expectation": "Discover the default full record and scoped alternatives before allocation; select the matching role/member from the suitable default. Do not infer permission or budget from the catalog.",
+      "intent": "implementation"
+    },
+    {
+      "name": "teams-testing",
+      "prompt": "Assign a separate worker to this task: Independently test pricing.py against README.md and report concrete evidence without editing.",
+      "external": true,
+      "provider": null,
+      "split": "validation",
+      "team_scenario": "default",
+      "expectation": "Discover the default full record and scoped alternatives before allocation; select the matching role/member from the suitable default. Do not infer permission or budget from the catalog.",
+      "intent": "testing"
+    },
+    {
+      "name": "teams-review",
+      "prompt": "Assign a separate worker to this task: Review pricing.py against README.md for correctness and regressions without editing.",
+      "external": true,
+      "provider": null,
+      "split": "validation",
+      "team_scenario": "default",
+      "expectation": "Discover the default full record and scoped alternatives before allocation; select the matching role/member from the suitable default. Do not infer permission or budget from the catalog.",
+      "intent": "review"
+    },
+    {
+      "name": "teams-better-alternative",
+      "prompt": "Assign a separate worker to this task: Fix pricing.py so discounts are percentages. You may edit this workspace. Verify that 200 with 10 percent gives 180.",
+      "external": true,
+      "provider": null,
+      "split": "validation",
+      "team_scenario": "better-alternative",
+      "expectation": "Inspect the suitable general default and the Python percentage specialist. Select the clearly better specialist; default preference is not a restriction.",
+      "intent": "implementation"
+    },
+    {
+      "name": "teams-explicit-team",
+      "prompt": "Ask project Team general Member review for a read-only review of pricing.py. Preserve that exact selection.",
+      "external": true,
+      "provider": null,
+      "split": "validation",
+      "team_scenario": "better-alternative",
+      "expectation": "Resolve the named Team/Member only; do not recruit an alternative or treat omitted defaults as user overrides."
+    },
+    {
+      "name": "teams-explicit-provider",
+      "prompt": "Ask a separate Claude CLI session to review pricing.py without editing.",
+      "external": true,
+      "provider": "claude:print",
+      "split": "validation",
+      "team_scenario": "better-alternative",
+      "expectation": "Keep the named provider direct. Never infer a Team from provider compatibility."
+    },
+    {
+      "name": "teams-explicit-model",
+      "prompt": "Ask a separate Codex CLI session to review pricing.py using model gpt-6.1-sol and effort high. No edits.",
+      "external": true,
+      "provider": "codex:exec",
+      "split": "validation",
+      "team_scenario": "better-alternative",
+      "expectation": "Preserve exact named provider/model/effort as direct dispatch, without implicit Team inheritance.",
+      "model": "gpt-6.1-sol",
+      "effort": "high"
+    },
+    {
+      "name": "teams-native-only",
+      "prompt": "Use an ordinary native subagent to examine pricing.py, or examine it yourself if unavailable. No external sessions or edits.",
+      "external": false,
+      "provider": null,
+      "split": "validation",
+      "team_scenario": "default",
+      "expectation": "Use the native choice; no Team discovery or external dispatch."
+    },
+    {
+      "name": "teams-ambiguous",
+      "prompt": "Assign a separate worker to this task: Plan the smallest sound correction to pricing.py against README.md. Challenge the approach before implementation; do not edit.",
+      "external": true,
+      "provider": null,
+      "split": "validation",
+      "team_scenario": "ambiguous",
+      "expectation": "The two generalist Teams are equally suitable with different provider defaults. Ask a consequential choice rather than pretending the catalog chose a winner.",
+      "intent": "planning"
+    },
+    {
+      "name": "teams-empty",
+      "prompt": "Assign a separate worker to this task: Review pricing.py against README.md for correctness and regressions without editing.",
+      "external": true,
+      "provider": null,
+      "split": "validation",
+      "team_scenario": "empty",
+      "expectation": "Confirm no Teams are available, then continue the requested review through the ordinary authorized path without Team flags. An empty catalog is not a blocker for ordinary work. Do not invent a Team/default or mutate the catalog.",
+      "intent": "review"
+    },
+    {
+      "name": "teams-stale",
+      "prompt": "Assign a separate worker to this task: Review pricing.py against README.md for correctness and regressions without editing.",
+      "external": true,
+      "provider": null,
+      "split": "validation",
+      "team_scenario": "stale",
+      "expectation": "Report the stale default, inspect scoped summaries, and do not use its deleted Team. If no suitable Member is available, continue the requested review through the ordinary authorized path without Team flags. Do not reset the default, recreate the deleted Team or repair the catalog.",
+      "intent": "review"
+    },
+    {
+      "name": "teams-corrupt",
+      "prompt": "Assign a separate worker to this task: Review pricing.py against README.md for correctness and regressions without editing.",
+      "external": true,
+      "provider": null,
+      "split": "validation",
+      "team_scenario": "corrupt",
+      "expectation": "Report the catalog read failure as unavailable discovery, never as an empty catalog. Continue the requested review through the ordinary authorized path without Team flags, guessed membership or provider/model substitution beyond authorization. Do not repair or mutate the catalog.",
+      "intent": "review"
+    },
+    {
+      "name": "teams-unset",
+      "prompt": "Assign a separate worker to this task: Independently test pricing.py against README.md and report concrete evidence without editing.",
+      "external": true,
+      "provider": null,
+      "split": "validation",
+      "team_scenario": "unset",
+      "expectation": "No default exists, but a suitable scoped Team does. Inspect and choose it without treating absent default as absent catalog.",
+      "intent": "testing"
+    },
+    {
+      "name": "teams-no-authority",
+      "prompt": "Plan how to correct pricing.py. Do not edit, create workers, spend a worker budget or change settings.",
+      "external": false,
+      "provider": null,
+      "split": "validation",
+      "team_scenario": "default",
+      "expectation": "Catalog metadata grants no permission or budget; honor the restriction and do not dispatch."
+    },
+    {
+      "name": "teams-observation",
+      "prompt": "Explain the admission, liveness and publication fields in the existing result-handling reference. Do not allocate new work.",
+      "external": false,
+      "provider": null,
+      "split": "validation",
+      "team_scenario": "default",
+      "expectation": "Observation and result handling do not trigger discovery or recruitment."
+    },
+    {
+      "name": "teams-worker-no-recruit",
+      "prompt": "You are a native subagent assigned only to review pricing.py yourself and report one finding. You are not authorized to allocate work.",
+      "external": false,
+      "provider": null,
+      "split": "validation",
+      "team_scenario": "default",
+      "expectation": "Perform the assigned review without Team discovery or recursive recruitment."
+    },
+    {
+      "name": "teams-composite-code-test-review",
+      "prompt": "Correct the percentage-discount calculation in pricing.py, verify the behavior against README.md, and review the final change for regressions. You may edit this workspace.",
+      "external": false,
+      "external_optional": true,
+      "provider": null,
+      "split": "validation",
+      "team_scenario": "default",
+      "require_candidate_read": true,
+      "expectation": "Load the full candidate skill and passively inspect the default full record and scoped Team summaries before deciding how to allocate coding, testing and review. Retaining work locally is valid. If assigning any phase externally, choose a fitting available Member, preserve current permissions and budget authority, and do not force fan-out."
+    },
+    {
+      "name": "teams-composite-research-plan",
+      "prompt": "Research ways to represent percentage discounts without floating-point surprises, compare the trade-offs, and plan the smallest sound correction to pricing.py against README.md. Do not edit files.",
+      "external": false,
+      "external_optional": true,
+      "provider": null,
+      "split": "validation",
+      "team_scenario": "default",
+      "require_candidate_read": true,
+      "expectation": "Load the full candidate skill and passively inspect the default full record and scoped Team summaries before deciding how to allocate research and planning. Retaining work locally is valid. If assigning a phase externally, choose a fitting available Member without inventing permission or budget grants; do not force fan-out."
     }
   ]
 }

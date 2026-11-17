@@ -182,7 +182,9 @@ class UpgradeFixtureTests(unittest.TestCase):
             owner = Mock(client="/mock/pueue", daemon_path="/mock/pueued")
             owner.processes.environment = {}
             case = upgrade.cases()[0]
-            with patch.object(cli, "AttemptSupervisor", return_value=owner), \
+            with patch.object(cli.Path, "home", return_value=root), \
+                    patch.dict(cli.os.environ, {"CODEX_HOME": str(root / ".codex")}), \
+                    patch.object(cli, "AttemptSupervisor", return_value=owner), \
                     patch.object(cli, "capture_candidate_metadata", return_value={}), \
                     patch.object(cli, "verify_upgrade_controls", side_effect=RuntimeError("native boundary unavailable")), \
                     patch.object(cli.shutil, "which", return_value="/mock/tool"), \

@@ -37,6 +37,9 @@ fi
 
 prompt=$(/bin/cat)
 case "$prompt" in
+  *DELEGATE_TEAMS_WRITE:*)
+    exec __PYTHON_EXECUTABLE__ -c __TEAMS_PROGRAM__ "$prompt" "$lease_nonce" "$@"
+    ;;
   *DELEGATE_NESTED_SURVIVAL*)
     exec __PYTHON_EXECUTABLE__ -c __NESTED_PROGRAM__ "$prompt"
     ;;
@@ -138,5 +141,9 @@ def install_pi_fixture(install_dir, gate_file, waiter_directory, lease_nonce, *,
     nested_program = ("import sys; sys.path.insert(0, " + repr(repository)
                       + "); from scripts.acceptance.private_cli.nested.fixture import main; main(sys.argv[1])")
     script = script.replace("__NESTED_PROGRAM__", shlex.quote(nested_program))
+    teams_program = ("import sys; sys.path.insert(0, " + repr(repository)
+                     + "); from scripts.acceptance.private_cli.teams.fixture import main; "
+                     + "main(sys.argv[1], sys.argv[2], sys.argv[3:], emit_session=" + repr(emit_session) + ")")
+    script = script.replace("__TEAMS_PROGRAM__", shlex.quote(teams_program))
     pi.write_text(script)
     pi.chmod(0o700)

@@ -99,6 +99,11 @@ def _run_fixture(shutdown: _ShutdownState):
     fixture = None
     try:
         fixture = prepare_fixture(args, lease_nonce, legacy_mode, lifetime, response_directory, run_receipt)
+        if args.scenario == "teams":
+            from scripts.acceptance.private_cli.teams.scenario import run_teams_scenario
+            run_teams_scenario(lifetime, fixture, response_directory, run_receipt)
+            success = True
+            return
         if args.scenario == "nested-survival":
             from scripts.acceptance.private_cli.nested.workflow import run_nested_survival
             run_nested_survival(args, lifetime, fixture, response_directory, run_receipt)

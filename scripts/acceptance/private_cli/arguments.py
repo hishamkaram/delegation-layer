@@ -41,6 +41,7 @@ def parse_arguments():
             MODERN_CONTENTION_SCENARIO,
             "nested-survival",
             "nested-refused-leader",
+            "teams",
         ),
         default="capacity",
     )
@@ -93,6 +94,10 @@ def _validate_scenario_arguments(args, parser):
         if (args.parallel_tasks != MODERN_CONTENTION_TASK_COUNT
                 or args.upgraded_source_root is None):
             parser.error("modern-two-binary-contention requires two tasks and --upgraded-source-root")
+    elif args.scenario == "teams":
+        if (args.parallel_tasks != 1 or args.dispatch_workers != 1
+                or not args.runtime_only or args.upgraded_source_root is not None):
+            parser.error("teams requires one task, one dispatch worker, runtime-only and the current installation")
     elif args.scenario == DEFAULT_STOP_SCENARIO:
         if args.parallel_tasks != DEFAULT_STOP_TASK_COUNT:
             parser.error(

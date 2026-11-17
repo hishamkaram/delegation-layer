@@ -21,6 +21,12 @@ class RoutingFixture(unittest.TestCase):
         temporary = tempfile.TemporaryDirectory(prefix="routing shim ' Unicode-é-")
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name).resolve()
+        home = patch.object(gate.Path, "home", return_value=self.root)
+        home.start()
+        self.addCleanup(home.stop)
+        codex_home = patch.dict(os.environ, {"CODEX_HOME": str(self.root / ".codex")})
+        codex_home.start()
+        self.addCleanup(codex_home.stop)
         self.attempt_dir = self.root / "attempt"
         self.attempt_dir.mkdir()
         self.state = self.root / "state"
@@ -241,6 +247,10 @@ class RoutingRootShimTests(RoutingFixture):
         self.assertEqual(runtime["delegate"], str(self.candidate))
         self.assertNotIn("delegate_sha256", runtime)
         self.assertEqual(runtime["state_root"], str(self.state))
+        git = shutil.which("git", path=self.environment["PATH"])
+        if git is None:
+            self.fail("isolated fixture requires installed Git")
+        self.assertTrue((Path(runtime["path"]) / "git").samefile(git))
         self.assertEqual(self.environment["PATH"], path)
         self.assertEqual(self.environment["BASH_ENV"], bash_env)
         selected = shutil.which("delegate", path=path)

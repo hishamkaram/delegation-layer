@@ -1,10 +1,18 @@
-# Prefer Delegate for external collaboration
+# Discover Teams and route delegated work
 
 The Claude and Codex plugin supplies a short, provider-neutral routing rule
 through native session and subagent hooks. It asks the model to load the skill
-before selecting external tools. Startup, resume, clear, and compaction use the
-host's SessionStart event; SubagentStart supplies the same preference to native
-subagents. No shell interception or provider restriction is added.
+before deciding whether to keep or assign substantive work, even when the
+request names no Team or provider and the lead expects to do everything itself.
+The lead passively discovers configured Teams, then selects suitable Members
+for authorized research, planning, implementation, testing or review.
+The [discovery procedure](../skills/agent-integration/references/team-selection.md)
+defines default preference, explicit-choice precedence and incomplete results.
+Startup, resume, clear, and compaction use the host's SessionStart event;
+SubagentStart also tells native subagents not to discover or recruit unless
+their assignment authorizes work allocation. Hooks deliver context only: they
+do not read the catalog or launch work. No shell interception or provider
+restriction is added.
 
 Native subagents remain available. A separate external session uses Delegate,
 even when it has the same brand as the current harness. An explicit user choice
