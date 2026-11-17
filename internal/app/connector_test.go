@@ -1399,3 +1399,224 @@ func TestConnectorInspectionRejectsBrokenEnabledMutationAuthority(t *testing.T) 
 		t.Fatalf("inspection recreated required mutation lock: %v", err)
 	}
 }
+
+// Ordinary result reads share committed-evidence verification with the guarded
+// reader without requiring connector features or manufacturing a receipt.
+func TestOrdinaryResultReadPages(t *testing.T) {
+	store, directory, request := newAppTestTask(t, false)
+	answer := strings.Repeat("abcdefgh", 2200)
+	outcome := commitConnectorFixtureResult(t, &connectorFixture{task: directory}, answer)
+	descriptor := filepath.Join(t.TempDir(), "descriptor.json")
+	data, err := task.MarshalCanonical(outcome.Payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeAppTestFile(t, descriptor, data)
+	run := func(offset, limit string) (Response, int) {
+		t.Helper()
+		return ordinaryResultPublic(t, store.Root, request.TaskID, descriptor, "--offset", offset, "--limit", limit)
+	}
+	var combined []byte
+	for _, page := range []struct {
+		offset, limit string
+		start, end    int
+		eof           bool
+	}{
+		{"0", "8192", 0, 8192, false},
+		{"8192", "8192", 8192, 16384, false},
+		{"16384", "8192", 16384, len(answer), true},
+		{"17600", "8192", len(answer), len(answer), true},
+	} {
+		response, code := run(page.offset, page.limit)
+		if code != 0 || response.ResultRange == nil || response.Connector != nil || response.Publication != "committed" || response.Outcome == nil {
+			t.Fatalf("ordinary page code=%d response=%+v", code, response)
+		}
+		got := response.ResultRange
+		if string(got.Data) != answer[page.start:page.end] || got.NextOffset != int64(page.end) || got.EOF != page.eof || got.Descriptor != outcome.Payload {
+			t.Fatalf("incorrect page: %+v", got)
+		}
+		combined = append(combined, got.Data...)
+	}
+	if string(combined) != answer {
+		t.Fatal("paged payload does not reconstruct committed answer")
+	}
+}
+
+func TestOrdinaryResultReadRejectsDescriptorAndHiddenCorruption(t *testing.T) {
+	store, directory, request := newAppTestTask(t, false)
+	answer := "answer and hidden tail"
+	outcome := commitConnectorFixtureResult(t, &connectorFixture{task: directory}, answer)
+	descriptor := filepath.Join(t.TempDir(), "descriptor.json")
+	run := func() (Response, int) {
+		t.Helper()
+		return ordinaryResultPublic(t, store.Root, request.TaskID, descriptor, "--offset", "0", "--limit", "6")
+	}
+	wrong := outcome.Payload
+	wrong.SHA256 = strings.Repeat("0", 64)
+	data, err := task.MarshalCanonical(wrong)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeAppTestFile(t, descriptor, data)
+	response, code := run()
+	if code != 2 || response.ResultRange != nil || response.Connector != nil {
+		t.Fatalf("descriptor mismatch released bytes: code=%d response=%+v", code, response)
+	}
+	data, err = task.MarshalCanonical(outcome.Payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeAppTestFile(t, descriptor, data)
+	payload := []byte(answer)
+	payload[len(payload)-1] ^= 1
+	writeAppTestFile(t, filepath.Join(directory.Dir, outcome.Payload.Basename), payload)
+	response, code = run()
+	if code == 0 || response.ResultRange != nil || response.Connector != nil {
+		t.Fatalf("undisplayed corruption released bytes: code=%d response=%+v", code, response)
+	}
+}
+
+func ordinaryResultPublic(t *testing.T, root, id, descriptor string, options ...string) (Response, int) {
+	t.Helper()
+	args := []string{"result", "read", id, "--root", root, "--expected-descriptor", descriptor, "--json"}
+	args = append(args, options...)
+	var stdout, stderr bytes.Buffer
+	code := Run(args, &stdout, &stderr, Dependencies{Environment: []string{}})
+	var response Response
+	if err := json.Unmarshal(stdout.Bytes(), &response); err != nil {
+		t.Fatalf("result code=%d stdout=%q stderr=%q: %v", code, stdout.String(), stderr.String(), err)
+	}
+	return response, code
+}
+
+func TestOrdinaryResultReadRefusesMissingPendingAndGuardedTasks(t *testing.T) {
+	store, directory, request := newAppTestTask(t, false)
+	descriptor := filepath.Join(t.TempDir(), "descriptor.json")
+	writeAppTestFile(t, descriptor, []byte(`{"basename":"publish.answer","length":0,"sha256":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}`))
+	for _, id := range []string{request.TaskID, strings.Repeat("f", 32)} {
+		response, code := ordinaryResultPublic(t, store.Root, id, descriptor)
+		if code == 0 || response.ResultRange != nil || response.Connector != nil {
+			t.Fatalf("noncommitted result released bytes: code=%d response=%+v", code, response)
+		}
+	}
+	if _, err := directory.ReadSubmission(); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("passive result created submission: %v", err)
+	}
+	missingRoot := filepath.Join(t.TempDir(), "absent")
+	response, code := ordinaryResultPublic(t, missingRoot, request.TaskID, descriptor)
+	if code == 0 || response.ResultRange != nil {
+		t.Fatalf("missing root read succeeded: %+v", response)
+	}
+	if _, err := os.Lstat(missingRoot); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("result initialized root: %v", err)
+	}
+	guarded := newConnectorFixture(t)
+	outcome := commitConnectorFixtureResult(t, guarded, "guarded result")
+	data, err := task.MarshalCanonical(outcome.Payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeAppTestFile(t, descriptor, data)
+	response, code = ordinaryResultPublic(t, guarded.store.Root, guarded.request.TaskID, descriptor)
+	if code != 2 || response.ResultRange != nil || response.Connector != nil {
+		t.Fatalf("ordinary read downgraded connector: code=%d response=%+v", code, response)
+	}
+}
+
+func TestOrdinaryResultReadRejectsPartialGuardsAndInvalidRanges(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "absent")
+	for _, options := range [][]string{
+		{"--expected-root", "root"},
+		{"--expected-project", "project"},
+		{"--expected-origin", "origin.json"},
+		{"--expected-spec-sha256", strings.Repeat("a", 64)},
+		{"--expected-workspace", "workspace"},
+		{"--relative-project", "project"},
+		{"--offset", "-1"},
+		{"--limit", "0"},
+		{"--limit", "65537"},
+	} {
+		args := []string{"result", "read", strings.Repeat("a", 32), "--root", root, "--expected-descriptor", "missing-descriptor.json", "--json"}
+		args = append(args, options...)
+		var stdout, stderr bytes.Buffer
+		code := Run(args, &stdout, &stderr, Dependencies{Environment: []string{}})
+		if code != 2 || stdout.Len() != 0 || stderr.Len() == 0 {
+			t.Fatalf("invalid arguments accepted: %v code=%d stdout=%q stderr=%q", options, code, stdout.String(), stderr.String())
+		}
+	}
+	if _, err := os.Lstat(root); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("invalid read initialized root: %v", err)
+	}
+}
+
+func TestOrdinaryResultReadHonorsFiniteDeadline(t *testing.T) {
+	store, _, request := newAppTestTask(t, false)
+	input, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if closeErr := errors.Join(input.Close(), writer.Close()); closeErr != nil {
+			t.Error(closeErr)
+		}
+	})
+	args := Arguments{Command: "result", Root: store.Root, TaskID: request.TaskID, Connector: ConnectorArguments{Action: "read", DescriptorFile: "-", ResultLimit: 6, ControlTimeout: 20 * time.Millisecond}}
+	result := runCommandContext(t.Context(), args, Dependencies{Environment: []string{}, Input: input}.normalized())
+	if !errors.Is(result.err, context.DeadlineExceeded) || result.code == 0 || result.response.ResultRange != nil || result.response.Connector != nil || result.response.Failure != nil {
+		t.Fatalf("ordinary deadline lost or became connector failure: %+v error=%v", result.response, result.err)
+	}
+}
+
+func TestOrdinaryResultReadRefusesContextOnlySuccessor(t *testing.T) {
+	guarded := newPathConnectorFixture(t)
+	original, meta, err := guarded.task.PreparedRecords()
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := *original
+	request.TaskID, request.Origin = strings.Repeat("f", 32), nil
+	proposed := *meta
+	proposed.TaskID = request.TaskID
+	directory, err := guarded.store.CreateTaskContext(t.Context(), request.TaskID, &request, []byte("brief"), &proposed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if closeErr := directory.Close(); closeErr != nil {
+			t.Error(closeErr)
+		}
+	})
+	outcome := commitConnectorFixtureResult(t, &connectorFixture{task: directory}, "context-only result")
+	descriptor := filepath.Join(t.TempDir(), "descriptor.json")
+	data, err := task.MarshalCanonical(outcome.Payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeAppTestFile(t, descriptor, data)
+	response, code := ordinaryResultPublic(t, guarded.store.Root, request.TaskID, descriptor)
+	if code != 2 || response.ResultRange != nil || response.Connector != nil {
+		t.Fatalf("context-only task downgraded: code=%d response=%+v", code, response)
+	}
+}
+
+func TestOrdinaryResultReadRefusesRejectedPublication(t *testing.T) {
+	store, directory, request := newAppTestTask(t, false)
+	sealRejectedTurn(t, directory)
+	outcome, cleanupErr, err := directory.Collect(task.FixturePredicateRef())
+	if err = errors.Join(err, cleanupErr); err != nil {
+		t.Fatal(err)
+	}
+	if outcome == nil || outcome.Verdict != task.VerdictRejected {
+		t.Fatalf("fixture not rejected: %+v", outcome)
+	}
+	descriptor := filepath.Join(t.TempDir(), "descriptor.json")
+	data, err := task.MarshalCanonical(outcome.Payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeAppTestFile(t, descriptor, data)
+	response, code := ordinaryResultPublic(t, store.Root, request.TaskID, descriptor)
+	if code != 2 || response.ResultRange != nil || response.Connector != nil {
+		t.Fatalf("rejected result returned bytes: code=%d response=%+v", code, response)
+	}
+}

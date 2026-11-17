@@ -162,14 +162,14 @@ func TestOwnerServerOperationCapacityReservesStatusAndReturnsExactBusy(t *testin
 func TestOwnerServerIncompleteNativeFrameHasFiniteDeadline(t *testing.T) {
 	f := newOwnerServerFixture(t, &ownerServerTestHost{})
 	f.start()
-	connection := f.dial(t)
 	started := time.Now()
+	connection := f.dial(t)
 	var data [1]byte
 	if _, err := connection.Read(data[:]); !errors.Is(err, io.EOF) {
 		t.Fatalf("incomplete frame not closed within socket watchdog: %v", err)
 	}
-	if time.Since(started) < ownerFrameReadTimeout {
-		t.Fatal("frame budget expired before its fixed duration")
+	if elapsed := time.Since(started); elapsed < ownerFrameReadTimeout {
+		t.Fatalf("frame budget expired after %s, before its fixed duration %s", elapsed, ownerFrameReadTimeout)
 	}
 	if err := f.entry.validateResident(t.Context()); err != nil {
 		t.Fatalf("frame timeout closed resident: %v", err)

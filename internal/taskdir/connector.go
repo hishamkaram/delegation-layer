@@ -2434,6 +2434,16 @@ func connectorExecutionOptions(request task.TaskRecord) ConnectorExecutionOption
 // validators and cancellable streaming evidence checks, without an earlier
 // uncancellable whole-payload inspection. Payload bytes are verified by Range.
 func (r *ReadOnlyStore) ReadCommittedResultOutcomeContext(ctx context.Context, id string) (*task.OutcomeRecord, error) {
+	return r.readCommittedResultOutcomeContext(ctx, id, false)
+}
+
+// ReadOrdinaryCommittedResultOutcomeContext validates a committed ordinary task
+// without granting unguarded access to connector tasks or their successors.
+func (r *ReadOnlyStore) ReadOrdinaryCommittedResultOutcomeContext(ctx context.Context, id string) (*task.OutcomeRecord, error) {
+	return r.readCommittedResultOutcomeContext(ctx, id, true)
+}
+
+func (r *ReadOnlyStore) readCommittedResultOutcomeContext(ctx context.Context, id string, ordinaryOnly bool) (*task.OutcomeRecord, error) {
 	if err := r.checkReadContext(ctx); err != nil {
 		return nil, err
 	}
@@ -2441,9 +2451,12 @@ func (r *ReadOnlyStore) ReadCommittedResultOutcomeContext(ctx context.Context, i
 		return nil, err
 	}
 	td := &TaskDir{store: r.store, TaskID: id, Dir: filepath.Join(r.store.Root, "tasks", id)}
-	_, meta, spec, metaHash, err := td.loadAndValidatePreparedSetContext(ctx)
+	request, meta, spec, metaHash, err := td.loadAndValidatePreparedSetContext(ctx)
 	if err != nil {
 		return nil, err
+	}
+	if ordinaryOnly && (request.Origin != nil || request.ConnectorContext != nil) {
+		return nil, task.ErrRequestConflict
 	}
 	var outcome task.OutcomeRecord
 	if err = r.store.readRecordContext(ctx, filepath.Join(td.Dir, "outcome.json"), &outcome); err != nil {

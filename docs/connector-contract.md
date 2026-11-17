@@ -287,6 +287,11 @@ busy observation supplies no closure proof.
 
 ## Verified result ranges
 
+Ordinary local tasks also support [unguarded bounded reads](../skills/agent-integration/references/command-reference.md#result-read).
+That route refuses any task with connector origin or context, including
+context-only successors, with exit `2`; the guarded form and receipt below
+remain required for connector tasks.
+
 ```sh
 delegate result read TASK --expected-root ROOT_TOKEN --expected-project PROJECT_TOKEN \
   --expected-origin ORIGIN_JSON --expected-descriptor DESCRIPTOR_JSON \

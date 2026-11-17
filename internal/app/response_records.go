@@ -3,6 +3,7 @@ package app
 import (
 	"fmt"
 
+	"github.com/hishamkaram/delegation-layer/internal/resultread"
 	schedulercontract "github.com/hishamkaram/delegation-layer/internal/scheduler/contract"
 	"github.com/hishamkaram/delegation-layer/internal/supervisor"
 	"github.com/hishamkaram/delegation-layer/internal/supervisor/installation"
@@ -28,9 +29,10 @@ var ErrJSONResponseTooLarge = fmt.Errorf("%w: JSON response exceeds maximum perm
 
 // Response is the bounded public control response. Payload and sealed raw
 // output are described by immutable digests; live raw descriptors carry only
-// rooted paths and availability. Answer bytes are streamed by a future typed
-// result API rather than copied into an unbounded control object.
+// rooted paths and availability. ResultRange contains only a bounded page after
+// verification of the complete committed payload.
 type Response struct {
+	ResultRange            *resultread.Range              `json:"result_range,omitempty"`
 	Settlement             *SettlementResponse            `json:"settlement,omitempty"`
 	ExecutionAssurance     *ExecutionAssuranceObservation `json:"execution_assurance,omitempty"`
 	Connector              *ConnectorResponse             `json:"connector,omitempty"`

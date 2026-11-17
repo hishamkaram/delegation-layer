@@ -292,7 +292,9 @@ func passiveRemoteEnvelope(ctx context.Context, reader *taskdir.ReadOnlyStore, r
 
 func runCommandContext(ctx context.Context, a Arguments, deps Dependencies) (result commandResult) {
 	if usesConnectorControl(a) {
-		defer func() { scrubConnectorFailure(&result) }()
+		if a.Command != "result" || hasConnectorGuards(a.Connector) {
+			defer func() { scrubConnectorFailure(&result) }()
+		}
 		timeout := a.Connector.ControlTimeout
 		if timeout <= 0 {
 			return failed(newResponse(a.Command), errors.New("connector control timeout must be finite and positive"), 2)

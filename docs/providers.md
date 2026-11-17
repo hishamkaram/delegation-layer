@@ -60,6 +60,12 @@ A linked-worktree sandbox can deny Git staging/committing when metadata lives
 outside the checkout; managed capture can still record file changes. The Lead
 can explicitly authorize Git through `workspace exec`.
 
+A Codex lead can dispatch local Delegate workers through the same CLI after
+the user approves a native execution rule. Follow the
+[Codex lead setup](../skills/agent-integration/examples/codex-lead.md) for the
+absolute-path rule, its authority, and bounded result reads. Delegate does not
+install rules or change the lead's requested sandbox.
+
 ## Claude
 
 Setup: [official quickstart](https://code.claude.com/docs/en/quickstart).
