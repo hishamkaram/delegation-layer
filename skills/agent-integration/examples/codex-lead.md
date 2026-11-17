@@ -113,6 +113,8 @@ codex execpolicy check --rules /absolute/path/to/delegate.rules --resolve-host-e
   worker. Both read-only and workspace-write workers are supported. Shared
   workspace workers need disjoint write ownership assigned by the lead;
   [managed workspaces](../references/workspaces.md) remain optional isolation.
+- An external supervisor queue must allow the lead and its workers to run
+  concurrently; a one-slot queue leaves workers waiting behind the lead.
 - Apply [task creation](../references/result-handling.md#task-creation) before
   observing a returned task ID. Use finite passive `wait` and foreground
   `collect`, not shell polling loops. No automatic provider retry is added.
