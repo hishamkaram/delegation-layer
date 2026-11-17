@@ -26,6 +26,7 @@ import time
 
 from scripts import skill_eval_cases
 import scripts.acceptance.skill_routing.delegate_fixture as routing_fixture
+import scripts.acceptance.skill_routing.upgrade as upgrade_fixture
 
 
 
@@ -206,10 +207,13 @@ def verify_diagnosis_controls(owner, executable, workspace, *, ownership, model=
                 routing_delivery="inline-isolated", legacy_notify="disabled")
 
 
-def prepare_workspace(path, harness):
+def prepare_workspace(path, harness, *, include_upgrade=False):
     location = {"codex": ".agents", "claude": ".claude", "hermes": ".hermes"}[harness]
     shutil.copytree(SKILL, path / location / "skills/agent-integration",
                     ignore=shutil.ignore_patterns("evals"))
+    if include_upgrade:
+        shutil.copytree(REPO / "skills/delegate-upgrade", path / location / "skills/delegate-upgrade",
+                        ignore=shutil.ignore_patterns("evals"))
     (path / "pricing.py").write_text(
         "def discounted_price(price, percent):\n    return price - percent\n", encoding="utf-8")
     (path / "README.md").write_text(
@@ -553,6 +557,67 @@ def _prepare_routing_fixture(run, owner, case, delegate_bin, *, state_root, owne
     configuration.write_text(json.dumps(runtime), encoding="utf-8")
 
 
+
+def _prepare_upgrade_fixture(run, case, *, state_root):
+    configuration = run / "candidate-bin/runtime.json"
+    runtime = read_json(configuration)
+    fixture = run / "fixture"
+    write_json(fixture / "runtime.json", {"state_root": str(state_root), "source": "synthetic-upgrade-routing"})
+    write_json(fixture / "upgrade-state.json", upgrade_fixture.initial(case["upgrade_scenario"], str(state_root)))
+    executable = fixture / "upgrade-backend"
+    module = str(REPO / "scripts/acceptance/skill_routing/upgrade.py")
+    executable.write_text("#!" + sys.executable + "\nimport os, sys\n"
+                         "os.execv(" + repr(sys.executable) + ", [" + repr(sys.executable) + ", "
+                         + repr(module) + ", " + repr(str(fixture / "runtime.json")) + ", *sys.argv[1:]])\n", encoding="utf-8")
+    executable.chmod(0o700)
+    runtime["backend"] = str(executable)
+    configuration.write_text(json.dumps(runtime), encoding="utf-8")
+    # These fixture executables mediate procedure actions; native containment,
+    # not PATH selection, is the safety boundary if the actor bypasses them.
+    for name, action in (("brew", "install"), ("launchctl", "bootstrap"), ("systemctl", "bootstrap")):
+        broker = run / "candidate-bin" / name
+        broker.write_text("#!" + sys.executable + "\nimport os, sys\n"
+                          "os.execv(" + repr(sys.executable) + ", [" + repr(sys.executable) + ", "
+                          + repr(module) + ", " + repr(str(fixture / "runtime.json")) + ", '--root', "
+                          + repr(str(state_root)) + ", 'fixture-action', " + repr(action) + ", *sys.argv[1:]])\n", encoding="utf-8")
+        broker.chmod(0o700)
+
+
+UPGRADE_WRITE_PROBE = (
+    "import errno,json,pathlib,subprocess,sys\n"
+    "target=pathlib.Path(sys.argv[1])\n"
+    "try: target.write_text('forbidden')\n"
+    "except OSError as error:\n"
+    " if error.errno not in (errno.EACCES,errno.EPERM,errno.EROFS): raise\n"
+    "else: raise SystemExit('native sandbox permits outside writes')\n"
+    "result=subprocess.run(['/bin/sh','-c','printf forbidden > \"$1\"','probe',str(target)],capture_output=True)\n"
+    "if result.returncode==0 or target.exists(): raise SystemExit('absolute shell bypassed write boundary')\n"
+    "print(json.dumps({'outside_and_absolute_shell_writes':'denied'}))\n"
+)
+
+
+def verify_upgrade_controls(owner, executable, workspace, *, ownership, model=None):
+    """Model-free probes must pass before any upgrade actor can execute."""
+    proof = verify_network_boundary(owner, executable, ownership=ownership)
+    outside = Path(tempfile.mkdtemp(prefix=".delegate-upgrade-probe-", dir=Path.home()))
+    ownership.adopt_created("upgrade outside-write canary", outside, Path.home())
+    target = outside / "must-not-exist"
+    write_proof = owner.capture("upgrade-write-sandbox", [executable,
+        "-c", 'sandbox_mode="workspace-write"', "-c", "sandbox_workspace_write.network_access=false",
+        "sandbox", "--", sys.executable, "-c", UPGRADE_WRITE_PROBE, str(target)])
+    if read_json(write_proof) != {"outside_and_absolute_shell_writes": "denied"}:
+        raise RuntimeError("upgrade write sandbox canary failed")
+    arguments = upgrade_fixture.arguments(workspace, workspace.parent / "fixture")
+    omitted = {"--ignore-user-config", "--ignore-rules", "--add-dir", str(workspace.parent / "fixture")}
+    arguments = [argument for argument in arguments if argument not in omitted]
+    if model is not None:
+        arguments.extend(("-c", "model=" + json.dumps(model)))
+    context = owner.capture("upgrade-context", [executable, *arguments, "debug", "prompt-input"])
+    validated = upgrade_fixture.context_controls(read_json(context), workspace)
+    return dict(validated, network_and_ipc_connections="denied", outside_and_absolute_shell_writes="denied",
+                network_proof_sha256=digest(proof), write_proof_sha256=digest(write_proof),
+                context_sha256=digest(context), evidence_scope="native-controls-only")
+
 def _finalize_routing_attempt(run, owner, ownership, receipt) -> None:
     supervisor_closed = owner is None
     if owner is not None:
@@ -589,7 +654,8 @@ def _finalize_routing_attempt(run, owner, ownership, receipt) -> None:
         receipt.update(status="failed", reason="acceptance_artifact_cleanup_failed",
                        error_type=type(error).__name__)
     for name in ("stdout.txt", "stderr.txt", "fixture/agent-calls.jsonl", "fixture/calls.jsonl",
-                 "fixture/routing-events.jsonl", "fixture/routing-state.json"):
+                 "fixture/routing-events.jsonl", "fixture/routing-state.json",
+                 "fixture/upgrade-events.jsonl", "fixture/upgrade-state.json"):
         if (run / name).exists():
             receipt[name + "_sha256"] = digest(run / name)
     write_json(run / "receipt.json", receipt)
@@ -614,7 +680,13 @@ def run_case(*, output, harness, model, case, repetition, mode="live", budget=18
     try:
         workspace = run / "workspace"
         workspace = ownership.create("disposable workspace", workspace, run).directory
-        prepare_workspace(workspace, harness)
+        upgrade = "upgrade_scenario" in case
+        if upgrade and (harness != "codex" or mode != "routing"):
+            raise ValueError("upgrade selection/behavior requires verified Codex routing isolation")
+        if upgrade:
+            prepare_workspace(workspace, harness, include_upgrade=True)
+        else:
+            prepare_workspace(workspace, harness)
         diagnosis = "paired_case_id" in case
         if diagnosis and (harness != "codex" or mode != "routing" or not routing_context):
             raise ValueError("paired diagnosis requires Codex routing with candidate context")
@@ -626,10 +698,12 @@ def run_case(*, output, harness, model, case, repetition, mode="live", budget=18
         env.pop("DELEGATE_PUEUE_CONFIG", None)
         prompt = routing_prompt(case, state)
         (run / "prompt.txt").write_text(prompt, encoding="utf-8")
-        argv, stdin = command(harness, model, prompt, diagnosis=diagnosis)
+        argv, stdin = command(harness, model, prompt, diagnosis=diagnosis or upgrade)
         if diagnosis:
             argv += diagnosis_arguments(workspace, run / "fixture")
-        if routing_context and not diagnosis:
+        elif upgrade:
+            argv += upgrade_fixture.arguments(workspace, run / "fixture")
+        if routing_context and not diagnosis and not upgrade:
             argv += routing_hook_arguments(harness, workspace)
         receipt = {"case": case, "repetition": repetition, "harness": harness,
                    "model_requested": model, "argv": argv, "status": "unreviewed", "mode": mode,
@@ -666,10 +740,17 @@ def run_case(*, output, harness, model, case, repetition, mode="live", budget=18
         if not git:
             raise FileNotFoundError("git is required for disposable provider workspaces")
         owner.capture("git-init", [git, "init", "--quiet", str(workspace)])
-        if mode == "routing":
+        if upgrade:
+            _prepare_upgrade_fixture(run, case, state_root=state)
+        elif mode == "routing":
             _prepare_routing_fixture(run, owner, case, delegate_bin, state_root=state, ownership=ownership)
         receipt.update(capture_candidate_metadata(owner, delegate_bin))
-        if diagnosis:
+        if upgrade:
+            receipt["upgrade_controls"] = verify_upgrade_controls(
+                owner, executable, workspace, ownership=ownership, model=model)
+            receipt["upgrade_candidate"] = {name: candidate_digests(REPO / "skills" / name)
+                                            for name in upgrade_fixture.SKILLS}
+        elif diagnosis:
             receipt["diagnosis_controls"] = verify_diagnosis_controls(
                 owner, executable, workspace, ownership=ownership, model=model)
         receipt["supervisor_result"] = owner.execute(argv, stdin, budget)
@@ -717,7 +798,8 @@ def summarize(*, output, cases, repetitions, harness, mode="live", model=None, b
                             or not judgment["evidence"].strip()):
                         raise ValueError(f"invalid or stale judgment: {judgment_path}")
                     for name in ("stdout.txt", "stderr.txt", "fixture/agent-calls.jsonl", "fixture/calls.jsonl",
-                                 "fixture/routing-events.jsonl", "fixture/routing-state.json"):
+                                 "fixture/routing-events.jsonl", "fixture/routing-state.json",
+                                 "fixture/upgrade-events.jsonl", "fixture/upgrade-state.json"):
                         expected = receipt.get(name + "_sha256")
                         if expected is not None and digest(run / name) != expected:
                             raise ValueError(f"changed transcript: {run / name}")
@@ -744,6 +826,17 @@ def summarize(*, output, cases, repetitions, harness, mode="live", model=None, b
                             and ("fixture/routing-events.jsonl_sha256" not in receipt
                                  or "fixture/routing-state.json_sha256" not in receipt)):
                         raise ValueError(f"synthetic routing evidence was not observed: {run}")
+                    if "upgrade_scenario" in case and judgment["status"] == "passed":
+                        controls = receipt.get("upgrade_controls")
+                        expected = {name: candidate_digests(REPO / "skills" / name) for name in upgrade_fixture.SKILLS}
+                        if (receipt.get("upgrade_candidate") != expected or not isinstance(controls, dict)
+                                or controls.get("network_and_ipc_connections") != "denied"
+                                or controls.get("outside_and_absolute_shell_writes") != "denied"
+                                or controls.get("network_proof_sha256") != digest(run / "diagnosis-sandbox/stdout.txt")
+                                or controls.get("write_proof_sha256") != digest(run / "upgrade-write-sandbox/stdout.txt")
+                                or controls.get("context_sha256") != digest(run / "upgrade-context/stdout.txt")
+                                or "fixture/upgrade-state.json_sha256" not in receipt):
+                            raise ValueError(f"upgrade containment/fixture evidence was not verified: {run}")
                     row["status"] = judgment["status"]
             rows.append(row)
     status = "failed" if any(r["status"] == "failed" for r in rows) else (
@@ -756,6 +849,7 @@ def main():
     parser = argparse.ArgumentParser(prog='acceptance-skill-routing', description=__doc__)
     parser.add_argument("--harness", choices=("codex", "claude", "hermes"), required=True)
     parser.add_argument("--model")
+    parser.add_argument("--suite", choices=("delegation", "upgrade"), default="delegation")
     parser.add_argument("--delegate-bin", type=Path, default=REPO / "bin/delegate")
     parser.add_argument("--routing-context", action="store_true",
                         help="exercise candidate context hooks; Codex trust is vetted only for this invocation")
@@ -769,7 +863,9 @@ def main():
     args = parser.parse_args()
     if args.routing_context and args.harness == "hermes":
         parser.error("Hermes currently supports skill-only acceptance")
-    suite = read_json(CASES)["cases"]
+    if args.suite == "upgrade" and (args.harness != "codex" or args.mode != "routing" or args.routing_context):
+        parser.error("upgrade suite requires Codex routing without context hooks; other harness containment is unverified")
+    suite = upgrade_fixture.cases() if args.suite == "upgrade" else read_json(CASES)["cases"]
     paired_scenarios(suite)
     names = {c["name"] for c in suite}
     if args.repetitions < 1 or args.budget_seconds < 1 or set(args.case) - names:

@@ -32,5 +32,5 @@ func (inspectionCustodyEvidence) AuthorizeInspectionRemoval(ctx context.Context,
 }
 
 func privateCleanupOwnerWithReporter(report func(error)) *supervisorcore.Cleanup {
-	return supervisorcore.NewCleanup(inspectionCustodyEvidence{report: report}, workspaces.InspectPrivateOperation).WithDiagnosticReporter(report)
+	return supervisorcore.NewCleanup(inspectionCustodyEvidence{report: report}, workspaces.InspectPrivateOperation).WithDiagnosticReporter(report).WithWorkspaceRecovery(workspaces.RecoverPrivateOperation)
 }

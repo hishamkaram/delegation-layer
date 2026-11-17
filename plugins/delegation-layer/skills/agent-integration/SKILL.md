@@ -1,6 +1,6 @@
 ---
 name: agent-integration
-description: Use Delegate for work assigned to another agent, model, or separate harness CLI session. Load this before a provider-specific skill or plugin, including when a user names a CLI for research, implementation, tests, reviews, consultations, comparisons, or debates. Also manage optional Delegate Teams and explicit Member selection. A named destination still routes through Delegate. Ordinary same-harness subagents and questions about tools remain local; respect an explicit choice of another integration.
+description: Use Delegate for work assigned to another agent, model, or separate harness CLI session. Load this before a provider-specific skill or plugin, including when a user names a CLI for research, implementation, tests, reviews, consultations, comparisons, or debates. Also manage optional Delegate Teams and explicit Member selection. A named destination still routes through Delegate. Ordinary same-harness subagents and questions about tools remain local; respect an explicit choice of another integration. Also route Delegate installation upgrades and upgrade-related recovery.
 ---
 
 # Delegation Layer
@@ -29,6 +29,11 @@ and the independent [scheduler runtime](references/command-reference.md#schedule
 For a Codex lead that calls Delegate itself, use the
 [one-time native rule setup](examples/codex-lead.md). A sandbox denial is not
 authorization to change permissions or make the state root writable.
+
+For Delegate installation upgrades and upgrade-related recovery, use the
+`delegate-upgrade` skill. If only this skill is installed, read the bundled
+[upgrade workflow](references/delegate-upgrade.md). Ordinary delegation remains
+under this skill.
 
 ## Boundaries
 

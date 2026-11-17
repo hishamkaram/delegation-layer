@@ -358,7 +358,10 @@ reconciliation still verifies the exact old native identity before retrying.
 The caller-known original startup token precedes effects. Every transition
 requires the current native generation grant and actual bootstrap EX. Only a
 matching pending journal permits preparation-only records in the quiescence
-scan; it never turns preparation into admission or closure. The lock is released
+scan; it never turns preparation into admission or closure. Under that fence,
+explicit maintenance also visits canonical inspection and workspace journals
+missing from the current queue. Recovery uses each journal owner; an unexpired
+unstarted inspection waits for its recorded deadline. The lock is released
 before stopping/waiting for the original resident. A successor must consume its
 accepted outside context, preserve the full binding and register its own exact
 native birth/Wait before readiness. Observation expiry retains same-owner
@@ -424,6 +427,22 @@ engine, executable-content identity check or per-release task-history rewrite.
 If a crash leaves accepted Start without recorded birth, the handoff can remain
 fenced. Preserve its records and report the uncertainty; this protocol provides
 no forced reset that guesses whether a daemon launched.
+
+Inspection journals own historical worker-exit evidence and inspection
+maintenance dispositions. The journal distinguishes eligible cooperative
+permission from valid tracked work awaiting canonical recovery. Validated legacy
+worker observations can permit
+maintenance after the originating queue is gone. An eligible current-boot
+cooperative inspection can instead receive human-confirmed maintenance
+permission after exact current queue mapping and positive absence of recorded
+native identities. This permits neither admission nor row deletion.
+
+Only a validated dispatched-predecessor transition in the same upgrade operation
+can turn uncertain handover observation into `repeat_supervisor_ensure_owner`.
+Other identity, storage and observation faults still fail closed.
+A named control failure crosses the owner protocol only as validated diagnostic
+metadata. The owner retains the original error graph; the diagnostic grants no
+retry, admission or lifecycle authority.
 
 For an eligible same-boot cooperative task with an ended private queue row but
 missing closure proof, taskdir owns one immutable `operator-disposition.json`.

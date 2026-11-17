@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/hishamkaram/delegation-layer/internal/guardian"
 	"github.com/hishamkaram/delegation-layer/internal/inspection"
+	"github.com/hishamkaram/delegation-layer/internal/lifetime"
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
@@ -210,25 +212,26 @@ func candidateSets(candidates runtimeCandidates) (map[string]bool, map[string]bo
 }
 
 func inspectRuntimeCandidates(ctx context.Context, store *taskdir.Store, candidates runtimeCandidates, fenced bool, binding task.SupervisorRef, jobs []pueue.Job) error {
+	var resultErr error
 	for _, id := range candidates.tasks {
 		if err := inspectRuntimeTask(ctx, store, id, fenced, binding, jobs); err != nil {
-			return &RuntimeMaintenanceError{Kind: "task", ID: id, Cause: runtimeQuiescenceError(err)}
+			resultErr = joinRuntimeObservation(resultErr, &RuntimeMaintenanceError{Kind: "task", ID: id, Cause: runtimeQuiescenceError(err)})
 		}
 	}
 	observe := func(observation taskdir.ControlLifetimeObservation) error {
 		return inspectRuntimeAuxiliary(ctx, observation, fenced)
 	}
 	for _, id := range candidates.inspections {
-		if err := inspection.ObserveLifetimeContext(ctx, store, id, observe); err != nil {
-			return &RuntimeMaintenanceError{Kind: "inspection", ID: id, Cause: runtimeQuiescenceError(err)}
+		if err := inspectRuntimeInspection(ctx, store, id, fenced, binding, jobs); err != nil {
+			resultErr = joinRuntimeObservation(resultErr, &RuntimeMaintenanceError{Kind: "inspection", ID: id, Cause: runtimeQuiescenceError(err)})
 		}
 	}
 	for _, id := range candidates.workspaces {
 		if err := workspace.ObserveLifetimeContext(ctx, store, id, observe); err != nil {
-			return &RuntimeMaintenanceError{Kind: "workspace_operation", ID: id, Cause: runtimeQuiescenceError(err)}
+			resultErr = joinRuntimeObservation(resultErr, &RuntimeMaintenanceError{Kind: "workspace_operation", ID: id, Cause: runtimeQuiescenceError(err)})
 		}
 	}
-	return nil
+	return resultErr
 }
 
 func inspectRuntimeTask(ctx context.Context, store *taskdir.Store, id string, fenced bool, binding task.SupervisorRef, jobs []pueue.Job) error {
@@ -239,19 +242,12 @@ func inspectRuntimeTask(ctx context.Context, store *taskdir.Store, id string, fe
 	if observation.Proof != nil {
 		return nil
 	}
-	for _, job := range jobs {
-		if job.Label == nil || *job.Label != "delegate:"+store.RootID+":"+id || job.State != pueue.StateEnded {
-			continue
-		}
-		td, openErr := store.OpenTask(id)
-		if openErr != nil {
-			return errors.Join(task.ErrEvidenceFault, openErr)
-		}
-		allowed, dispositionErr := inspectTaskMaintenancePermission(ctx, store, td, binding, job)
-		dispositionErr = errors.Join(dispositionErr, td.Close())
-		if allowed || dispositionErr != nil {
-			return dispositionErr
-		}
+	allowed, permissionErr := inspectEndedTaskPermission(ctx, store, id, binding, jobs)
+	if allowed || permissionErr != nil {
+		return permissionErr
+	}
+	if err := inspectTaskAdmissionGuidance(ctx, store, id); err != nil {
+		return err
 	}
 	if fenced {
 		preparationOnly, readErr := store.ReadTaskPreparationOnlyContext(ctx, id)
@@ -296,4 +292,115 @@ func runtimeQuiescenceError(err error) error {
 		return errors.Join(ErrRuntimeQuiescenceBusy, err)
 	}
 	return err
+}
+
+// Prefer fault metadata over a busy sibling while retaining every cause.
+func joinRuntimeObservation(previous, current error) error {
+	if current == nil {
+		return previous
+	}
+	if !MaintenanceBusy(current) {
+		return errors.Join(current, previous)
+	}
+	return errors.Join(previous, current)
+}
+
+func inspectRuntimeInspection(ctx context.Context, store *taskdir.Store, id string, fenced bool, binding task.SupervisorRef, jobs []pueue.Job) error {
+	var saved task.SupervisorRef
+	var label string
+	var permissionNeeded bool
+	var queueValidated bool
+	observe := func(observation inspection.MaintenanceObservation) error {
+		required, err := inspectInspectionObservation(ctx, id, fenced, queueValidated, observation)
+		if required {
+			saved, label, permissionNeeded = observation.Supervisor, observation.Label, true
+		}
+		return err
+	}
+	err := inspection.ObserveMaintenanceContext(ctx, store, id, inspection.MaintenanceQueue{}, lifetime.NativeObservation{}, observe)
+	if err != nil || !permissionNeeded {
+		return err
+	}
+	queue, err := ObserveInspectionMaintenanceQueue(ctx, store, saved, binding, label, jobs)
+	if err != nil {
+		return err
+	}
+	queueValidated = true
+	return inspection.ObserveMaintenanceContext(ctx, store, id, queue, lifetime.NativeObservation{}, observe)
+}
+
+func auxiliaryMaintenancePending(kind, id, reason, action string) error {
+	assessment := MaintenanceAssessment{Readiness: "blocked", ActiveWork: "none", FirstBlocker: &MaintenanceBlocker{Kind: kind, OperationID: id, ReasonCode: reason, NextAction: action}}
+	return &MaintenanceError{Assessment: assessment, Cause: ErrRuntimeQuiescenceBusy}
+}
+
+func inspectTaskAdmissionGuidance(ctx context.Context, store *taskdir.Store, id string) error {
+	td, openErr := store.OpenTask(id)
+	if openErr != nil {
+		return openErr
+	}
+	admissionOnly, admissionErr := td.ReadAdmissionOnlyContext(ctx)
+	admissionErr = errors.Join(admissionErr, td.Close())
+	if admissionErr != nil {
+		return admissionErr
+	}
+	if admissionOnly {
+		assessment := MaintenanceAssessment{Readiness: "blocked", ActiveWork: "none", FirstBlocker: &MaintenanceBlocker{Kind: "task", TaskID: id, ReasonCode: "admission_only_unlaunched", NextAction: "cancel_task"}}
+		return &MaintenanceError{Assessment: assessment, Cause: ErrRuntimeQuiescenceBusy}
+	}
+	return nil
+}
+
+func inspectInspectionObservation(ctx context.Context, id string, fenced, queueValidated bool, observation inspection.MaintenanceObservation) (bool, error) {
+	if observation.HistoricalExit || observation.Permission {
+		return false, nil
+	}
+	err := inspectRuntimeAuxiliary(ctx, observation.Lifetime, false)
+	if err == nil || !errors.Is(err, guardian.ErrProofPending) {
+		return false, err
+	}
+	if observation.RecoveryPending {
+		return false, err
+	}
+	if observation.Disposition != nil {
+		if queueValidated {
+			return false, task.ErrEvidenceFault
+		}
+		return true, nil
+	}
+	if observation.Lifetime.PreparationOnly {
+		if !fenced {
+			return false, err
+		}
+		reason, action := "recovery_required", "run_supervisor_ensure_owner"
+		if time.Now().Before(observation.Deadline) {
+			reason, action = "awaiting_deadline", "wait_for_legacy_work"
+		}
+		return false, auxiliaryMaintenancePending("inspection", id, reason, action)
+	}
+	if observation.SettlementEligible {
+		if !queueValidated {
+			return true, nil
+		}
+		return false, auxiliaryMaintenancePending("inspection", id, "inspection_closure_unproven", "settle_inspection")
+	}
+	return false, &task.ControlFactError{ResourceKind: "inspection", ResourceID: id, FactKind: "evidence", Name: "worker-observation.json", ReasonCode: "inspection_exit_unobservable", NextAction: "human_review_operation", Cause: task.ErrEvidenceFault}
+}
+
+func inspectEndedTaskPermission(ctx context.Context, store *taskdir.Store, id string, binding task.SupervisorRef, jobs []pueue.Job) (bool, error) {
+	for _, job := range jobs {
+		if job.Label == nil || *job.Label != "delegate:"+store.RootID+":"+id || job.State != pueue.StateEnded {
+			continue
+		}
+		td, openErr := store.OpenTask(id)
+		if openErr != nil {
+			return false, errors.Join(task.ErrEvidenceFault, openErr)
+		}
+		allowed, dispositionErr := inspectTaskMaintenancePermission(ctx, store, td, binding, job)
+		dispositionErr = errors.Join(dispositionErr, td.Close())
+		if allowed || dispositionErr != nil {
+			return allowed, dispositionErr
+		}
+	}
+	return false, nil
 }

@@ -3,7 +3,10 @@ package infrastructure
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/hishamkaram/delegation-layer/internal/task"
 )
@@ -154,11 +157,76 @@ const (
 // UpgradeOutcome is a verified observation independent of transport cleanup.
 // Zero means no verified reply. Status carries only capability/preflight facts.
 type UpgradeOutcome struct {
-	Condition   UpgradeCondition `json:"condition"`
-	Preflight   UpgradePreflight `json:"preflight"`
-	Report      UpgradeReport    `json:"report,omitzero"`
-	Disposition Disposition      `json:"disposition,omitzero"`
-	ReasonCode  string           `json:"reason_code,omitempty"`
+	Condition   UpgradeCondition   `json:"condition"`
+	Preflight   UpgradePreflight   `json:"preflight"`
+	Report      UpgradeReport      `json:"report,omitzero"`
+	Disposition Disposition        `json:"disposition,omitzero"`
+	ReasonCode  string             `json:"reason_code,omitempty"`
+	FailureFact UpgradeFailureFact `json:"failure_fact,omitzero"`
+}
+
+// UpgradeFailureFact is a diagnostic projection of the hook owner's named
+// error. The original error graph remains with that owner. This value grants
+// no mutation, retry, admission or lifecycle authority.
+type UpgradeFailureFact struct {
+	ResourceKind string `json:"resource_kind"`
+	ResourceID   string `json:"resource_id"`
+	FactKind     string `json:"fact_kind"`
+	Name         string `json:"name"`
+	ReasonCode   string `json:"reason_code"`
+	NextAction   string `json:"next_action"`
+}
+
+func (f UpgradeFailureFact) Validate() error {
+	if f == (UpgradeFailureFact{}) {
+		return nil
+	}
+	if !validUpgradeReason(f.ReasonCode) || !validUpgradeReason(f.NextAction) {
+		return ErrIdentity
+	}
+	if err := f.validateResource(); err != nil {
+		return err
+	}
+	return f.validateName()
+}
+
+func (f UpgradeFailureFact) validateResource() error {
+	switch f.ResourceKind {
+	case "root":
+		return task.ValidateRootID(f.ResourceID)
+	case "task", "inspection", "workspace_operation":
+		if task.ValidateTaskID(f.ResourceID) != nil {
+			return ErrIdentity
+		}
+	case "supervisor":
+		switch f.ResourceID {
+		case "recorded_client", "recorded_daemon", "selected_client", "selected_daemon":
+		default:
+			return ErrIdentity
+		}
+	default:
+		return ErrIdentity
+	}
+	return nil
+}
+
+func (f UpgradeFailureFact) validateName() error {
+	if f.Name == "" || len(f.Name) > 4096 || !utf8.ValidString(f.Name) || strings.IndexFunc(f.Name, unicode.IsControl) >= 0 {
+		return ErrIdentity
+	}
+	switch f.FactKind {
+	case "executable":
+		if f.ResourceKind != "supervisor" || !filepath.IsAbs(f.Name) || filepath.Clean(f.Name) != f.Name {
+			return ErrIdentity
+		}
+	case "evidence", "evidence_record", "evidence_file":
+		if len(f.Name) > 256 || !filepath.IsLocal(f.Name) {
+			return ErrIdentity
+		}
+	default:
+		return ErrIdentity
+	}
+	return nil
 }
 
 func (o UpgradeOutcome) Validate() error {
@@ -187,7 +255,14 @@ func (o UpgradeOutcome) Validate() error {
 	if o.ReasonCode != "" && !validUpgradeReason(o.ReasonCode) {
 		return ErrIdentity
 	}
-	return nil
+	return o.validateFailureFact()
+}
+
+func (o UpgradeOutcome) validateFailureFact() error {
+	if o.FailureFact != (UpgradeFailureFact{}) && (o.Condition != UpgradeFault || o.Preflight.State != UpgradePreflightPassed) {
+		return ErrIdentity
+	}
+	return o.FailureFact.Validate()
 }
 
 func validUpgradeReason(value string) bool {

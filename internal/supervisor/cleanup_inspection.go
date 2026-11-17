@@ -46,7 +46,7 @@ func (c *Cleanup) inspectEndedJob(ctx context.Context, store *taskdir.Store, leg
 		return nil
 	}
 	if inspectionWorker {
-		return c.inspectEndedInspection(ctx, store, legacy, taskID, job, validated)
+		return c.inspectEndedInspection(ctx, store, legacy, taskID, job, requirement, validated)
 	}
 	return inspectLegacyEndedTask(ctx, store, legacy, taskID, job, requirement)
 }
@@ -129,7 +129,7 @@ func recordLegacyEndedInspectionExit(ctx context.Context, operation *inspection.
 	return nil
 }
 
-func (c *Cleanup) inspectEndedInspection(ctx context.Context, store *taskdir.Store, legacy inspection.GroupRequestRecord, taskID string, job pueue.Job, validated func(context.Context, *inspection.Operation) error) (resultErr error) {
+func (c *Cleanup) inspectEndedInspection(ctx context.Context, store *taskdir.Store, legacy inspection.GroupRequestRecord, taskID string, job pueue.Job, requirement endedTaskRequirement, validated func(context.Context, *inspection.Operation) error) (resultErr error) {
 	if err := validateLegacyEndedInspectionJob(taskID, job); err != nil {
 		return err
 	}
@@ -143,6 +143,11 @@ func (c *Cleanup) inspectEndedInspection(ctx context.Context, store *taskdir.Sto
 	defer func() { resultErr = errors.Join(resultErr, operation.Close()) }()
 	if err := validateLegacyEndedInspectionBinding(ctx, store, legacy, operation, taskID, job); err != nil {
 		return err
+	}
+	if requirement == endedTaskClosedForMigration {
+		// Maintenance eligibility is intentionally separate from deletion's
+		// publication, native closure and custody requirements below.
+		return inspectRuntimeInspection(ctx, store, taskID, false, legacy.Supervisor, []pueue.Job{job})
 	}
 	if err := c.inspection.ValidateLifetime(ctx, operation, taskID, job); err != nil {
 		return err

@@ -71,6 +71,21 @@ func combineMaintenance(assessment MaintenanceAssessment, queueErr, rootErr erro
 }
 
 func runtimeMaintenanceBlocker(cause error, busy bool) *MaintenanceBlocker {
+	var classified *MaintenanceError
+	if busy && errors.As(cause, &classified) && classified.Assessment.FirstBlocker != nil {
+		copy := *classified.Assessment.FirstBlocker
+		return &copy
+	}
+	var fact *task.ControlFactError
+	if errors.As(cause, &fact) && task.AllErrorCauses(cause, func(err error) bool { return errors.Is(err, task.ErrEvidenceFault) }) {
+		blocker := &MaintenanceBlocker{Kind: fact.ResourceKind, ReasonCode: fact.ReasonCode, NextAction: fact.NextAction}
+		if fact.ResourceKind == "task" {
+			blocker.TaskID = fact.ResourceID
+		} else {
+			blocker.OperationID = fact.ResourceID
+		}
+		return blocker
+	}
 	blocker := &MaintenanceBlocker{Kind: "observation", ReasonCode: "runtime_evidence_unreadable", NextAction: "stop_and_report"}
 	var resource *RuntimeMaintenanceError
 	if errors.As(cause, &resource) {
@@ -80,6 +95,10 @@ func runtimeMaintenanceBlocker(cause error, busy bool) *MaintenanceBlocker {
 		} else {
 			blocker.OperationID = resource.ID
 		}
+	}
+	if busy && errors.Is(cause, task.ErrLockBusy) {
+		blocker.ReasonCode, blocker.NextAction = "owner_busy", "wait_for_legacy_work"
+		return blocker
 	}
 	if busy {
 		blocker.ReasonCode = "runtime_closure_unproven"
@@ -259,9 +278,9 @@ func MaintenanceBusy(err error) bool {
 	if errors.As(err, &diagnostic) && diagnostic.Assessment.Readiness == "unknown" {
 		return false
 	}
-	marker := errors.Is(err, pueue.ErrPrivateSupervisorMigrationBusy) || errors.Is(err, inspection.ErrGroupMigrationBusy) || errors.Is(err, ErrRuntimeQuiescenceBusy) || errors.Is(err, guardian.ErrProofPending)
+	marker := errors.Is(err, pueue.ErrPrivateSupervisorMigrationBusy) || errors.Is(err, inspection.ErrGroupMigrationBusy) || errors.Is(err, ErrRuntimeQuiescenceBusy) || errors.Is(err, guardian.ErrProofPending) || errors.Is(err, task.ErrLockBusy)
 	return marker && !taskdir.CleanupFault(err) && task.AllErrorCauses(err, func(cause error) bool {
-		return errors.Is(cause, pueue.ErrPrivateSupervisorMigrationBusy) || errors.Is(cause, inspection.ErrGroupMigrationBusy) || errors.Is(cause, ErrRuntimeQuiescenceBusy) || errors.Is(cause, guardian.ErrProofPending) || errors.Is(cause, pueue.ErrPrivateSupervisorMigrationRequired) || errors.Is(cause, inspection.ErrGroupMigrationRequired)
+		return errors.Is(cause, pueue.ErrPrivateSupervisorMigrationBusy) || errors.Is(cause, inspection.ErrGroupMigrationBusy) || errors.Is(cause, ErrRuntimeQuiescenceBusy) || errors.Is(cause, guardian.ErrProofPending) || errors.Is(cause, task.ErrLockBusy) || errors.Is(cause, pueue.ErrPrivateSupervisorMigrationRequired) || errors.Is(cause, inspection.ErrGroupMigrationRequired)
 	})
 }
 

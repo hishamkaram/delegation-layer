@@ -79,6 +79,23 @@ if [ -n "$path_delegate" ] && valid_delegate "$path_delegate"; then
   exit 0
 fi
 
+# An existing broken selection is an upgrade subject, not a fresh install.
+if [ -n "$path_delegate" ]; then
+  fail "installation_missing: selected delegate is unusable at $path_delegate; preserve the installation and use delegate-upgrade recovery from a working CLI"
+fi
+remaining_path="${PATH:-}"
+while :; do
+  case "$remaining_path" in
+    *:*) path_directory="${remaining_path%%:*}"; remaining_path="${remaining_path#*:}"; more_path=true ;;
+    *) path_directory="$remaining_path"; more_path=false ;;
+  esac
+  [ -n "$path_directory" ] || path_directory=.
+  if [ -L "$path_directory/delegate" ] && [ ! -e "$path_directory/delegate" ]; then
+    fail "installation_missing: dangling delegate selection at $path_directory/delegate; repair the selected installation through its original installer and resume its upgrade operation"
+  fi
+  [ "$more_path" = true ] || break
+done
+
 existing_install_dir="${DELEGATION_LAYER_INSTALL_DIR:-$HOME/.local/bin}"
 existing_delegate="$existing_install_dir/delegate"
 if valid_delegate "$existing_delegate"; then

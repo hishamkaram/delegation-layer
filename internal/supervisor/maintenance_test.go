@@ -9,6 +9,8 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/guardian"
 	"github.com/hishamkaram/delegation-layer/internal/inspection"
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
+	"github.com/hishamkaram/delegation-layer/internal/task"
+	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 )
 
 func TestMaintenanceEvidenceFaultKeepsQueueOnlyActivity(t *testing.T) {
@@ -51,5 +53,17 @@ func TestMaintenanceInterruptedScanRetainsEarlierFault(t *testing.T) {
 	got, err := interruptedMaintenance(context.Canceled, []maintenanceFact{{job: pueue.Job{ID: 7, State: pueue.StateEnded}, err: os.ErrPermission}}, []pueue.Job{{ID: 7, State: pueue.StateEnded}})
 	if got.Readiness != "unknown" || got.ActiveWork != "none" || !errors.Is(err, os.ErrPermission) || !errors.Is(err, context.Canceled) {
 		t.Fatalf("interruption lost fault: %+v %v", got, err)
+	}
+}
+
+func TestMaintenanceOwnerContentionCannotHideHardFaults(t *testing.T) {
+	for _, fault := range []error{nil, os.ErrPermission, os.ErrNotExist, task.ErrIdentityMismatch, context.Canceled, context.DeadlineExceeded, &taskdir.LifetimeOwnerCleanupError{}} {
+		cause := errors.Join(ErrRuntimeQuiescenceBusy, task.ErrLockBusy, fault)
+		if busy := MaintenanceBusy(cause); busy != (fault == nil) {
+			t.Fatalf("owner contention classification busy=%t with fault %v", busy, fault)
+		}
+	}
+	if !MaintenanceBusy(task.ErrLockBusy) {
+		t.Fatal("pure owner contention was not classified as busy")
 	}
 }

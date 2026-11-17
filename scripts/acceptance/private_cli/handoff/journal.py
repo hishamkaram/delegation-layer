@@ -66,7 +66,7 @@ def _require_expected_maintenance(control, external_task_id: str, private_task_i
     require(isinstance(blocker, dict), "handoff maintenance blocker is missing")
     expected_blocker = {
         "kind": "task", "task_id": external_task_id,
-        "reason_code": "runtime_closure_unproven", "next_action": "human_review_task",
+        "reason_code": "owner_busy", "next_action": "wait_for_legacy_work",
     }
     activity = "none"
     if private_task_id is not None:

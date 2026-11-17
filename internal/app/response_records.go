@@ -31,7 +31,17 @@ var ErrJSONResponseTooLarge = fmt.Errorf("%w: JSON response exceeds maximum perm
 // output are described by immutable digests; live raw descriptors carry only
 // rooted paths and availability. ResultRange contains only a bounded page after
 // verification of the complete committed payload.
+type ControlFactResponse struct {
+	ResourceKind string `json:"resource_kind"`
+	ResourceID   string `json:"resource_id,omitempty"`
+	FactKind     string `json:"fact_kind"`
+	Name         string `json:"name"`
+	ReasonCode   string `json:"reason_code"`
+	NextAction   string `json:"next_action"`
+}
+
 type Response struct {
+	ControlFact            *ControlFactResponse           `json:"control_fact,omitempty"`
 	ResultRange            *resultread.Range              `json:"result_range,omitempty"`
 	Settlement             *SettlementResponse            `json:"settlement,omitempty"`
 	ExecutionAssurance     *ExecutionAssuranceObservation `json:"execution_assurance,omitempty"`

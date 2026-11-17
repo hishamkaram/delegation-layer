@@ -74,7 +74,7 @@ func TestObservePublishedPairConfigDriftRequiresCleanProof(t *testing.T) {
 				t.Fatal(err)
 			}
 		}},
-		{name: "non-executable daemon", causes: []error{ErrBinding, ErrConfiguration}, detail: "executable must be an executable regular file", inject: func(t *testing.T, published task.SupervisorRef, _ []byte) {
+		{name: "non-executable daemon", causes: []error{ErrBinding, ErrConfiguration}, daemonFact: true, inject: func(t *testing.T, published task.SupervisorRef, _ []byte) {
 			if err := os.Chmod(published.DaemonExecutable, 0o600); err != nil {
 				t.Fatal(err)
 			}
@@ -102,6 +102,9 @@ func TestObservePublishedPairConfigDriftRequiresCleanProof(t *testing.T) {
 			before := snapshotPublishedPairRecords(t, fixture.stateRoot)
 			availability, err := observePublishedTestPairContext(t, fixture.stateRoot, derive)
 			testCase.assertObserved(t, availability, err)
+			if testCase.daemonFact {
+				assertConfigDriftDaemonFact(t, original, err)
+			}
 			before.assertUnchanged(t, fixture.stateRoot)
 		})
 	}
@@ -115,8 +118,20 @@ type configDriftCase struct {
 	cause error
 	// causes are the canonical reader's own sentinels beside the projection;
 	// detail is its wrapping text where a sentinel alone is shared.
-	causes []error
-	detail string
+	causes     []error
+	detail     string
+	daemonFact bool
+}
+
+func assertConfigDriftDaemonFact(t *testing.T, published task.SupervisorRef, cause error) {
+	t.Helper()
+	var fact *task.ControlFactError
+	if !errors.As(cause, &fact) || fact.ResourceKind != "supervisor" || fact.ResourceID != "recorded_daemon" || fact.FactKind != "executable" || fact.Name != published.DaemonExecutable || fact.ReasonCode != "installation_unusable" {
+		t.Fatalf("non-executable daemon lost its named metadata fact: %v", cause)
+	}
+	if !errors.Is(fact.Cause, ErrConfiguration) || !strings.Contains(fact.Cause.Error(), "executable must be an executable regular file") {
+		t.Fatal("named daemon fact lost the original executable validation cause")
+	}
 }
 
 // assertObserved requires a clean drift to be the fact with no error, and a

@@ -104,11 +104,11 @@ class PrivateDispatchArgumentsTests(unittest.TestCase):
             "command": "supervisor", "root_id": root_id,
             "supervisor_control": {
                 "action": "status", "state": "migrated",
-                "migration_phase": "complete", "next_action": "human_review_task",
+                "migration_phase": "complete", "next_action": "wait_for_legacy_work",
                 "migration_readiness": "blocked", "active_work": "none",
                 "first_blocker": {
                     "kind": "task", "task_id": self.external_task_id,
-                    "reason_code": "runtime_closure_unproven", "next_action": "human_review_task",
+                    "reason_code": "owner_busy", "next_action": "wait_for_legacy_work",
                 },
             },
         }
@@ -167,6 +167,25 @@ class PrivateDispatchArgumentsTests(unittest.TestCase):
                 )
                 self.assertEqual(evidence["canonical_status"], observed["supervisor_control"])
 
+    def test_live_external_owner_rejects_old_generic_closure_reason_and_wrong_actions(self):
+        private_config, status = self.handoff_journal()
+        for reason, action in (
+                ("runtime_closure_unproven", "human_review_task"),
+                ("runtime_closure_unproven", "wait_for_legacy_work"),
+                ("owner_busy", "human_review_task"),
+                ("owner_busy", "cancel_task"),
+                ("owner_busy", "stop_and_report")):
+            observed = deepcopy(status)
+            observed["supervisor_control"]["next_action"] = action
+            observed["supervisor_control"]["first_blocker"].update(reason_code=reason, next_action=action)
+            before = deepcopy(observed)
+            with self.subTest(reason=reason, action=action), self.assertRaisesRegex(RuntimeError, "handoff maintenance"):
+                private_cli_handoff_journal.read_external_inspection_handoff_journal(
+                    self.root, private_config, supervisor_status=observed,
+                    expected_external_task_id=self.external_task_id,
+                )
+            self.assertEqual(observed, before)
+
     def test_handoff_journal_rejects_wrong_or_missing_maintenance_projection(self):
         private_config, status = self.handoff_journal()
         for private in (False, True):
@@ -190,8 +209,7 @@ class PrivateDispatchArgumentsTests(unittest.TestCase):
                 "task_id": ("d" * 32, self.external_task_id if private else self.private_task_id, None, []),
                 "reason_code": (None, "maintenance_evidence_fault", "runtime_evidence_unreadable",
                                 "runtime_closure_unproven" if private else "queue_work_present"),
-                "next_action": (None, "none", "stop_and_report",
-                                "human_review_task" if private else "wait_for_legacy_work"),
+                "next_action": (None, "none", "stop_and_report", "human_review_task"),
             }.items():
                 for value in values:
                     changed = deepcopy(valid)

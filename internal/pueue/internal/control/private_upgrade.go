@@ -467,9 +467,9 @@ func privateUpgradePairMissing(pair privateUpgradePair) (bool, error) {
 }
 
 func validatePrivateUpgradePair(pair privateUpgradePair) error {
-	for _, path := range []string{pair.ClientExecutable, pair.DaemonExecutable} {
-		canonical, err := canonicalExecutable(path)
-		if err != nil || canonical != path {
+	for _, selected := range []struct{ role, path string }{{"selected_client", pair.ClientExecutable}, {"selected_daemon", pair.DaemonExecutable}} {
+		canonical, err := canonicalSupervisorExecutable(selected.role, selected.path)
+		if err != nil || canonical != selected.path {
 			return errors.Join(ErrBinding, err)
 		}
 	}

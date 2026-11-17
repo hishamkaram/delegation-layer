@@ -18,12 +18,15 @@ var _ taskdir.OperatorDispositionNative = lifetime.NativeObservation{}
 // SettlementResponse keeps human maintenance permission separate from native
 // execution and publication. A challenge proves freshness, never human identity.
 type SettlementResponse struct {
-	AdministrativeState string   `json:"administrative_state"`
-	NativeExecution     string   `json:"native_execution"`
-	Permission          string   `json:"permission"`
-	Challenge           string   `json:"challenge"`
-	ConfirmedAt         string   `json:"confirmed_at,omitempty"`
-	HeldClaims          []string `json:"held_claims"`
+	TargetKind               string   `json:"target_kind,omitempty"`
+	OperationID              string   `json:"operation_id,omitempty"`
+	AcknowledgedMissingFacts []string `json:"acknowledged_missing_facts,omitempty"`
+	AdministrativeState      string   `json:"administrative_state"`
+	NativeExecution          string   `json:"native_execution"`
+	Permission               string   `json:"permission"`
+	Challenge                string   `json:"challenge"`
+	ConfirmedAt              string   `json:"confirmed_at,omitempty"`
+	HeldClaims               []string `json:"held_claims"`
 }
 
 func settlementResponse(challenge string, record *task.OperatorDispositionRecord) *SettlementResponse {
@@ -55,13 +58,17 @@ func settleContext(parent context.Context, a Arguments, deps Dependencies) (resu
 		return failed(response, err, 1)
 	}
 	defer func() { closeObservationStore(&result, store) }()
+	if a.SettlementKind == "inspection" {
+		response.RootID = store.RootID
+		return settleInspectionContext(ctx, a, store, response, deps)
+	}
 	td, err := store.OpenTask(a.TaskID)
 	if err != nil {
-		return failed(response, err, 1)
+		return failed(response, localTaskTargetError(ctx, store, a.TaskID, "settle", err), 1)
 	}
 	defer func() { mergeCommandClose(&result, td.Close) }()
 	response.RootID, response.TaskID = store.RootID, a.TaskID
-	err = pueue.WithExistingBootstrapLockContext(ctx, root, func(locked context.Context) error {
+	err = withSettlementBootstrap(ctx, store, func(locked context.Context) error {
 		var actionErr error
 		response.Settlement, actionErr = settleTaskContext(locked, a, store, td, deps)
 		return actionErr
@@ -79,6 +86,13 @@ func observeSettlementQueue(ctx context.Context, store *taskdir.Store, td *taskd
 	}
 	receipt, err := td.ReadSupervisorReceipt()
 	if err != nil {
+		admissionOnly, observeErr := td.ReadAdmissionOnlyContext(ctx)
+		if observeErr != nil {
+			return queue, errors.Join(err, observeErr)
+		}
+		if admissionOnly {
+			return queue, &task.ControlFactError{ResourceKind: "task", ResourceID: td.TaskID, FactKind: "evidence_record", Name: "supervisor.ref.json", ReasonCode: "admission_only_unlaunched", NextAction: "cancel_task", Cause: err}
+		}
 		return queue, err
 	}
 	if !pueue.IsPrivateConfig(store.Root, receipt.ConfigPath) {
@@ -113,6 +127,9 @@ func supervisorMaintenanceCommand(a Arguments, deps Dependencies) commandResult 
 }
 
 func validateSettlementArguments(a *Arguments, positional []string) error {
+	if a.SettlementKind != "" && a.SettlementKind != "task" && a.SettlementKind != "inspection" {
+		return errors.New("settle --kind must be task or inspection")
+	}
 	if len(positional) != 1 || a.SettlementPrepare == (a.SettlementConfirm != "") {
 		return errors.New("settle requires one local task ID and exactly one of --prepare or --confirm CHALLENGE")
 	}

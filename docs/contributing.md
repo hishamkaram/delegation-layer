@@ -349,6 +349,7 @@ real account; a cross-build or a different kernel is not native runtime proof.
 | `make acceptance-scheduler-upgrade` | Verified v0.4.2/schema-v1 and v0.5.1/schema-v2 release archives upgraded to the current source candidate. Checks explicit migration, saved state and task evidence, future ticks, pause/resume, host restart and duplicate prevention with finite provider fixtures. |
 | `make acceptance-supervisor-handoff` | Inspection handoff while existing external work continues. |
 | `make acceptance-supervisor-upgrade-recovery` | Private-supervisor upgrade recovery, including removal of the old install while a task and daemon remain live. |
+| `make acceptance-upgrade-chain` | Verified release v0.7.0 → two distinct candidate installations on one temp root. Preserves historical journals, upgrade operations and paused schedules; macOS also exercises human-confirmed cooperative inspection maintenance. Checks a future task and exact resource teardown. |
 | `make acceptance-workspaces` | Managed workspace lifecycle, lineage and checkpoint fixtures. |
 | `make acceptance-native-lifetime` | Selected native lifetime backend behavior. |
 | `make acceptance-nested-survival` | Running and queued worker survival across leader budget expiry, with shared-warm, separate-warm and separate-cold private supervisors. |
@@ -408,6 +409,14 @@ python3 scripts/acceptance/private_cli/scheduler/cli.py \
 
 Use `python3 scripts/acceptance/private_cli/scheduler/cli.py --help` for the current driver's
 scenario, source-root and supervisor-path options.
+
+`make acceptance-upgrade-chain` uses its own temporary root and the same installed
+Pueue inputs. It seeds seven sanitized compatibility journals and removes old
+installation paths. The macOS case records a real worker's identity and Wait,
+then grants only synthetic human maintenance permission. Its future task uses
+taskdir's canonical per-task closure; root disposal still requires all actual
+resources to close and the fixture owner to retire its synthetic records after
+both upgrades. Failed or uncertain runs retain their evidence.
 
 `make acceptance-scheduler-upgrade` downloads pinned official v0.4.2 and
 v0.5.1 archives and builds the current checkout as the upgrade candidate.
@@ -555,10 +564,28 @@ selects them without expanding the native-harness suite. Full Python discovery
 still covers both test families.
 
 The [agent-integration skill](../skills/agent-integration/SKILL.md) owns external
-delegation guidance. Claude/Codex plugins package that skill and a bootstrap
-hook; they do not install provider CLIs or rewrite authentication. Keep the
+delegation guidance. The [delegate-upgrade skill](../skills/delegate-upgrade/SKILL.md)
+owns the agent upgrade procedure. Claude/Codex plugins and guided installation
+package both skills and a bootstrap hook; they do not install provider CLIs or rewrite authentication. Keep the
 canonical and plugin skill trees synchronized. Use `make plugin-package-check`
 when either distribution changes.
+
+Upgrade skill cases use the existing driver's `--suite upgrade` selection.
+Every action-capable selection or behavior run must first prove native sandbox
+containment, including network/outside IPC and outside-write refusal. PATH shims
+alone are not containment. The upgrade suite supports contained Codex sessions;
+a missing native proof blocks the run before the actor starts. Scripted fixture
+receipts establish decisions, while the same-root A→B→C acceptance establishes
+native installation behavior. Do not use ordinary unrestricted routing mode for
+upgrade prompts or treat fixture routing as a real installation pass.
+Use a fresh output directory for the contained upgrade suite:
+
+```sh
+python3 scripts/acceptance/skill_routing/cli.py --harness codex \
+  --suite upgrade --split development --output "$HOME/delegate-upgrade-routing-output"
+```
+
+The unrestricted example below applies only to ordinary delegation cases.
 
 For affected routing changes, build/use the actual CLI and run focused cases
 through scripts/acceptance/skill_routing/cli.py. It uses fresh sessions and natural

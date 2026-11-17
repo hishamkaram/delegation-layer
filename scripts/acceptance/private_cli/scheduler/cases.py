@@ -1,5 +1,6 @@
 """Bounded real-minute scheduler cases using the existing finite pi fixture."""
 from dataclasses import dataclass, field
+from collections.abc import Callable
 from pathlib import Path
 import sqlite3
 import time
@@ -28,6 +29,7 @@ from scripts.acceptance.private_cli.scheduler.occurrences import timestamp_ns
 from scripts.acceptance.private_cli.scheduler.service import SchedulerService
 from scripts.acceptance.private_cli.scheduler.host import SchedulerHost
 from scripts.acceptance.private_cli.supervisor import await_managed_lifetime_closure
+from scripts.acceptance.private_cli.supervisor import await_managed_lifetime_closure_until
 from scripts.acceptance.processes.observation import wait_until
 from scripts.acceptance.tasks.publication import verify_collected_outcome
 
@@ -55,6 +57,9 @@ class SchedulerCase:
     default_root: bool = False
     upgraded: bool = False
     upgrade_definitions: list[str] = field(default_factory=list)
+    # Collection may observe its exact task independently of unrelated root
+    # history. Disposal always retains FixtureLifetime's separate root reader.
+    task_closure_reader: Callable[[Path, tuple[str, ...]], dict[str, object]] | None = None
 
     @property
     def delegate(self) -> Path:
@@ -269,9 +274,15 @@ class SchedulerCase:
         require(outcome.get("root_id") == self.root_id and outcome.get("task_id") == row.task_id,
                 "canonical scheduled outcome identity changed")
         require(payload.strip() == EXPECTED_PAYLOAD, "scheduled fixture returned the wrong answer")
-        closure = await_managed_lifetime_closure(
-            self.fixture.state, (row.task_id,), timeout=min(30, self.remaining())
-        )
+        if self.task_closure_reader is None:
+            closure = await_managed_lifetime_closure(
+                self.fixture.state, (row.task_id,), timeout=min(30, self.remaining())
+            )
+        else:
+            closure = await_managed_lifetime_closure_until(
+                self.fixture.state, (row.task_id,), time.monotonic() + min(30, self.remaining()),
+                reader=self.task_closure_reader,
+            )
         tasks = json_object(closure.get("tasks"))
         task_closure = json_object(tasks.get(row.task_id))
         require(json_object(task_closure.get("worker_wait")).get("result") == "success",

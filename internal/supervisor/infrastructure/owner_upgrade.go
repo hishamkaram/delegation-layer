@@ -8,6 +8,7 @@ import (
 	"os"
 
 	"github.com/hishamkaram/delegation-layer/internal/lifetime"
+	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 )
 
@@ -66,7 +67,7 @@ func (r ownerUpgradeReply) validate() error {
 	if r.Outcome == (UpgradeOutcome{}) {
 		return ErrIdentity
 	}
-	if r.Request.Action == UpgradeStatus && (r.Outcome.Report != (UpgradeReport{}) || r.Outcome.Disposition != (Disposition{})) {
+	if r.Request.Action == UpgradeStatus && (r.Outcome.Report != (UpgradeReport{}) || r.Outcome.Disposition != (Disposition{}) || r.Outcome.FailureFact != (UpgradeFailureFact{})) {
 		return ErrIdentity
 	}
 	return nil
@@ -206,6 +207,7 @@ func (s *ownerServer) executeUpgrade(ctx context.Context, operation Operation, s
 	}
 	if err != nil {
 		result.Condition = UpgradeFault
+		result.FailureFact = upgradeFailureFact(err)
 	}
 	if invalid := validateUpgradeHostOutcome(result, preflight, request); invalid != nil {
 		s.connectionFault(errors.Join(err, invalid))
@@ -216,6 +218,14 @@ func (s *ownerServer) executeUpgrade(ctx context.Context, operation Operation, s
 		s.connectionFault(err)
 	}
 	return result
+}
+
+func upgradeFailureFact(cause error) UpgradeFailureFact {
+	var fact *task.ControlFactError
+	if !errors.As(cause, &fact) || fact == nil {
+		return UpgradeFailureFact{}
+	}
+	return UpgradeFailureFact{ResourceKind: fact.ResourceKind, ResourceID: fact.ResourceID, FactKind: fact.FactKind, Name: fact.Name, ReasonCode: fact.ReasonCode, NextAction: fact.NextAction}
 }
 
 func validateUpgradeHostOutcome(outcome UpgradeOutcome, preflight UpgradePreflight, request UpgradeRequest) error {

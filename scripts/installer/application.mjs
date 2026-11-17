@@ -5,6 +5,7 @@ import { parseInstallArguments, parseLegacyArguments } from "./arguments.mjs";
 import { detectHarnesses } from "./detection.mjs";
 import { validateSkillSource } from "./filesystem.mjs";
 import { installSkill } from "./skill-store.mjs";
+import { skillBundle, installSkillBundle } from "./skill-bundle.mjs";
 import { defaultHarnessNames, formatDetected, resolveInstallSelection, targetFor } from "./selection.mjs";
 import { pickOptions } from "./terminal.mjs";
 import { applyRouting, prepareRouting, printRouting } from "./routing-store.mjs";
@@ -222,9 +223,7 @@ export async function runInstaller({
       });
       const uniqueTargets = [...new Set(targets)];
       report(`Installing for ${selected.scope}: ${uniqueTargets.join(", ")}`);
-      for (const target of uniqueTargets) {
-        await installSkill({ force: selected.force, sourceDirectory, target, report });
-      }
+      await installSkillBundle(skillBundle(packageRoot, uniqueTargets), selected.force, report);
       await applyRouting(routingPlans);
       for (const plan of routingPlans) printRouting(plan, "enable", report);
       if (selected.routing === "skill-only") {

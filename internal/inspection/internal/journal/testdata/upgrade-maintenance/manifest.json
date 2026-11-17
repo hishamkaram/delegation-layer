@@ -1,0 +1,294 @@
+{
+  "schema_version": 1,
+  "root_id": "11111111111111111111111111111111",
+  "cases": [
+    {
+      "name": "legacy-complete-1",
+      "task_id": "00000000000000000000000000000001",
+      "expected": "historical-terminal",
+      "binding_fields": [
+        "definition_revision",
+        "definition_sha256",
+        "helper_executable",
+        "helper_sha256",
+        "worker_executable",
+        "worker_sha256",
+        "runner_ownership",
+        "environment",
+        "environment_recorded",
+        "supervisor"
+      ],
+      "supervisor_fields": [
+        "client_executable",
+        "client_sha256",
+        "daemon_executable",
+        "daemon_sha256",
+        "resolution_os",
+        "resolution_home",
+        "resolution_data_local",
+        "resolution_config",
+        "resolution_username",
+        "resolved_config_sha256",
+        "endpoint",
+        "config_path",
+        "config_digest",
+        "observed_version"
+      ],
+      "record_names": [
+        ".operation.lock",
+        "completion.json",
+        "receipt.json",
+        "request.json",
+        "result.json",
+        "start.json",
+        "submission.json",
+        "worker-observation.json"
+      ]
+    },
+    {
+      "name": "current-unstarted-1",
+      "task_id": "00000000000000000000000000000002",
+      "expected": "unstarted-expired",
+      "binding_fields": [
+        "definition_revision",
+        "definition_sha256",
+        "helper_executable",
+        "worker_executable",
+        "executable_identity",
+        "runner_ownership",
+        "worker_exit_proof",
+        "environment",
+        "environment_recorded",
+        "supervisor"
+      ],
+      "supervisor_fields": [
+        "client_executable",
+        "daemon_executable",
+        "executable_identity",
+        "resolution_os",
+        "resolution_home",
+        "resolution_data_local",
+        "resolution_config",
+        "resolution_username",
+        "resolved_config_sha256",
+        "endpoint",
+        "config_path",
+        "config_digest",
+        "observed_version"
+      ],
+      "record_names": [
+        ".operation.lock",
+        "request.json",
+        "submission.json"
+      ]
+    },
+    {
+      "name": "legacy-complete-2",
+      "task_id": "00000000000000000000000000000003",
+      "expected": "historical-terminal",
+      "binding_fields": [
+        "definition_revision",
+        "definition_sha256",
+        "helper_executable",
+        "helper_sha256",
+        "worker_executable",
+        "worker_sha256",
+        "runner_ownership",
+        "environment",
+        "supervisor"
+      ],
+      "supervisor_fields": [
+        "client_executable",
+        "client_sha256",
+        "daemon_executable",
+        "daemon_sha256",
+        "resolution_os",
+        "resolution_home",
+        "resolution_data_local",
+        "resolution_config",
+        "resolution_username",
+        "resolved_config_sha256",
+        "endpoint",
+        "config_path",
+        "config_digest",
+        "observed_version"
+      ],
+      "record_names": [
+        ".operation.lock",
+        "completion.json",
+        "receipt.json",
+        "request.json",
+        "result.json",
+        "start.json",
+        "submission.json",
+        "worker-observation.json"
+      ]
+    },
+    {
+      "name": "legacy-complete-3",
+      "task_id": "00000000000000000000000000000004",
+      "expected": "historical-terminal",
+      "binding_fields": [
+        "definition_revision",
+        "definition_sha256",
+        "helper_executable",
+        "helper_sha256",
+        "worker_executable",
+        "worker_sha256",
+        "runner_ownership",
+        "environment",
+        "environment_recorded",
+        "supervisor"
+      ],
+      "supervisor_fields": [
+        "client_executable",
+        "client_sha256",
+        "daemon_executable",
+        "daemon_sha256",
+        "resolution_os",
+        "resolution_home",
+        "resolution_data_local",
+        "resolution_config",
+        "resolution_username",
+        "resolved_config_sha256",
+        "endpoint",
+        "config_path",
+        "config_digest",
+        "observed_version"
+      ],
+      "record_names": [
+        ".operation.lock",
+        "completion.json",
+        "receipt.json",
+        "request.json",
+        "result.json",
+        "start.json",
+        "submission.json",
+        "worker-observation.json"
+      ]
+    },
+    {
+      "name": "legacy-complete-4",
+      "task_id": "00000000000000000000000000000005",
+      "expected": "historical-terminal",
+      "binding_fields": [
+        "definition_revision",
+        "definition_sha256",
+        "helper_executable",
+        "helper_sha256",
+        "worker_executable",
+        "worker_sha256",
+        "runner_ownership",
+        "environment",
+        "environment_recorded",
+        "supervisor"
+      ],
+      "supervisor_fields": [
+        "client_executable",
+        "client_sha256",
+        "daemon_executable",
+        "daemon_sha256",
+        "resolution_os",
+        "resolution_home",
+        "resolution_data_local",
+        "resolution_config",
+        "resolution_username",
+        "resolved_config_sha256",
+        "endpoint",
+        "config_path",
+        "config_digest",
+        "observed_version"
+      ],
+      "record_names": [
+        ".operation.lock",
+        "completion.json",
+        "receipt.json",
+        "request.json",
+        "result.json",
+        "start.json",
+        "submission.json",
+        "worker-observation.json"
+      ]
+    },
+    {
+      "name": "legacy-complete-5",
+      "task_id": "00000000000000000000000000000006",
+      "expected": "historical-terminal",
+      "binding_fields": [
+        "definition_revision",
+        "definition_sha256",
+        "helper_executable",
+        "helper_sha256",
+        "worker_executable",
+        "worker_sha256",
+        "runner_ownership",
+        "environment",
+        "environment_recorded",
+        "supervisor"
+      ],
+      "supervisor_fields": [
+        "client_executable",
+        "client_sha256",
+        "daemon_executable",
+        "daemon_sha256",
+        "resolution_os",
+        "resolution_home",
+        "resolution_data_local",
+        "resolution_config",
+        "resolution_username",
+        "resolved_config_sha256",
+        "endpoint",
+        "config_path",
+        "config_digest",
+        "observed_version"
+      ],
+      "record_names": [
+        ".operation.lock",
+        "completion.json",
+        "receipt.json",
+        "request.json",
+        "result.json",
+        "start.json",
+        "submission.json",
+        "worker-observation.json"
+      ]
+    },
+    {
+      "name": "current-unstarted-2",
+      "task_id": "00000000000000000000000000000007",
+      "expected": "unstarted-expired",
+      "binding_fields": [
+        "definition_revision",
+        "definition_sha256",
+        "helper_executable",
+        "worker_executable",
+        "executable_identity",
+        "runner_ownership",
+        "worker_exit_proof",
+        "environment",
+        "environment_recorded",
+        "supervisor"
+      ],
+      "supervisor_fields": [
+        "client_executable",
+        "daemon_executable",
+        "executable_identity",
+        "resolution_os",
+        "resolution_home",
+        "resolution_data_local",
+        "resolution_config",
+        "resolution_username",
+        "resolved_config_sha256",
+        "endpoint",
+        "config_path",
+        "config_digest",
+        "observed_version"
+      ],
+      "record_names": [
+        ".operation.lock",
+        "request.json",
+        "submission.json"
+      ]
+    }
+  ]
+}

@@ -13,6 +13,8 @@ PLUGIN_ROOT="${REPO_ROOT}/plugins/delegation-layer"
 [[ -f "${REPO_ROOT}/.claude-plugin/marketplace.json" ]] || { echo "ERROR: Claude marketplace manifest is missing." >&2; exit 1; }
 
 diff -ru "${REPO_ROOT}/skills/agent-integration" "${PLUGIN_ROOT}/skills/agent-integration"
+diff -ru "${REPO_ROOT}/skills/delegate-upgrade" "${PLUGIN_ROOT}/skills/delegate-upgrade"
+cmp "${REPO_ROOT}/skills/delegate-upgrade/references/workflow.md" "${REPO_ROOT}/skills/agent-integration/references/delegate-upgrade.md"
 cmp "${REPO_ROOT}/install.sh" "${PLUGIN_ROOT}/scripts/install-cli.sh"
 [[ -x "${PLUGIN_ROOT}/scripts/ensure-delegate.sh" ]] || {
   echo "ERROR: plugin bootstrap is not executable." >&2

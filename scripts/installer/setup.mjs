@@ -6,7 +6,7 @@ import { parseSetupArguments } from "./setup-arguments.mjs";
 import { inspectSetupCli } from "./setup-cli.mjs";
 import { DoctorRequestRejectedError, runSetupDoctor } from "./setup-doctor.mjs";
 import { printFirstTask, shellQuote } from "./setup-recipe.mjs";
-import { inspectSkill, installSkill } from "./skill-store.mjs";
+import { skillBundle, inspectSkillBundle, installSkillBundle } from "./skill-bundle.mjs";
 import { targetFor } from "./selection.mjs";
 import { applyRouting, prepareRouting, printRouting } from "./routing-store.mjs";
 
@@ -48,9 +48,8 @@ export async function runSetup(context) {
     const selected = await chooseInstallOptions({ ...parsed.options, cwd, home, environment, platform, input, output, report });
     if (!selected) { report("Setup cancelled."); return 0; }
     const targets = [...new Set(selected.harnessNames.map((name) => targetFor(getHarness(name), selected.scope, selected.cwd, selected.home, environment)))];
-    const inspectTargets = async () => {
-      for (const target of targets) await inspectSkill({ sourceDirectory, target, force: selected.force });
-    };
+    const bundle = skillBundle(packageRoot, targets);
+    const inspectTargets = () => inspectSkillBundle(bundle, selected.force);
     const routingPlans = () => selected.routing === "default"
       ? prepareRouting(selected, "enable", { environment, platform, sourceDirectory }) : Promise.resolve([]);
     step = "read-only skill and routing validation";
@@ -94,10 +93,8 @@ export async function runSetup(context) {
     await inspectTargets();
     await routingPlans();
     step = "skill installation";
-    for (const target of targets) {
-      await installSkill({ sourceDirectory, target, force: selected.force, report });
-      completed.push(`skill ${target}`);
-    }
+    await installSkillBundle(bundle, selected.force, report);
+    for (const plan of bundle) completed.push(`skill ${plan.target}`);
     step = "routing installation";
     const refreshedRouting = await routingPlans();
     await applyRouting(refreshedRouting);

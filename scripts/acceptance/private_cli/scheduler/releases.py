@@ -55,6 +55,16 @@ RELEASES = (
 )
 
 
+# Verified against the official v0.7.0 release metadata and checksums.txt.
+# Integrity covers distribution archives, never selected executable contents.
+RECOVERY_RELEASE = Release("0.7.0", "3321d341cf0e993864e2ab6a0a0534910bc8586b", 2,
+    "1da44fe7f69ee5c927153425be088268bc7042a5427db0077134724106b69d26", (
+        ("darwin", "amd64", "79c8206ed2a127208e6c0979aa66cce5045b9791ba2ba503b8a5535846a19d84"),
+        ("darwin", "arm64", "bdff48d1e9df1ce728a49a620a2c2075c8fa46991caf4d290fe8f8a3d64a6fbe"),
+        ("linux", "amd64", "37e3a1b72da7396a1d2b3e080f6f262d84811c726d1e235668130ce39a129efc"),
+        ("linux", "arm64", "284d2695ff33fb53eef30eda1dc0689b22e68d290d61a555e2bd7579ddba9cfe")))
+
+
 def verified_download(url: str, target, expected: str, maximum: int) -> None:
     """Use the shared bounded exact-asset transport; integrity covers archives only."""
     github_release_asset.download_asset(url, target, maximum,

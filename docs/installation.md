@@ -105,10 +105,12 @@ remains native; use the [provider guide](providers.md) for setup links.
 From the project where the skill should be available:
 
 ```sh
-npx --yes skills add hishamkaram/delegation-layer --skill agent-integration
+npx --yes skills add hishamkaram/delegation-layer --skill agent-integration delegate-upgrade
 ```
 
-Select only `agent-integration`; this repository also has maintainer skills.
+Select `agent-integration` and `delegate-upgrade`; this repository also has
+maintainer skills. Either skill supports a standalone selection; integration-only
+installs retain the bundled upgrade workflow.
 Add `--global` for all projects or `--agent codex` to select a harness.
 The current upstream [Skills CLI](https://github.com/vercel-labs/skills#readme)
 requires Node.js 22.20 or later.
@@ -218,6 +220,13 @@ feature does not install a scheduler service or change ordinary SSH/TUI use.
 Approve existing workspace roots separately before remote task admission.
 
 ## Updates
+
+For agent-led CLI updates and recovery, use the
+[delegate-upgrade skill](../skills/delegate-upgrade/SKILL.md). Standard guided
+installation and plugins include it alongside `agent-integration`; an explicit
+single-skill install retains a bundled copy of the same upgrade procedure.
+Broken selected installations and dangling Delegate links stop bootstrap before
+any installer writes. Recover through the original installation mechanism.
 
 Update a plugin through its host plugin manager. For a standard Skills install,
 use `npx skills update`. For the guided installer, rerun its original command;

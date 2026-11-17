@@ -308,7 +308,7 @@ func observeDispatchedPrivateMigrationShutdown(ctx context.Context, base string,
 		defer func() { resultErr = errors.Join(resultErr, transport.CloseAfterPending(resultErr)) }()
 		observation, reachErr := transport.availableForTransition(ctx, false)
 		if reachErr != nil {
-			return pending, fmt.Errorf("%w: inspect dispatched predecessor endpoint: %w", ErrPrivateSupervisorMigrationRequired, reachErr)
+			return pending, dispatchedPredecessorObservationError(base, legacyBinding, pending, reachErr)
 		}
 		if observation.ready() {
 			// Bootstrap serialization outlives every pending command owner. A
@@ -688,4 +688,22 @@ func (c *Client) commitPrivateMigrationCompletion(ctx context.Context, root, bas
 		}
 		return nil
 	})
+}
+
+// Only this exact predecessor endpoint observation may acquire progress meaning.
+// The persisted migration subject is re-read; a pending sibling never lends its
+// authority to cancellation, target, storage, identity or cleanup failures.
+func dispatchedPredecessorObservationError(base string, predecessor task.SupervisorRef, pending privateMigrationRecord, cause error) error {
+	ordinary := fmt.Errorf("%w: inspect dispatched predecessor endpoint: %w", ErrPrivateSupervisorMigrationRequired, cause)
+	if pending.UpgradeGeneration.OperationID == "" || !pending.LegacyShutdownDispatched || pending.LegacyStopped || pending.UpgradeGeneration.Predecessor != predecessor || !task.AllErrorCauses(cause, func(err error) bool { return errors.Is(err, ErrUnknown) }) {
+		return ordinary
+	}
+	recorded, found, err := loadPrivateMigrationRecord(base)
+	if err != nil {
+		return errors.Join(ordinary, err)
+	}
+	if !found || recorded != pending {
+		return errors.Join(ordinary, ErrBinding)
+	}
+	return upgradePending("handoff_in_progress", cause)
 }

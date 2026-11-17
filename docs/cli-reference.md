@@ -42,7 +42,7 @@ input. Invalid requests keep exit `2` with scoped usage on the error stream.
 | `context`, `resolve`, guarded `result read`, `origin` | [Guarded local connector contract](connector-contract.md) |
 | `gateway connect/status/doctor/serve/disconnect`, `gateway workspace`, `gateway service` | [Gateway login, workspace approvals and per-user service](gateway-connect.md) |
 | `supervisor status/ensure-owner/migrate/restart` | [Operator recovery](#supervisor-recovery) |
-| `settle TASK --prepare/--confirm` | [Human maintenance permission](#human-maintenance-permission) |
+| `settle ID [--kind task|inspection] --prepare/--confirm` | [Human maintenance permission](#human-maintenance-permission) |
 
 Remote handles use the supported controls in the [remote workflow](remote-delegation.md#observe-reconnect-and-collect).
 A local command in this index does not imply support for `remote:ID`.
@@ -304,6 +304,10 @@ See [required options](../skills/agent-integration/references/command-reference.
 
 ### Installation upgrades
 
+Agents use the [delegate-upgrade workflow](../skills/delegate-upgrade/references/workflow.md)
+for planned updates and interrupted installation handoffs. The CLI contracts
+below define supported commands and response semantics.
+
 Use the same state root throughout. Stop its scheduler and Gateway connector
 before upgrading; preserve their definitions, profile and credentials. Quiesce
 external/custom producers too, including any other configuration or state root
@@ -450,6 +454,8 @@ still lack native closure, so `active_work: "none"` does not make migration safe
 its `next_action`; `human_review_task` requires inspecting that task rather than
 waiting for more queue activity or launching replacement work. Unknown queue
 state or unreadable evidence cannot establish a clear maintenance assessment.
+Pure contention on a work owner reports `owner_busy` with
+`wait_for_legacy_work`; let that owner finish before retrying maintenance.
 After a resident failure, `diagnostic_snapshot_at` identifies a later local
 observation; it does not replace the original error or prove its cause.
 
@@ -555,6 +561,40 @@ outcome takes precedence. Connected completed migration history lets the same
 permission remain usable for later maintenance without reconfirming it.
 For a scheduled task, an unresolved occurrence can still prevent further runs;
 maintenance permission does not free that reservation.
+
+Inspection operations have a separate namespace:
+
+```sh
+delegate settle OP --kind inspection --prepare --json
+delegate settle OP --kind inspection --confirm CHALLENGE --json
+```
+
+A complete legacy inspection can qualify for maintenance from its validated
+request, receipt, completion and independent worker observation, even when its
+old queue row and executables are gone. Historical numeric IDs are matched only
+against their own receipts. Expired unstarted GuardianWait inspections use
+canonical recovery; no human permission is needed for these cases.
+Valid tracked exact scopes, partial launches and positively previous-boot
+lifetimes also use normal recovery. Explicit settlement preparation directs
+these cases to `supervisor ensure-owner` rather than offering a challenge.
+
+Manual inspection settlement retains native safeguards: a valid unresolved
+cooperative lifetime, an existing free owner, same-boot recorded processes
+positively absent, and an exact ended or positively absent queue label under the
+canonical generation mapping. Live processes, active/ambiguous labels, malformed
+evidence and unknowable legacy execution refuse. Preparation writes nothing;
+confirmation creates only maintenance permission. The response identifies the
+inspection operation and acknowledged missing scope-closure fact. This does not
+make the operation eligible for deletion or admission proof. Canonical closure
+supersedes optional permission, including after previous-boot recovery.
+
+Admission-only submitted tasks report `admission_only_unlaunched` with
+`cancel_task` guidance. Explicit cancellation uses the existing durable launch
+refusal; settlement does not cancel a task. Missing control facts are reported
+separately in `control_fact`, naming a record, target kind, executable or queue
+observation without publishing its unrestricted native cause.
+An inspection ID passed to task `status` gets observational inspection guidance;
+only an explicit settlement request points to `settle --kind inspection`.
 
 Return to the blocked maintenance command after confirmation. Settlement does
 not execute that command. An unproven task on an external supervisor can still

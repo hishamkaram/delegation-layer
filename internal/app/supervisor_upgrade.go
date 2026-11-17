@@ -184,6 +184,7 @@ func finishSupervisorUpgrade(a Arguments, response Response, outcome infrastruct
 	validationErr := outcome.Validate()
 	if validationErr == nil {
 		control.ReasonCode = outcome.ReasonCode
+		cause = supervisorUpgradeFactCause(outcome.FailureFact, cause)
 	}
 	if validationErr == nil && outcome.Report != (infrastructure.UpgradeReport{}) {
 		report := outcome.Report

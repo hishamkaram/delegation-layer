@@ -83,7 +83,7 @@ func (td *TaskDir) ReadSupervisorReceipt() (*task.SupervisorReceipt, error) {
 	}
 	var r task.SupervisorReceipt
 	if err = td.store.readRecord(filepath.Join(td.Dir, "supervisor.ref.json"), &r); err != nil {
-		return nil, err
+		return nil, &task.ControlFactError{ResourceKind: "task", ResourceID: td.TaskID, FactKind: "evidence_record", Name: "supervisor.ref.json", ReasonCode: "supervisor_receipt_unavailable", NextAction: "inspect_task", Cause: err}
 	}
 	if err = matchSupervisorReceipt(&r, submit); err != nil {
 		return nil, err

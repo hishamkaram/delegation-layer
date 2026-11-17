@@ -31,7 +31,7 @@ func statusContext(ctx context.Context, a Arguments, deps Dependencies) (result 
 	defer func() { closeObservationStore(&result, store) }()
 	td, err := store.OpenTask(a.TaskID)
 	if err != nil {
-		return failed(response, err, 1)
+		return failed(response, localTaskTargetError(ctx, store, a.TaskID, "status", err), 1)
 	}
 	defer func() { mergeCommandClose(&result, td.Close) }()
 	// Runs before td.Close; it never changes the command result.

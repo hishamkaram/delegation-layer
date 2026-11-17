@@ -28,6 +28,8 @@ func TestUpgradeOutcomeDoesNotHideIndependentOrPostMutationFault(t *testing.T) {
 		fault     error
 	}{
 		{"handled pending", &pueue.PrivateUpgradeError{ReasonCode: "predecessor_wait_pending", Err: pueue.ErrPrivateUpgradePending}, infrastructure.UpgradePending, nil},
+		{"dispatched endpoint handoff", &pueue.PrivateUpgradeError{ReasonCode: "handoff_in_progress", Err: errors.Join(pueue.ErrPrivateUpgradePending, pueue.ErrUnknown)}, infrastructure.UpgradePending, nil},
+		{"handoff with independent missing file", errors.Join(&pueue.PrivateUpgradeError{ReasonCode: "handoff_in_progress", Err: errors.Join(pueue.ErrPrivateUpgradePending, pueue.ErrUnknown)}, os.ErrNotExist), infrastructure.UpgradeFault, os.ErrNotExist},
 		{"pending with storage fault", errors.Join(pueue.ErrPrivateUpgradePending, os.ErrPermission), infrastructure.UpgradeFault, os.ErrPermission},
 		{"pending with retained owner", &retainedPreparationFixtureError{cause: pueue.ErrPrivateUpgradePending}, infrastructure.UpgradeFault, pueue.ErrPrivateUpgradePending},
 		{"pending after cancelled barrier", errors.Join(pueue.ErrPrivateUpgradePending, context.Canceled), infrastructure.UpgradeFault, context.Canceled},
