@@ -150,7 +150,8 @@ func TestQuitListsBoundedResourceReferencesBeforeForce(t *testing.T) {
 
 func TestAcceptedContextChangeDropsOldPageCursorAndGeneration(t *testing.T) {
 	m := fixtureModel(t)
-	m.after, m.cursors, m.generation = "old-project-cursor", []string{"old"}, 8
+	m.position, m.generation = pagePosition{after: "old-project-cursor", back: []string{"old"}}, 8
+	m.page.Summary = "old project"
 	m.sections[0].Load = func(_ context.Context, request ui.PageRequest) (ui.Page, error) {
 		if request.After != "" {
 			t.Error("new project request inherited the old page cursor")
@@ -158,7 +159,7 @@ func TestAcceptedContextChangeDropsOldPageCursorAndGeneration(t *testing.T) {
 		return ui.Page{}, nil
 	}
 	m.actionDone(actionMsg{section: 0, feedback: ui.Feedback{ResetPage: true}})
-	if m.after != "" || len(m.cursors) != 0 || m.generation != 9 {
+	if m.position.after != "" || len(m.position.back) != 0 || m.generation != 9 || m.page.Summary != "" {
 		t.Fatal("accepted context retained old cursor/generation")
 	}
 	m.loaded(loadedMsg{section: 0, generation: 8, page: ui.Page{Summary: "old project"}})
@@ -449,7 +450,7 @@ func TestCancelledSearchDoesNotReachRefreshOrReusePageCursor(t *testing.T) {
 		requests <- request
 		return ui.Page{}, nil
 	}
-	m.after = "saved-page"
+	m.position.after = "saved-page"
 	m.search.SetValue("cancelled edit")
 	m.searching = true
 	m.searchKey(tea.KeyPressMsg{Code: tea.KeyEscape})
@@ -466,37 +467,22 @@ func TestCancelledSearchDoesNotReachRefreshOrReusePageCursor(t *testing.T) {
 
 func TestAppliedSearchResetsPagingAndCancelledDraftRestoresIt(t *testing.T) {
 	m := fixtureModel(t)
-	requests := make(chan ui.PageRequest, 2)
-	m.sections[0].Load = func(_ context.Context, request ui.PageRequest) (ui.Page, error) {
-		requests <- request
-		return ui.Page{}, nil
-	}
-	m.after, m.cursors = "old-page", []string{"old"}
-	m.search.SetValue("provider publication:committed")
+	loads := controlPageLoads(t, m)
+	m.position = pagePosition{after: "old-page", back: []string{"old"}}
+	const query = "provider publication:committed"
+	m.search.SetValue(query)
 	m.searchKey(tea.KeyPressMsg{Code: tea.KeyEnter})
-	select {
-	case request := <-requests:
-		if request.Search != "provider publication:committed" || request.After != "" || len(m.cursors) != 0 {
-			t.Fatalf("applied request=%+v", request)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("applied search not loaded")
+	loads.finish(loads.take(ui.PageRequest{Search: query}), ui.Page{}, nil)
+	if m.position.after != "" || len(m.position.back) != 0 {
+		t.Fatal("successful search retained the previous page position")
 	}
-	m.loading = false
 	m.search.SetValue("discarded")
 	m.searchKey(tea.KeyPressMsg{Code: tea.KeyEscape})
 	if m.search.Value() != m.appliedSearch {
 		t.Fatal("cancelled editor does not show active query")
 	}
 	m.refreshTick()
-	select {
-	case request := <-requests:
-		if request.Search != "provider publication:committed" {
-			t.Fatalf("refresh adopted draft: %+v", request)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("refresh not loaded")
-	}
+	loads.finish(loads.take(ui.PageRequest{Search: query}), ui.Page{}, nil)
 }
 
 func tableModel(t *testing.T) *model {
@@ -576,7 +562,7 @@ func TestMinimumFrameKeepsRowsAndBlockingWarnings(t *testing.T) {
 func TestCompactHeaderKeepsStatusAheadOfLongCoverage(t *testing.T) {
 	m := tableModel(t)
 	m.diagnostics, m.operationResults = []string{"diagnostic"}, []string{"result"}
-	m.page.Next, m.cursors, m.loading = "next-page", []string{"previous-page"}, true
+	m.page.Next, m.position.back, m.pageLoad = "next-page", []string{"previous-page"}, loadRefresh
 	m.page.Strip = strings.Repeat("Long coverage ", 20)
 	m.resize(80, 12)
 	lines := strings.Split(ansi.Strip(m.header()), "\n")
@@ -662,13 +648,177 @@ func TestRetainedSearchPageCannotSupplyAnotherQueryCursor(t *testing.T) {
 	m := tableModel(t)
 	m.appliedSearch = "invalid:filter"
 	m.page.Next = "previous-query-cursor"
-	m.cursors = []string{"previous-page"}
+	m.position.back = []string{"previous-page"}
 	m.listKey("n")
 	m.listKey("p")
-	if m.after != "" || m.loading {
+	if m.position.after != "" || m.pageLoad != loadIdle {
 		t.Fatal("retained page navigated with the requested query")
 	}
 	if strings.Contains(m.footer(), "next page") {
 		t.Fatal("retained page offered invalid pagination")
+	}
+}
+
+func TestPageNavigationFailureCanRetrySameDestination(t *testing.T) {
+	failure := errors.New("page unavailable")
+	for _, tc := range []struct {
+		name, key, after, wantedAfter, inverse string
+		back                                   []string
+		loadErr                                error
+	}{
+		{name: "next", key: "n", after: "current", wantedAfter: "next", inverse: "p", back: []string{"older"}, loadErr: failure},
+		{name: "previous", key: "p", after: "current", wantedAfter: "older", inverse: "n", back: []string{"oldest", "older"}, loadErr: failure},
+		{name: "cancelled previous", key: "p", after: "current", wantedAfter: "older", inverse: "n", back: []string{"oldest", "older"}, loadErr: context.Canceled},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := fixtureModel(t)
+			loads := controlPageLoads(t, m)
+			m.position = pagePosition{after: tc.after, back: tc.back}
+			m.page = ui.Page{Next: "next", Entries: []ui.Entry{{ID: "first"}, {ID: "selected"}}}
+			m.cursor = 1
+
+			m.listKey(tc.key)
+			loads.finish(loads.take(ui.PageRequest{After: tc.wantedAfter}), ui.Page{}, tc.loadErr)
+			if row, ok := m.selectedEntry(); !ok || row.ID != "selected" {
+				t.Errorf("failed page load changed the displayed selection to %q", row.ID)
+			}
+			if errors.Is(tc.loadErr, failure) && m.problem != failure.Error() {
+				t.Errorf("failed page load was not reported: %q", m.problem)
+			}
+			if errors.Is(tc.loadErr, context.Canceled) && m.problem != "" {
+				t.Errorf("cancelled page load showed an error: %q", m.problem)
+			}
+
+			m.listKey(tc.key)
+			loads.finish(loads.take(ui.PageRequest{After: tc.wantedAfter}), ui.Page{
+				Next: tc.after, Entries: []ui.Entry{{ID: "destination"}, {ID: "selected"}},
+			}, nil)
+			if row, ok := m.selectedEntry(); !ok || row.ID != "destination" {
+				t.Fatalf("successful page move did not select its first row: %q", row.ID)
+			}
+
+			m.listKey(tc.inverse)
+			loads.finish(loads.take(ui.PageRequest{After: tc.after}), ui.Page{}, nil)
+		})
+	}
+}
+
+func TestRepeatedPageKeyDoesNotSupersedeActiveLoad(t *testing.T) {
+	m := fixtureModel(t)
+	loads := controlPageLoads(t, m)
+	m.page = ui.Page{Next: "next", Entries: []ui.Entry{{ID: "initial"}}}
+	m.listKey("n")
+	next := loads.take(ui.PageRequest{After: "next"})
+	m.listKey("n")
+	loads.finish(next, ui.Page{Entries: []ui.Entry{{ID: "second"}}}, nil)
+	if row, ok := m.selectedEntry(); !ok || row.ID != "second" {
+		t.Fatalf("repeated key superseded the active load: %q", row.ID)
+	}
+	m.listKey("p")
+	loads.finish(loads.take(ui.PageRequest{}), ui.Page{}, nil)
+}
+
+func TestPageNavigationSupersedesActiveRefresh(t *testing.T) {
+	m := fixtureModel(t)
+	loads := controlPageLoads(t, m)
+	m.page = ui.Page{Next: "next", Entries: []ui.Entry{{ID: "initial"}}}
+	m.refreshTick()
+	refresh := loads.take(ui.PageRequest{})
+	m.listKey("n")
+	next := loads.take(ui.PageRequest{After: "next"})
+	if !errors.Is(refresh.ctx.Err(), context.Canceled) {
+		t.Fatal("page move left the superseded refresh live")
+	}
+	loads.finish(next, ui.Page{Entries: []ui.Entry{{ID: "second"}}}, nil)
+	loads.finish(refresh, ui.Page{Entries: []ui.Entry{{ID: "refreshed first page"}}}, nil)
+	if row, ok := m.selectedEntry(); !ok || row.ID != "second" {
+		t.Fatalf("late refresh displaced the accepted page move: %q", row.ID)
+	}
+}
+
+func TestSearchSupersedesPendingPageLoad(t *testing.T) {
+	m := fixtureModel(t)
+	loads := controlPageLoads(t, m)
+	m.page = ui.Page{Next: "next", Entries: []ui.Entry{{ID: "initial"}}}
+	m.listKey("n")
+	next := loads.take(ui.PageRequest{After: "next"})
+	m.search.SetValue("new query")
+	m.searchKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+	search := loads.take(ui.PageRequest{Search: "new query"})
+	loads.finish(next, ui.Page{Entries: []ui.Entry{{ID: "stale page"}}}, nil)
+	if row, ok := m.selectedEntry(); !ok || row.ID != "initial" || m.pageLoad == loadIdle {
+		t.Fatalf("late page displaced the retained results or the active search: %q", row.ID)
+	}
+	loads.finish(search, ui.Page{Entries: []ui.Entry{{ID: "new results"}}}, nil)
+	if row, ok := m.selectedEntry(); !ok || row.ID != "new results" || m.pageSearch != "new query" {
+		t.Fatalf("search did not replace the retained page: %q (query %q)", row.ID, m.pageSearch)
+	}
+	m.listKey("p")
+	if m.pageLoad != loadIdle {
+		t.Fatal("search inherited the previous query's back stack")
+	}
+}
+
+type pageLoadReply struct {
+	page ui.Page
+	err  error
+}
+
+type pageLoadAttempt struct {
+	ctx     context.Context
+	request ui.PageRequest
+	reply   chan pageLoadReply
+}
+
+type controlledPageLoads struct {
+	t        *testing.T
+	model    *model
+	attempts chan pageLoadAttempt
+	results  chan loadedMsg
+}
+
+func controlPageLoads(t *testing.T, m *model) controlledPageLoads {
+	loads := controlledPageLoads{t: t, model: m, attempts: make(chan pageLoadAttempt, 4), results: make(chan loadedMsg, 4)}
+	m.publish = func(msg tea.Msg) {
+		if result, ok := msg.(loadedMsg); ok {
+			loads.results <- result
+		}
+	}
+	m.sections[0].Load = func(ctx context.Context, request ui.PageRequest) (ui.Page, error) {
+		attempt := pageLoadAttempt{ctx: ctx, request: request, reply: make(chan pageLoadReply, 1)}
+		loads.attempts <- attempt
+		// The loader can finish after cancellation. The model must still reject a stale result.
+		select {
+		case reply := <-attempt.reply:
+			return reply.page, reply.err
+		case <-t.Context().Done():
+			return ui.Page{}, t.Context().Err()
+		}
+	}
+	return loads
+}
+
+func (loads controlledPageLoads) take(want ui.PageRequest) pageLoadAttempt {
+	loads.t.Helper()
+	select {
+	case attempt := <-loads.attempts:
+		if attempt.request != want {
+			loads.t.Fatalf("page request = %+v, want %+v", attempt.request, want)
+		}
+		return attempt
+	case <-time.After(2 * time.Second):
+		loads.t.Fatalf("page request did not arrive: %+v", want)
+		return pageLoadAttempt{}
+	}
+}
+
+func (loads controlledPageLoads) finish(attempt pageLoadAttempt, page ui.Page, err error) {
+	loads.t.Helper()
+	attempt.reply <- pageLoadReply{page: page, err: err}
+	select {
+	case result := <-loads.results:
+		loads.model.Update(result)
+	case <-time.After(2 * time.Second):
+		loads.t.Fatalf("page completion did not arrive: %+v", attempt.request)
 	}
 }

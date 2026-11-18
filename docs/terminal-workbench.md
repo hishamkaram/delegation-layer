@@ -30,7 +30,7 @@ check `delegate help tui` in your installed build before using it.
 | `Enter` | Open details. |
 | `a` | Open available actions for the view and selected row. |
 | `/`, then `Enter` | Apply metadata search; `Esc` cancels editing. |
-| `n` / `p` | Next / previous page, when available. |
+| `n` / `p` | Next / previous page, when available. A page move can interrupt a background refresh. |
 | Left / Right | Pan whole Tasks columns when the table overflows; Task ID stays visible. |
 | `c` in the Tasks list | Show full history coverage and dated-evidence limitations. |
 | `r` | Refresh the current view. |
@@ -145,7 +145,10 @@ The compact coverage bar reports indexed, observed, unobserved and fault counts.
 Press `c` for scan time, ordering and complete limitations. The search bar shows
 the applied query; cancelling an edit leaves both that query and its page cursor
 unchanged. While a changed search is loading, or if it fails, retained rows are
-marked `Previous results` and keep their previous query label. A row with no observation says `not observed`, separately from an
+marked `Previous results` and keep their previous query label. If a page move
+fails, the displayed page and selection stay in place so you can retry the move.
+To move another page, press the key again after the current page move finishes.
+A row with no observation says `not observed`, separately from an
 observed `unknown` state. A `!` marks a fault, including retained observations
 whose visible refresh failed. Details group identity, request/context, evidence
 and faults/limitations without opening provider payloads automatically. While
@@ -159,6 +162,8 @@ only their loaded page; their summaries say so.
 
 Visible rows refresh passively while browsing; forms/details retain their current
 view. A read failure preserves the last valid observation and shows the fault.
+When the read succeeds again, the row clears its observation warning. The catalog
+reports its own fault counts, and a separate metadata warning can still appear.
 Remote rows use the origin's recorded observation time until explicit live
 inspection. Cached rows never authorize mutations: actions validate through the
 existing source owners.

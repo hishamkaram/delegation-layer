@@ -24,6 +24,7 @@ type (
 		section    int
 		page       ui.Page
 		search     string
+		position   pagePosition
 		err        error
 	}
 	actionMsg struct {
@@ -69,15 +70,14 @@ type model struct {
 	selected, cursor       int
 	generation             uint64
 	page                   ui.Page
-	loading                bool
+	pageLoad               pageLoadKind
 	cancelLoad             context.CancelFunc
 	search                 textinput.Model
 	searching              bool
 	appliedSearch          string
 	pageSearch             string
 	tableOffset            int
-	after                  string
-	cursors                []string
+	position               pagePosition
 	detail                 bool
 	detailEntry            *ui.Entry
 	viewport               viewport.Model
@@ -160,7 +160,7 @@ func (m *model) refreshTick() {
 	if m.sourceInvalid {
 		return
 	}
-	if !m.quitting && m.form == nil && !m.actionMenu && !m.searching && !m.detail && !m.loading {
+	if !m.quitting && m.form == nil && !m.actionMenu && !m.searching && !m.detail && m.pageLoad == loadIdle {
 		m.load()
 	}
 }
@@ -204,21 +204,12 @@ func (m *model) selectSection(index int) {
 	if index < 0 || index >= len(m.sections) {
 		return
 	}
-	if m.cancelLoad != nil {
-		m.cancelLoad()
-	}
 	m.navigationEpoch++
 	m.selected = index
 	m.tableOffset = 0
-	m.cursor = 0
-	m.after = ""
-	m.cursors = nil
+	m.resetPage()
 	m.closeDetail()
 	m.problem = ""
-	m.generation++
-	m.loading = false
-	m.page = ui.Page{}
-	m.pageSearch = ""
 	m.load()
 }
 
@@ -306,10 +297,7 @@ func (m *model) applyDisposition(msg actionMsg) {
 		m.restartRequired = true
 	}
 	if msg.feedback.ResetPage && msg.section == m.selected && !m.quitting {
-		m.generation++
-		m.after = ""
-		m.cursors = nil
-		m.loading = false
+		m.resetPage()
 		m.load()
 	}
 }
@@ -387,9 +375,5 @@ func (m *model) invalidateContext() {
 		return
 	}
 	m.sourceInvalid = true
-	m.generation++
-	m.loading = false
-	if m.cancelLoad != nil {
-		m.cancelLoad()
-	}
+	m.cancelPageLoad()
 }
