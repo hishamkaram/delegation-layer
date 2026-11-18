@@ -26,6 +26,27 @@ write_stub() {
 # The compiler stub records each build's target platform and output path and
 # creates the output; STUB_FAIL_BUILD makes the first build fail after recording.
 write_stub "${STUB_PATH}/go" "
+if [[ \"\$*\" == 'list -race ./internal/app' ]]; then
+    echo \"go \$*\" >> '${RECORD}'
+    echo github.com/hishamkaram/delegation-layer/internal/app
+    exit 0
+fi
+if [[ \"\$*\" == 'list -race ./...' ]]; then
+    echo \"go \$*\" >> '${RECORD}'
+    if [[ \"\${STUB_OMIT_APP_PACKAGE:-}\" != 1 ]]; then
+        echo github.com/hishamkaram/delegation-layer/internal/app
+    fi
+    printf '%s\\n' github.com/hishamkaram/delegation-layer/internal/app/command github.com/hishamkaram/delegation-layer/internal/supervisor
+    exit 0
+fi
+if [[ \"\${STUB_FAIL_APP_RACE:-}\" == 1 && \"\$1\" == test && \"\${*: -1}\" == ./internal/app ]]; then
+    echo \"go \$*\" >> '${RECORD}'
+    exit 1
+fi
+if [[ \"\${STUB_FAIL_OTHER_RACE:-}\" == 1 && \"\$1\" == test && \"\${*: -1}\" == github.com/hishamkaram/delegation-layer/internal/supervisor ]]; then
+    echo \"go \$*\" >> '${RECORD}'
+    exit 1
+fi
 if [[ \"\$1\" != build ]]; then echo \"go \$*\" >> '${RECORD}'; exit 0; fi
 output=''
 while [[ \$# -gt 0 ]]; do
@@ -35,6 +56,7 @@ done
 echo \"build \${GOOS:-host}/\${GOARCH:-host} \${output}\" >> '${RECORD}'
 if [[ -n \"\${STUB_FAIL_BUILD:-}\" ]]; then exit 1; fi
 : > \"\${output}\""
+write_stub "${STUB_PATH}/uname" "printf '%s\n' \"\${STUB_TEST_OS:-Linux}\""
 write_stub "${STUB_PATH}/python3" "
 if [[ \"\${1:-}\" == -m && \"\${2:-}\" == scripts.acceptance.tui.cli ]]; then
     while [[ \$# -gt 0 ]]; do
@@ -174,5 +196,24 @@ expect_run "check stops at a smoke failure before vuln" nonzero \
 run_make check STUB_FAIL_TUI=1
 expect_run "check propagates native TUI failure before vuln" nonzero \
     "${SHARED_STATIC_GATES[@]}" "${PLATFORM_GATES_BEFORE_BUILD[@]}" "${BUILD_RECORDS[@]}" smoke-cli smoke-cli "${TUI_RECORDS[@]}"
+
+MACOS_RACE_RECORDS=(
+    "go list -race ./internal/app"
+    "go list -race ./..."
+    "go test -race -count=1 -timeout=30m github.com/hishamkaram/delegation-layer/internal/app/command github.com/hishamkaram/delegation-layer/internal/supervisor"
+    "go test -race -count=1 -timeout=45m ./internal/app"
+)
+
+run_make test-race STUB_TEST_OS=Darwin
+expect_run "macOS tests every package once with a separate app watchdog" zero "${MACOS_RACE_RECORDS[@]}"
+
+run_make test-race STUB_TEST_OS=Darwin STUB_FAIL_APP_RACE=1
+expect_run "macOS propagates app race failure" nonzero "${MACOS_RACE_RECORDS[@]}"
+
+run_make test-race STUB_TEST_OS=Darwin STUB_FAIL_OTHER_RACE=1
+expect_run "macOS stops after another package's race test fails" nonzero "${MACOS_RACE_RECORDS[@]:0:3}"
+
+run_make test-race STUB_TEST_OS=Darwin STUB_OMIT_APP_PACKAGE=1
+expect_run "macOS rejects a package list without the app suite" nonzero "${MACOS_RACE_RECORDS[@]:0:2}"
 
 echo "All ${PASSED_CASES} check build-stage regression checks passed."
