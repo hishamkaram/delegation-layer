@@ -124,6 +124,13 @@ fixtures. macOS runs platform checks followed by native acceptance in one job,
 preserving their same-VM order and local build cache. Acceptance scenarios stay
 serial on both hosts, including consecutive upgrade and scheduler recovery.
 
+On macOS, `make test-race` tests each Go package once, with
+`./internal/app` in a separate invocation after the other packages. The
+app suite uses a 45-minute aggregate watchdog to give it headroom on variable
+hosted runners. Other packages and Linux use 30 minutes. Per-test deadlines
+and race detection still apply in both invocations. The combined macOS job
+has a 110-minute outer limit.
+
 Existing required Gate checks fold the selected results: full runs need both
 Linux owners and the combined macOS owner to pass; content-only runs need Linux
 documentation checks and skip Linux acceptance and the macOS job. Invalid

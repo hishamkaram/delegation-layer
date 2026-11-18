@@ -28,18 +28,17 @@ class CheckWorkflowTests(unittest.TestCase):
         self.assertNotIn("install-tools.sh", result.stdout)
         self.assertNotIn("acceptance/native/run_all.sh", result.stdout)
 
-    def test_check_runs_race_suite_once(self):
+    def test_check_invokes_race_target_once(self):
         root = Path(__file__).resolve().parent.parent
         result = subprocess.run(
             ["make", "--no-print-directory", "-n", "check"], cwd=root,
             capture_output=True, text=True, timeout=20, check=False)
         self.assertEqual(result.returncode, 0, result.stderr)
-        commands = [shlex.split(line.removesuffix("\\")) for line in result.stdout.splitlines()
-                    if line.startswith("go ")]
-        race_suites = [command for command in commands
-                       if command[:2] == ["go", "test"] and "-race" in command]
-        self.assertEqual(len(race_suites), 1, race_suites)
-        self.assertIn("./...", race_suites[0])
+        # The recipe's platform-specific package coverage and failure handling
+        # are exercised by test-check-build.sh with recording tool stubs.
+        invocations = [line for line in result.stdout.splitlines()
+                       if line.endswith("make test-race")]
+        self.assertEqual(len(invocations), 1, invocations)
 
 
 if __name__ == "__main__":

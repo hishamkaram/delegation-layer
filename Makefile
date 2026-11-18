@@ -124,8 +124,28 @@ check-docs:
 
 # -timeout is the per-test-binary aggregate hang watchdog, not a latency requirement;
 # functional and cleanup deadlines stay inside each test.
+# Run the process-heavy app suite separately on macOS to keep other test binaries
+# off the runner while it executes. Its aggregate watchdog accounts for host variance.
 test-race: tool-versions
-	go test -race -count=1 -timeout=30m ./...
+	@host=$$(uname -s) || exit $$?; \
+	if [[ "$$host" != Darwin ]]; then \
+	    echo "Running Go race tests (30m package watchdog)"; \
+	    exec go test -race -count=1 -timeout=30m ./...; \
+	fi; \
+	app=$$(go list -race ./internal/app) || exit $$?; \
+	packages=$$(go list -race ./...) || exit $$?; \
+	other=(); found_app=false; \
+	while IFS= read -r package; do \
+	    if [[ "$$package" == "$$app" ]]; then found_app=true; \
+	    else other+=("$$package"); fi; \
+	done <<< "$$packages"; \
+	if [[ "$$found_app" != true || -z "$${other[0]:-}" ]]; then \
+	    echo "ERROR: could not partition the app race suite from other Go packages" >&2; exit 1; \
+	fi; \
+	echo "Running Go race tests for other packages (30m package watchdog)"; \
+	go test -race -count=1 -timeout=30m "$${other[@]}" || exit $$?; \
+	echo "Running internal/app race tests (45m package watchdog)"; \
+	go test -race -count=1 -timeout=45m ./internal/app
 
 # The one standard discovery of every Python test below scripts; check runs Python tests only here.
 # The focused targets below stay for direct contributor and acceptance use.
