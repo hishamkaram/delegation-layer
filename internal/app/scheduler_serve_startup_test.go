@@ -10,7 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
+	"testing/synctest"
 
 	"github.com/hishamkaram/delegation-layer/internal/scheduler"
 	"github.com/hishamkaram/delegation-layer/internal/scheduler/contract"
@@ -63,71 +63,58 @@ func schedulerServeStore(t *testing.T) *taskdir.Store {
 }
 
 func TestSchedulerServeInitializesEmptyStorageBeforeHostOwnership(t *testing.T) {
-	store := schedulerServeStore(t)
-	lease, err := host.AcquireHostLease(t.Context(), store)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		if err := lease.Close(); err != nil {
-			t.Error(err)
+	synctest.Test(t, func(t *testing.T) {
+		store := schedulerServeStore(t)
+		lease, err := host.AcquireHostLease(t.Context(), store)
+		if err != nil {
+			t.Fatal(err)
 		}
-	})
-	ctx, cancel := context.WithCancel(schedulerStartupContext(t))
-	finished := make(chan commandResult, 1)
-	deps := schedulerServeDependencies(t)
-	go func() { finished <- serveScheduler(ctx, Arguments{Root: store.Root}, deps) }()
-	joined := false
-	t.Cleanup(func() {
-		cancel()
-		if !joined {
-			<-finished
-		}
-	})
-	// Observe the actual publication and E release while H remains occupied;
-	// native filesystem speed must not select which timeout branch is tested.
-	execution := awaitSchedulerInitialization(t, ctx, store)
-	cancel()
-	result := <-finished
-	joined = true
-	if result.code == 0 || result.response.RootID != store.RootID || !errors.Is(result.err, context.Canceled) {
-		t.Fatalf("serve did not join cancellation at the occupied host boundary: %+v", result)
-	}
-	if err := execution.Close(); err != nil {
-		t.Fatal(err)
-	}
-}
+		t.Cleanup(func() {
+			if closeErr := lease.Close(); closeErr != nil {
+				t.Error(closeErr)
+			}
+		})
+		ctx, cancel := context.WithCancel(schedulerStartupContext(t))
+		deps := schedulerServeDependencies(t)
+		done := make(chan struct{})
+		var result commandResult
+		go func() {
+			defer close(done)
+			result = serveScheduler(ctx, Arguments{Root: store.Root}, deps)
+		}()
+		defer func() {
+			cancel()
+			<-done
+		}()
 
-func awaitSchedulerInitialization(t *testing.T, ctx context.Context, store *taskdir.Store) *scheduler.OwnerLease {
-	t.Helper()
-	ticker := time.NewTicker(time.Millisecond)
-	defer ticker.Stop()
-	var last error
-	for {
-		opened, err := scheduler.Open(ctx, store)
-		if err == nil {
-			if closeErr := opened.Close(); closeErr != nil {
-				t.Fatal(closeErr)
-			}
-			lease, leaseErr := scheduler.AcquireOwnerLease(ctx, store)
-			if leaseErr == nil {
-				t.Cleanup(func() {
-					if releaseErr := lease.Close(); releaseErr != nil {
-						t.Error(releaseErr)
-					}
-				})
-				return lease
-			}
-			last = leaseErr
-		} else {
-			last = err
-		}
+		// Keep the host lock held and virtual time stopped at the wait. A
+		// published database alone would not prove serve had reopened it.
+		synctest.Wait()
 		select {
-		case <-ctx.Done():
-			t.Fatalf("scheduler initialization did not publish and release E: %v", last)
-		case <-ticker.C:
+		case <-done:
+			t.Fatalf("serve finished while the host lock was held: %+v", result)
+		default:
 		}
-	}
+		opened, err := scheduler.Open(ctx, store)
+		if err != nil {
+			t.Fatalf("serve did not publish scheduler storage: %v", err)
+		}
+		if closeErr := opened.Close(); closeErr != nil {
+			t.Fatal(closeErr)
+		}
+		execution, err := scheduler.AcquireOwnerLease(ctx, store)
+		if err != nil {
+			t.Fatalf("serve did not release the scheduler execution lease while waiting: %v", err)
+		}
+		cancel()
+		<-done
+		if closeErr := execution.Close(); closeErr != nil {
+			t.Fatal(closeErr)
+		}
+		if result.code == 0 || result.response.RootID != store.RootID || !errors.Is(result.err, context.Canceled) {
+			t.Fatalf("serve did not join cancellation at the occupied host boundary: %+v", result)
+		}
+	})
 }
 
 func TestSchedulerServeInvalidRunnerDoesNotInitialize(t *testing.T) {
