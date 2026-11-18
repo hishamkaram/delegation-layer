@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
@@ -102,11 +103,7 @@ func (m *model) searchKey(key tea.KeyPressMsg) tea.Cmd {
 		m.appliedSearch = m.search.Value()
 		m.searching = false
 		m.search.Blur()
-		m.after = ""
-		m.cursors = nil
-		m.generation++
-		m.loading = false
-		m.load()
+		m.loadPage(pagePosition{}, loadPageChange)
 		return nil
 	}
 	var cmd tea.Cmd
@@ -160,8 +157,6 @@ func (m *model) browseKey(key tea.KeyPressMsg) tea.Cmd {
 		m.searching = true
 		return m.search.Focus()
 	case "r":
-		m.generation++
-		m.loading = false
 		m.load()
 	case "a":
 		m.openActions()
@@ -278,16 +273,15 @@ func (m *model) listKey(key string) bool {
 		m.navigationEpoch++
 		m.cursor = min(max(0, len(m.page.Entries)-1), m.cursor+1)
 	case "n":
-		if m.pageSearch == m.appliedSearch && m.page.Next != "" {
-			m.cursors = append(m.cursors, m.after)
-			m.after = m.page.Next
-			m.pageChanged()
+		if m.pageLoad != loadPageChange && m.pageSearch == m.appliedSearch && m.page.Next != "" {
+			back := slices.Concat(m.position.back, []string{m.position.after})
+			m.navigatePage(pagePosition{after: m.page.Next, back: back})
 		}
 	case "p":
-		if m.pageSearch == m.appliedSearch && len(m.cursors) > 0 {
-			m.after = m.cursors[len(m.cursors)-1]
-			m.cursors = m.cursors[:len(m.cursors)-1]
-			m.pageChanged()
+		if m.pageLoad != loadPageChange && m.pageSearch == m.appliedSearch && len(m.position.back) > 0 {
+			back := m.position.back
+			last := len(back) - 1
+			m.navigatePage(pagePosition{after: back[last], back: back[:last]})
 		}
 	default:
 		return false
@@ -295,12 +289,9 @@ func (m *model) listKey(key string) bool {
 	return true
 }
 
-func (m *model) pageChanged() {
+func (m *model) navigatePage(position pagePosition) {
 	m.navigationEpoch++
-	m.cursor = 0
-	m.generation++
-	m.loading = false
-	m.load()
+	m.loadPage(position, loadPageChange)
 }
 
 func actionReference(label string, a app.Arguments) string {

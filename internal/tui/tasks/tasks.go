@@ -82,6 +82,7 @@ func (v views) load(ctx context.Context, request ui.PageRequest) (ui.Page, error
 		// reads fail the entire page through the catalog's top-level error.
 		if observations[i].Err == nil {
 			row.Observation = &observations[i].Observation
+			row.ObservationFault = ""
 		} else {
 			row.ObservationFault = "visible passive refresh unavailable; previous evidence retained"
 		}

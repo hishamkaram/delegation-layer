@@ -83,10 +83,10 @@ func (m *model) statusText() string {
 	if len(m.diagnostics) > 0 || len(m.operationResults) > 0 {
 		parts = append(parts, fmt.Sprintf("%d diagnostics (d) · %d results (o)", len(m.diagnostics), len(m.operationResults)))
 	}
-	if m.pageSearch == m.appliedSearch && (m.page.Next != "" || len(m.cursors) > 0) {
+	if m.pageSearch == m.appliedSearch && (m.page.Next != "" || len(m.position.back) > 0) {
 		parts = append(parts, "n next page · p previous page")
 	}
-	if m.loading {
+	if m.pageLoad != loadIdle {
 		parts = append(parts, "Refreshing…")
 	}
 	return strings.Join(parts, " · ")
