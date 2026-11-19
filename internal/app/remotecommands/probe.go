@@ -115,12 +115,17 @@ func probeCauseNode(stages []ProbeStage, cause error) {
 	switch {
 	case errors.As(cause, &configuration):
 		code := configuration.Code
+		action := "Correct the indicated SSH configuration or selected alias."
 		switch code {
+		case "unsupported_ssh_algorithm_policy":
+			action = "Use supported, secure algorithm names in the indicated SSH setting."
+		case "ssh_algorithm_policy_unrepresentable":
+			action = "Use a policy the embedded SSH client can enforce exactly. List both Curve25519 wire names only if you intend to allow both."
 		case "unsupported_ssh_directive", "invalid_ssh_setting", "invalid_ssh_expansion", "ssh_home_unavailable", "invalid_ssh_config_path", "ssh_config_include_depth", "ssh_config_include_cycle", "ssh_config_read_failed", "ssh_config_limit", "ssh_config_parse_failed", "invalid_ssh_alias", "ssh_user_unconfigured":
 		default:
 			code = "ssh_config_invalid"
 		}
-		probeFailed(stages, "config", code, "Correct the indicated SSH configuration or selected alias.")
+		probeFailed(stages, "config", code, action)
 		stages[0].File, stages[0].Line, stages[0].Directive = configuration.File, configuration.Line, configuration.Directive
 		return
 	case errors.As(cause, &transport):
@@ -156,6 +161,9 @@ func probeTransportFailure(stages []ProbeStage, failure *sshtransport.Error) {
 	case "ssh_handshake_failed":
 		probeSucceededThrough(stages, "connectivity")
 		probeFailed(stages, "endpoint", code, "Check SSH protocol compatibility and the selected destination.")
+	case "ssh_algorithm_negotiation_failed":
+		probeSucceededThrough(stages, "connectivity")
+		probeFailed(stages, "endpoint", code, "Check that the SSH client and server allow compatible algorithms.")
 	case "remote_delegate_missing", "remote_delegate_not_executable", "remote_endpoint_failed":
 		probeSucceededThrough(stages, "authentication")
 		probeFailed(stages, "endpoint", code, "Check the installed remote Delegate and --remote-executable selection.")

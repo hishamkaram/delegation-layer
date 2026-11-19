@@ -418,11 +418,17 @@ class Exercise:
         home = self.directory / "origin-home"
         (home / ".ssh").mkdir(parents=True, mode=0o700)
         config = (
-            "Host remote-fixture\n HostName 127.0.0.1\n User root\n"
+            "Host remote-fixture remote-apple-crypto-fixture\n HostName 127.0.0.1\n User root\n"
             f" Port {port}\n IdentityFile {self.directory / 'client'}\n IdentitiesOnly yes\n"
             " IdentityAgent none\n UserKnownHostsFile none\n GlobalKnownHostsFile none\n"
+            "Host remote-apple-crypto-fixture\n Include apple-crypto.conf\n"
         )
         (home / ".ssh" / "config").write_text(config)
+        (home / ".ssh" / "apple-crypto.conf").write_text(
+            "Ciphers ^aes128-gcm@openssh.com,aes256-gcm@openssh.com\n"
+            "KexAlgorithms ^ecdh-sha2-nistp256\n"
+            "MACs ^hmac-sha2-256-etm@openssh.com,hmac-sha2-256\n"
+        )
         self.wait_for_ssh(int(port))
         self.delegate(
             "devices",
@@ -499,6 +505,21 @@ class Exercise:
             "ensure-owner",
             "--json",
             timeout=90,
+        )
+        apple_probe = self.delegate(
+            "devices",
+            "probe",
+            "--device",
+            "remote-apple-crypto-fixture",
+            "--remote-root",
+            REMOTE_ROOT,
+            "--remote-executable",
+            str(self.candidate / "delegate"),
+        )
+        if apple_probe.get("connectivity") != "connected":
+            raise AcceptanceError("Apple crypto Include did not reach the ready endpoint")
+        self.scenarios.append(
+            {"name": "apple-crypto-include", "connectivity": "connected"}
         )
 
     @staticmethod

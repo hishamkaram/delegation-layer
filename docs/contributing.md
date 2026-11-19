@@ -819,9 +819,10 @@ scenarios solely for prose.
 
 `make acceptance-remote` builds a candidate CLI/runner from this checkout and
 executes them in place through an isolated Docker SSH daemon. It exercises the
-production Pi adapter with a finite protocol fixture, default SSH configuration,
-input/output transfer, bounded live/sealed logs, organized usage and explicit
-retirement, disconnection, cancellation and expiry. It verifies owned task closure before
+production Pi adapter with a finite protocol fixture, default SSH configuration
+with a scoped Apple crypto include, input/output transfer, bounded live/sealed
+logs, organized usage and explicit retirement, disconnection, cancellation and
+expiry. It verifies owned task closure before
 container cleanup. Docker and access to distro packages for the owned test image
 are required. The driver reports remaining resources on cleanup failure.
 

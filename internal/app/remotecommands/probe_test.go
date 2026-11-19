@@ -43,16 +43,25 @@ func TestProbeStagesDoNotInventSuccessWithoutResponse(t *testing.T) {
 }
 
 func TestProbeConfigurationSourceIsTypedAndRedacted(t *testing.T) {
-	cause := errors.Join(&sshconfig.Error{Code: "unsupported_ssh_directive", File: "/home/user/.ssh/config", Line: 7, Directive: "proxyjump"}, errors.New("SECRET_USER_VALUE"))
-	stages := probeStages(nil, cause, "claude:print", "/project")
-	stage := requireProbeStage(t, stages, "config", "failed", "unsupported_ssh_directive")
-	if stage.File != "/home/user/.ssh/config" || stage.Line != 7 || stage.Directive != "proxyjump" || stage.NextAction == "" {
-		t.Fatalf("lost actionable source: %#v", stage)
-	}
-	requireProbeStage(t, stages, "connectivity", "skipped", "earlier_stage_failed")
-	data, err := json.Marshal(stages)
-	if err != nil || strings.Contains(string(data), "SECRET_USER_VALUE") {
-		t.Fatalf("cause value exposed: %s %v", data, err)
+	for _, test := range []struct{ code, directive string }{
+		{"unsupported_ssh_directive", "proxyjump"},
+		{"unsupported_ssh_algorithm_policy", "ciphers"},
+		{"ssh_algorithm_policy_unrepresentable", "kexalgorithms"},
+	} {
+		t.Run(test.code, func(t *testing.T) {
+			const file = "/home/user/.ssh/config"
+			cause := errors.Join(&sshconfig.Error{Code: test.code, File: file, Line: 7, Directive: test.directive}, errors.New("SECRET_USER_VALUE"))
+			stages := probeStages(nil, cause, "claude:print", "/project")
+			stage := requireProbeStage(t, stages, "config", "failed", test.code)
+			if stage.File != file || stage.Line != 7 || stage.Directive != test.directive || stage.NextAction == "" {
+				t.Fatalf("lost actionable source: %#v", stage)
+			}
+			requireProbeStage(t, stages, "connectivity", "skipped", "earlier_stage_failed")
+			data, err := json.Marshal(stages)
+			if err != nil || strings.Contains(string(data), "SECRET_USER_VALUE") {
+				t.Fatalf("cause value exposed: %s %v", data, err)
+			}
+		})
 	}
 }
 
@@ -65,6 +74,7 @@ func TestProbeTransportStageFailures(t *testing.T) {
 		{"auth_key_needs_agent", "authentication", "unknown", "unknown"},
 		{"authentication_unavailable", "authentication", "unknown", "unknown"},
 		{"authentication_failed", "authentication", "succeeded", "succeeded"},
+		{"ssh_algorithm_negotiation_failed", "endpoint", "succeeded", "unknown"},
 		{"remote_delegate_missing", "endpoint", "succeeded", "succeeded"},
 		{"remote_delegate_not_executable", "endpoint", "succeeded", "succeeded"},
 		{"remote_endpoint_failed", "endpoint", "succeeded", "succeeded"},

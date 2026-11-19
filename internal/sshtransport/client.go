@@ -129,6 +129,10 @@ func timeout(value time.Duration) time.Duration {
 
 // Dial verifies host trust and authenticates using keys or the selected local agent.
 func Dial(ctx context.Context, connection sshconfig.Connection, options Options) (*Client, error) {
+	policy, err := compileAlgorithms(connection.Algorithms)
+	if err != nil {
+		return nil, err
+	}
 	environment := options.Environment
 	if environment == nil {
 		environment = os.Environ()
@@ -167,7 +171,7 @@ func Dial(ctx context.Context, connection sshconfig.Connection, options Options)
 		result.diagnostics = append(result.diagnostics, Diagnostic{Code: "gssapi_unavailable"})
 	}
 	var fingerprint string
-	config := &ssh.ClientConfig{User: connection.User, Auth: auth, HostKeyAlgorithms: algorithms, HostKeyCallback: func(host string, remote net.Addr, key ssh.PublicKey) error {
+	config := &ssh.ClientConfig{Config: policy, User: connection.User, Auth: auth, HostKeyAlgorithms: algorithms, HostKeyCallback: func(host string, remote net.Addr, key ssh.PublicKey) error {
 		fingerprint = hostIdentityFingerprint(key)
 		return callback(host, remote, key)
 	}}
@@ -197,20 +201,39 @@ func dialSSHConnection(ctx context.Context, connection sshconfig.Connection, opt
 	native, chans, requests, err := ssh.NewClientConn(socket, address(connection), config)
 	stop()
 	if err != nil {
-		var classified *Error
-		if !errors.As(err, &classified) {
-			code := "ssh_handshake_failed"
-			if strings.Contains(err.Error(), "unable to authenticate") {
-				code = "authentication_failed"
-			}
-			err = &Error{Code: code, cause: err, GSSAPIUnavailable: code == "authentication_failed" && connection.GSSAPISelected()}
-		}
-		return nil, errors.Join(err, socket.Close())
+		return nil, errors.Join(classifyClientHandshakeError(connection, err), socket.Close())
 	}
 	if err = socket.SetDeadline(time.Time{}); err != nil {
 		return nil, errors.Join(err, native.Close())
 	}
 	return ssh.NewClient(native, chans, requests), nil
+}
+
+func classifyClientHandshakeError(connection sshconfig.Connection, err error) error {
+	var classified *Error
+	if errors.As(err, &classified) {
+		return err
+	}
+	if incompatible := algorithmNegotiationFailure(err); incompatible != nil {
+		return incompatible
+	}
+	if strings.Contains(err.Error(), "unable to authenticate") {
+		return &Error{Code: "authentication_failed", cause: err, GSSAPIUnavailable: connection.GSSAPISelected()}
+	}
+	return &Error{Code: "ssh_handshake_failed", cause: err}
+}
+
+func algorithmNegotiationFailure(err error) *Error {
+	var incompatible *ssh.AlgorithmNegotiationError
+	if !errors.As(err, &incompatible) {
+		return nil
+	}
+	switch incompatible.What {
+	case "key exchange", "client to server cipher", "server to client cipher", "client to server MAC", "server to client MAC":
+		return &Error{Code: "ssh_algorithm_negotiation_failed", cause: err}
+	default:
+		return nil
+	}
 }
 
 func closeConnection(c net.Conn) {
@@ -634,7 +657,11 @@ func Enroll(ctx context.Context, connection sshconfig.Connection, options Option
 	if options.KnownHostsFile == "" || expectedFingerprint == "" || options.WithTrustLock == nil {
 		return fmt.Errorf("enrollment requires a trust file, expected fingerprint and trust owner lock")
 	}
-	if err := validateTrustPath(options.KnownHostsFile, true); err != nil {
+	policy, err := compileAlgorithms(connection.Algorithms)
+	if err != nil {
+		return err
+	}
+	if err = validateTrustPath(options.KnownHostsFile, true); err != nil {
 		return err
 	}
 	verify, err := hostCallback(connection, options)
@@ -646,7 +673,7 @@ func Enroll(ctx context.Context, connection sshconfig.Connection, options Option
 		return err
 	}
 	var accepted ssh.PublicKey
-	config := &ssh.ClientConfig{User: connection.User, HostKeyAlgorithms: algorithms, HostKeyCallback: func(host string, remote net.Addr, key ssh.PublicKey) error {
+	config := &ssh.ClientConfig{Config: policy, User: connection.User, HostKeyAlgorithms: algorithms, HostKeyCallback: func(host string, remote net.Addr, key ssh.PublicKey) error {
 		if verificationErr := verifyEnrollmentHost(host, remote, key, expectedFingerprint, verify); verificationErr != nil {
 			return verificationErr
 		}
@@ -671,6 +698,9 @@ func Enroll(ctx context.Context, connection sshconfig.Connection, options Option
 		}
 	}
 	if accepted == nil {
+		if incompatible := algorithmNegotiationFailure(handshakeErr); incompatible != nil {
+			return incompatible
+		}
 		return &Error{Code: "host_key_enrollment_failed", cause: handshakeErr}
 	}
 	return options.WithTrustLock(ctx, func() error { return commitTrust(connection, options, accepted) })

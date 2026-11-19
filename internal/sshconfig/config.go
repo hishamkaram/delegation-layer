@@ -31,6 +31,14 @@ type directive struct {
 	file   string
 	line   int
 }
+
+func (d directive) singleValue() (string, error) {
+	if len(d.values) != 1 {
+		return "", fmt.Errorf("%s requires one value", d.key)
+	}
+	return d.values[0], nil
+}
+
 type Config struct {
 	options    Options
 	directives []directive
@@ -50,6 +58,7 @@ type Connection struct {
 	GSSAPIAuthentication                       bool
 	PubkeyAuthentication                       string
 	PreferredAuthentications                   []string
+	Algorithms                                 AlgorithmPolicy
 }
 
 func Load(options Options) (*Config, error) {
@@ -410,25 +419,23 @@ func apply(r *Connection, d directive, seen map[string]bool) error {
 	if key != "identityfile" && key != "sendenv" && seen[key] {
 		return nil
 	}
-	single := func() (string, error) {
-		if len(d.values) != 1 {
-			return "", fmt.Errorf("%s requires one value", key)
-		}
-		return d.values[0], nil
-	}
 	switch key {
-	case "hostname", "user", "port", "identityagent", "identitiesonly", "hostkeyalias", "gssapiauthentication", "pubkeyauthentication", "preferredauthentications":
-		v, err := single()
+	case "hostname", "user", "port", "identityagent", "identitiesonly", "hostkeyalias",
+		"gssapiauthentication", "pubkeyauthentication", "preferredauthentications":
+		v, err := d.singleValue()
 		if err != nil {
 			return err
 		}
 		seen[key] = true
 		return applyScalar(r, key, v)
 
+	case "ciphers", "kexalgorithms", "macs":
+		seen[key] = true
+		return r.Algorithms.apply(d)
 	case "sendenv":
 		return applySendEnv(r, d.values)
 	case "identityfile":
-		v, err := single()
+		v, err := d.singleValue()
 		if err != nil {
 			return err
 		}

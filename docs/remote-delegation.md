@@ -26,7 +26,8 @@ check refuses that placement. This includes directory-service accounts absent
 from the account lookup available to a static build.
 
 Configure a literal alias in the originating user's SSH configuration. Listing
-is passive; probing contacts only the selected device:
+is passive. Use a probe for setup or troubleshooting. It contacts only the
+selected device:
 
 ```sh
 delegate devices list --json
@@ -62,30 +63,55 @@ locations and counts; they do not contain forwarded environment values.
 | Unknown key | Explicit fingerprint enrollment required |
 | Changed/revoked key | Refused |
 | `Match`, jump/proxy routing, executable helpers, canonicalization | Explicit unsupported-setting errors |
-| Unsupported algorithm/authentication/trust settings | Refused rather than ignored |
+| `Ciphers`, `KexAlgorithms`, `MACs` | Ordered algorithm policy for connections and host-key enrollment |
+| Other unsupported algorithm/authentication/trust settings | Explicit refusal |
 | Windows | Unverified |
 
-Use `--ssh-config /absolute/supported.conf` on device commands and dispatch to
-select one explicit user configuration instead of the default user/system files.
-Missing explicit files fail. The selected path is saved with task intent, so
-observation and controls reload it without another flag. Includes retain the
-user configuration root. This is an explicit source choice, not a fallback.
+Device commands and dispatch read user SSH configuration followed by system
+configuration by default. Omit `--ssh-config` for normal use. Use
+`--ssh-config /absolute/supported.conf` to select a specific file, for example
+after a probe identifies an incompatible default setting. This replaces both
+default sources. Missing explicit files fail. The path is saved with task intent
+and later controls reload it. Relative includes retain the user configuration
+root.
 
-This is not complete OpenSSH configuration compatibility. A stock configuration
-containing an unsupported setting can be refused; diagnostics identify its
-source. No fallback to an external SSH/SCP/SFTP command occurs. No agent
-forwarding or credential synchronization occurs.
-Stock Ubuntu `SendEnv LANG LC_*` and `GSSAPIAuthentication yes` settings do not
-require `--ssh-config` for key/agent connections. Full Kerberos authentication
-is not implemented. An authentication policy excluding public keys fails
-explicitly; Delegate never silently switches to password or interactive login.
-The remote SSH server may decline selected environment requests; this produces
-a count diagnostic and does not by itself fail the connection. Selection is
-limited to 128 variables, 32 KiB per entry and 256 KiB total before dialing.
-Other system policy remains subject to the supported subset. For example, a
-macOS origin selecting `Ciphers` through its system configuration still needs
-an explicit supported configuration; Ubuntu default compatibility does not
-imply complete OpenSSH configuration support on every host.
+The first applicable `Ciphers`, `KexAlgorithms`, or `MACs` value wins. Use a
+comma-separated list of exact names to replace the defaults for that family.
+Use `^` to prepend and `+` to append names. Use `-` to remove names or match
+them with `*` and `?`. Modifiers apply to the embedded SSH library's defaults
+and preserve the relative order of retained entries. This supports the three
+prepend directives in Apple's standard macOS crypto include.
+
+Replacement, prepend, and append reject names the backend does not support or
+classifies as insecure. This also applies to a list that contains some supported
+names. Omitted settings and retained default entries follow the library's
+existing policy. Malformed lists, empty results, and policies the backend
+cannot apply exactly fail before connecting. For example, removing
+`curve25519-sha256@libssh.org` alone while retaining `curve25519-sha256` fails
+because the library adds the alias back. Probe reports
+`ssh_algorithm_policy_unrepresentable` for that setting. The setting
+`-curve25519-sha256` removes only that name and keeps the `@libssh.org` alias.
+Use `-curve25519*` to remove both names. A probe reports the configuration
+source, line and directive.
+For example, an unsupported positive name reports
+`unsupported_ssh_algorithm_policy`, while a valid policy with no algorithm in
+common with the server reports `ssh_algorithm_negotiation_failed`.
+
+Other OpenSSH directives remain subject to the supported subset. Apple's
+FIPS-only SSH profile uses additional host-key and public-key restrictions
+outside this subset. Delegate uses its embedded SSH client and explicit host
+key verification. External SSH, SCP and SFTP fallback, agent forwarding, and
+credential synchronization are outside the supported workflow. Stock Ubuntu `SendEnv LANG LC_*` and
+`GSSAPIAuthentication yes` settings work with key or agent authentication.
+Full Kerberos authentication remains unsupported. An authentication policy
+excluding public keys fails explicitly. The remote SSH server may decline
+selected environment requests. Delegate reports a count and continues.
+Selection is limited to 128 variables, 32 KiB per entry and 256 KiB total
+before dialing.
+
+Remote endpoint compatibility is based on the Delegate remote protocol version
+and the capabilities required by the operation. Compatible installations can
+use different Delegate release versions.
 
 After verifying a host fingerprint independently:
 
