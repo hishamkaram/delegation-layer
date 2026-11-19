@@ -156,13 +156,22 @@ func TestExplicitConfigDoesNotReadDefaultSources(t *testing.T) {
 		if name != source {
 			t.Fatalf("read unselected source %s", name)
 		}
-		return []byte("Host selected\n HostName example.test\n"), nil
+		return []byte("Host selected\n HostName example.test\n Ciphers -aes*\n"), nil
 	}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(reads) != 1 || len(config.Aliases()) != 1 {
 		t.Fatalf("wrong selected source: %v", reads)
+	}
+	connection, err := config.Resolve("selected")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ciphers := connection.Algorithms.Ciphers
+	if ciphers.Modifier != '-' || len(ciphers.Names) != 1 || ciphers.Names[0] != "aes*" || ciphers.File != source ||
+		connection.Algorithms.KeyExchanges.Names != nil || connection.Algorithms.MACs.Names != nil {
+		t.Fatalf("unexpected algorithm policy from explicit source: %+v", connection.Algorithms)
 	}
 }
 

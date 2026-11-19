@@ -42,6 +42,11 @@ func server(t *testing.T, host ssh.Signer, extra ...ssh.Signer) (sshconfig.Conne
 
 func serverChannel(t *testing.T, host ssh.Signer, serve func(*testing.T, ssh.Channel, <-chan *ssh.Request), extra ...ssh.Signer) (sshconfig.Connection, string) {
 	t.Helper()
+	return configuredServer(t, host, serve, nil, extra...)
+}
+
+func configuredServer(t *testing.T, host ssh.Signer, serve func(*testing.T, ssh.Channel, <-chan *ssh.Request), configure func(*ssh.ServerConfig), extra ...ssh.Signer) (sshconfig.Connection, string) {
+	t.Helper()
 	_, private, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
 		t.Fatal(err)
@@ -63,6 +68,9 @@ func serverChannel(t *testing.T, host ssh.Signer, serve func(*testing.T, ssh.Cha
 	config.AddHostKey(host)
 	for _, signer := range extra {
 		config.AddHostKey(signer)
+	}
+	if configure != nil {
+		configure(config)
 	}
 	fixture := &sshFixture{listener: listener, config: config, done: make(chan struct{}), serveChannel: serve}
 	go fixture.serve(t)

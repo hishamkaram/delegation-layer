@@ -1010,10 +1010,15 @@ provider-writable directories; choose a separate root before retrying.
 
 See the [remote workflow](https://github.com/hishamkaram/delegation-layer/blob/main/docs/remote-delegation.md) for device
 configuration, explicit trust, file manifests and supported SSH settings.
-`--ssh-config ABS` explicitly selects one supported configuration file; the
-choice is saved for later controls. Default discovery reads user then system
-configuration. `dispatch --device ALIAS` requires `--remote-cwd ABS` or `--input-manifest FILE`
-instead of local workspace options. Preserve the returned `remote:ID` on status,
+Device commands and dispatch read user then system SSH configuration by
+default. Omit `--ssh-config` for ordinary remote work. Use `devices probe` for
+setup or diagnosis. Select `--ssh-config ABS` when the user specifies a file or
+when the probe identifies an incompatible default setting and the user chooses
+a supported file. The flag replaces both default sources and the selected path
+is saved for later controls. Remote compatibility depends on the advertised
+protocol and capabilities, so the installations may have different release
+versions. `dispatch --device ALIAS` requires `--remote-cwd ABS` or
+`--input-manifest FILE` instead of local workspace options. Preserve the returned `remote:ID` on status,
 collect, logs, cancel, events, reply and steer. `collect --out ABS` downloads selected
 files; it does not apply them. `remote reconcile remote:ID` retains the original
 intent after uncertain admission. Do not strip the prefix or use a new ID.
