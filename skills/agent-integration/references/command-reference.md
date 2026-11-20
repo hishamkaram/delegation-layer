@@ -638,6 +638,12 @@ Prepare again and obtain confirmation for that exact new challenge. A profile
 token inconsistent with a binding remains `native_context_changed`, never a
 reason to replace the profile or try another origin.
 
+A pure cancellation or deadline returns `gateway_operation_interrupted`. An
+interrupted confirmation may already have committed; do not infer rollback or
+repeat confirmation automatically. Run passive `gateway repair-context` on the
+same profile, or `gateway doctor`, before another action. A joined concrete fault
+still reports the evidence failure.
+
 Publication atomically adds `context_binding` and required feature
 `root-context-binding-v1` to `root.json`. It preserves registration, profile,
 credentials, canonical request and outcome bytes. Older readers refuse the new

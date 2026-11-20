@@ -199,6 +199,9 @@ func rootContextNativeError(err error) error {
 	if taskdir.CleanupFault(err) {
 		return errors.Join(ErrRootContextEvidence, err)
 	}
+	if publicInterruption(err) {
+		return err
+	}
 	if supervisor.MaintenanceBusy(err) {
 		return &rootContextRuntimeBusyError{cause: err}
 	}

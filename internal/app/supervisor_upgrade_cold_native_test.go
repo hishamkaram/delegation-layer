@@ -213,5 +213,5 @@ func coldUpgradeCLIStep(t *testing.T, ctx context.Context, f *runtimeRestartCLIN
 }
 
 func coldUpgradeRepeatableReason(reason string) bool {
-	return reason == "predecessor_custody_pending" || reason == "predecessor_wait_pending"
+	return reason == "predecessor_custody_unavailable" || reason == "predecessor_wait_pending"
 }

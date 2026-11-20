@@ -29,7 +29,10 @@ func (c *reconciliationClient) RuntimeInactive(context.Context, string) (bool, e
 	return c.inactive, nil
 }
 
-type reconciliationGate struct{ calls int }
+type reconciliationGate struct {
+	calls  int
+	cancel context.CancelFunc
+}
 
 type reconciliationCleanupError struct{ cause error }
 
@@ -39,6 +42,10 @@ func (*reconciliationCleanupError) RetainedStore() *taskdir.Store { return nil }
 
 func (g *reconciliationGate) WithQuiescentRoot(ctx context.Context, _ taskdir.RootPin, apply func(context.Context) error) error {
 	g.calls++
+	if g.cancel != nil {
+		g.cancel()
+		return ctx.Err()
+	}
 	return apply(ctx)
 }
 
@@ -212,6 +219,11 @@ func TestGatewayRootContextRuntimeErrorsRetainWholeCause(t *testing.T) {
 	}{
 		{supervisor.ErrRuntimeQuiescenceBusy, 3, "root_context_native_work_pending", "wait_for_native_work"},
 		{os.ErrPermission, 1, "root_context_evidence_unreadable", "stop_and_report"},
+		{context.Canceled, 1, "gateway_operation_interrupted", "inspect_same_profile"},
+		{context.DeadlineExceeded, 1, "gateway_operation_interrupted", "inspect_same_profile"},
+		{errors.Join(context.Canceled, context.DeadlineExceeded), 1, "gateway_operation_interrupted", "inspect_same_profile"},
+		{errors.Join(context.Canceled, os.ErrPermission), 1, "root_context_evidence_unreadable", "stop_and_report"},
+		{&reconciliationCleanupError{cause: context.Canceled}, 1, "root_context_evidence_unreadable", "stop_and_report"},
 		{errors.Join(supervisor.ErrRuntimeQuiescenceBusy, os.ErrPermission), 1, "root_context_evidence_unreadable", "stop_and_report"},
 		{&reconciliationCleanupError{cause: supervisor.ErrRuntimeQuiescenceBusy}, 1, "root_context_evidence_unreadable", "stop_and_report"},
 	} {
@@ -372,5 +384,31 @@ func TestGatewayRootContextPendingDoesNotHideFault(t *testing.T) {
 		if !rootContextTransitionOnly(pending) || rootContextTransitionOnly(errors.Join(pending, os.ErrPermission)) {
 			t.Fatalf("transition/fault classification lost: %v", pending)
 		}
+	}
+}
+
+func TestGatewayRootContextCancelledConfirmIsInterruption(t *testing.T) {
+	root, _, deps := reconciliationFixture(t)
+	prepared := preparedReconciliation(t, root, deps)
+	path := filepath.Join(root, "root.json")
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(boundedTestContext(t))
+	defer cancel()
+	deps.RootContextGate = &reconciliationGate{cancel: cancel}
+	var stdout, stderr bytes.Buffer
+	code := Run(ctx, Arguments{Action: "repair-context", ConfirmContext: prepared.RootContext.Challenge, OfflineConfirmed: true}, root, true, &stdout, &stderr, deps)
+	var response Response
+	if err = json.Unmarshal(stdout.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if code != 1 || response.Failure != "gateway_operation_interrupted" || response.NextAction != "inspect_same_profile" {
+		t.Fatalf("cancelled confirmation: exit%d %+v", code, response)
+	}
+	after, err := os.ReadFile(path)
+	if err != nil || !bytes.Equal(before, after) {
+		t.Fatalf("cancelled confirmation changed root record: %v", err)
 	}
 }
