@@ -453,8 +453,10 @@ before confirming the new challenge. An identity mismatch remains
 A pure cancellation or deadline retains `gateway_operation_interrupted`. An
 interrupted confirmation may already have committed; do not infer rollback or
 repeat confirmation automatically. Run passive `gateway repair-context` on the
-same profile, or `gateway doctor`, before another action. A joined concrete fault
-still reports the evidence failure.
+same profile, or `gateway doctor`, before another action. For an interrupted
+confirmation, passive prepare with `already_reconciled: true` means the binding
+is already committed: run `gateway doctor` instead of confirming again. A joined
+concrete fault still reports the evidence failure.
 
 This is a one-way compatibility cutover: older strict readers refuse the new
 root feature on their next open; already-open old writers require operator
