@@ -7,6 +7,7 @@ import (
 	"io"
 
 	"github.com/hishamkaram/delegation-layer/internal/task"
+	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 )
 
 func present(response Response, operationErr error, jsonOutput bool, stdout, stderr io.Writer) int {
@@ -80,5 +81,13 @@ func writeHuman(stdout io.Writer, response Response) error {
 			return err
 		}
 	}
-	return nil
+	return writeRootContextHuman(stdout, response.RootContext, response.NextAction)
+}
+
+func writeRootContextHuman(stdout io.Writer, r *taskdir.RootContextReconciliation, next string) error {
+	if r == nil {
+		return nil
+	}
+	_, err := fmt.Fprintf(stdout, "root_id=%s origin_device=%d accepted_device=%d inode=%d task_requests=%d inspection_requests=%d already_reconciled=%t\nchallenge=%s next_action=%s\n", r.RootID, r.Origin.Device, r.Accepted.Device, r.Accepted.Inode, r.TaskRequests, r.InspectionRequests, r.AlreadyReconciled, r.Challenge, next)
+	return err
 }

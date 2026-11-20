@@ -42,6 +42,7 @@ input. Invalid requests keep exit `2` with scoped usage on the error stream.
 | `result save` | [Complete verified local answer export](../skills/agent-integration/references/command-reference.md#result-save) |
 | `context`, `resolve`, guarded `result read`, `origin` | [Guarded local connector contract](connector-contract.md) |
 | `gateway connect/status/doctor/serve/disconnect`, `gateway workspace`, `gateway service` | [Gateway login, workspace approvals and per-user service](gateway-connect.md) |
+| `gateway repair-context` | [Explicit root context repair](#root-context-repair) |
 | `supervisor status/ensure-owner/migrate/restart` | [Operator recovery](#supervisor-recovery) |
 | `settle ID [--kind task|inspection] --prepare/--confirm` | [Human maintenance permission](#human-maintenance-permission) |
 
@@ -359,6 +360,22 @@ target acceptance, that target stays fixed. An unavailable accepted target is
 a fault: preserve the operation and records, and report it without clearing
 the fence or choosing another target.
 
+A retained operation in `draining` can recover a stopped predecessor once,
+using its exact saved installed pair. The drain owns the durable Start
+acceptance and process-birth receipt. Recovery requires authenticated resident
+ownership, bootstrap exclusion, settled current and historical daemon Wait
+custody, verified stopped identity, and unchanged restore sources. Offline queue
+checks can refuse recovery; they never prove readiness. Advancement still
+requires the actual live queue and canonical maintenance proof.
+
+An accepted Start is never replayed. Unknown birth, a changed or unknown boot,
+a closed Wait, or an absent/mismatched recorded child reports `stop_and_report`
+even with exit `3`. A later healthy endpoint cannot clear that reason. Only the
+live invocation that proves Start never occurred can roll its acceptance back;
+there is no automatic reset or provider retry. Older strict readers refuse a
+drain containing the new `predecessor_start` receipt. Keep those binaries off
+that root, and preserve the operation when recovery is exhausted.
+
 `--refresh-owner` alone replaces only the serving helper when needed; it does
 not authorize a prepared installation or claim daemon execution readiness.
 Read `state`, `next_action`, `upgrade` and errors together: exit `0` can mean
@@ -376,6 +393,71 @@ installation. A Gateway profile pinned to a removed candidate executable needs
 an explicitly supported service reinstall; do not edit its credential or profile
 to hide that mismatch. Installation handoff does not rewrite task history,
 schedule definitions, provider configuration or native sessions.
+
+### Root context repair
+
+`delegate gateway repair-context` explicitly reconciles a saved connector root
+token after a device-number change. It requires the same original root, canonical
+path and inode, validated startup history on its first repair and every canonical
+task/inspection request. Later repairs use the immutable binding origin. It does
+not relocate or adopt a copied/replaced root. Do not edit the profile, credentials
+or task history to make a token match.
+
+Use this order from a persistent user context outside Delegate-owned tasks:
+
+1. Select or install the reviewed compatible build. Run
+   `delegate supervisor ensure-owner --refresh-owner --json` to replace an old
+   serving helper when needed, then finish the retained handoff with the same
+   OP. Reactive mode uses `ensure-owner --json`; proactive mode requires its
+   saved `--complete-upgrade OP` command. Require completed handoff and no pending
+   generation transition before repair. Keep the compatible daemon running and
+   ready for confirmation; its healthy current helper may remain running.
+2. Stop the Gateway connector, scheduler and other writers/frontends through
+   their supported controls. Preserve their original running/paused state.
+3. Prepare and inspect the exact returned challenge, coordinates, digests and
+   request counts:
+
+   ```sh
+   delegate gateway repair-context --json
+   ```
+
+4. After explicitly confirming the intended original root, no other live copy,
+   and stopped incompatible writers/frontends, use that challenge:
+
+   ```sh
+   delegate gateway repair-context --confirm CHALLENGE --offline-cutover-confirmed --json
+   delegate gateway doctor --json
+   ```
+
+5. After doctor verifies the root match, restart the saved connector service
+   with `delegate gateway service start --json` if it was running, and restore
+   only the producers stopped for this repair.
+
+Add the same `--profile ABS` to Gateway commands for an explicitly selected
+profile. Omit `--root` for the default store; for a recorded custom/historical
+store add only its exact existing `--root ABS` throughout. Prepare is passive
+and prints no saved token, wire guard or secret. A matching legacy context returns
+`root_context_not_required` without enabling the feature. Confirmation revalidates
+under the profile lock, inactive connector identity, bootstrap exclusion, live canonical root-wide
+quiescence and nonblocking maintenance exclusion. It atomically adds
+`root-context-binding-v1` and `context_binding` to `root.json`; registration,
+profile, credentials, task requests and outcomes retain their bytes.
+
+Clean native work blocks confirmation with `root_context_native_work_pending`,
+exit `3` and `wait_for_native_work`. Observation, evidence and cleanup faults
+report `root_context_evidence_unreadable`, exit `1` and `stop_and_report`.
+Maintenance-lock contention also waits with exit `3`. A changed snapshot or
+challenge reports `root_context_challenge_stale`; run passive prepare again
+before confirming the new challenge. An identity mismatch remains
+`native_context_changed` and requires `stop_and_report`.
+
+This is a one-way compatibility cutover: older strict readers refuse the new
+root feature on their next open; already-open old writers require operator
+closure. The original token preimage remains immutable, and each later
+acquisition must match the accepted canonical path/device/inode exactly. Another
+device-number change requires another explicit repair. No automatic stable
+Darwin volume-identity mapping is provided. See the
+[connector contract](connector-contract.md#root-context-repair) for the binding.
 
 ### Execution context and logical migration
 
@@ -423,9 +505,10 @@ cannot be verified or is not ready, recovery and explicit migration refuse
 while preserving the record. This ambiguous legacy state has no automatic
 repair.
 
-An unmarked historical generation must already be reachable before a fresh
-migration can inspect its queue. Delegate cannot safely start it solely for
-inspection, so a stopped historical generation has no automatic migration.
+Outside the retained installation-drain recovery above, an unmarked historical
+generation must already be reachable before a fresh migration can inspect its
+queue. Delegate cannot safely start it solely for inspection, so a stopped
+historical generation has no automatic migration.
 The refusal reports `reason_code: "historical_target_not_ready"` and
 `next_action: "stop_and_report"`; dispatch keeps `supervisor_upgrade_required`
 without a recovery command. Restoring readiness through the original

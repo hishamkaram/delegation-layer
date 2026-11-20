@@ -594,6 +594,64 @@ can reselect a missing candidate only before migration accepts a target; an
 unavailable accepted target remains a fault. Preserve its OP and report the
 failure without clearing records or substituting another target.
 
+A retained draining operation may start its stopped predecessor once using
+only the exact saved installed pair, verified restore/stopped facts and settled
+current/historical daemon custody. The drain retains Start acceptance and birth;
+only a fresh live queue check permits advancement. Unknown birth, changed or
+unknown boot, a closed Wait or absent/mismatched recorded child means
+`stop_and_report`, including with exit `3`. A later diagnostic cannot authorize
+replay. Only the live owner proving Start never occurred can roll acceptance
+back. Older strict readers refuse a populated `predecessor_start` drain field;
+never run them against that root or clear the operation to bypass it.
+
+### Gateway root context repair
+
+```text
+delegate gateway repair-context [--profile ABS] [--json]
+delegate gateway repair-context [--profile ABS] --confirm CHALLENGE --offline-cutover-confirmed [--json]
+```
+
+Prepare is passive. It validates the saved SDK root token against historical
+startup coordinates on the first repair, then uses the immutable binding origin.
+It scans all canonical task/inspection requests. The bounded `root_context`
+response contains origin/accepted coordinates, digests, request counts and a
+challenge, never the saved token, its wire guard or secrets. It supports only the
+same original canonical path and inode after a device-number change. A matching
+legacy context returns `root_context_not_required` without enabling the feature.
+
+Select the reviewed compatible installation, run
+`delegate supervisor ensure-owner --refresh-owner --json` when the serving
+helper needs replacement, then finish the same retained OP under its actual
+reactive/proactive mode. No generation transition may remain pending. Stop the
+Gateway connector, scheduler and nonparticipating writers/frontends before
+confirming. The flag attests intended original root, no other live copy and
+stopped incompatible writers/frontends; it is not evidence of their closure.
+Confirmation rechecks profile/identity, bootstrap and live root-wide quiescence
+under nonblocking store maintenance exclusion. The compatible daemon must be
+running and ready; its healthy current helper may remain running. Clean native
+work reports `root_context_native_work_pending`, exit `3`, `wait_for_native_work`.
+Evidence, observation and cleanup faults report `root_context_evidence_unreadable`,
+exit `1`, `stop_and_report`.
+Maintenance-lock contention also returns exit `3`; stale challenges return
+`root_context_challenge_stale` and `prepare_root_context_reconciliation`.
+Prepare again and obtain confirmation for that exact new challenge. A profile
+token inconsistent with a binding remains `native_context_changed`, never a
+reason to replace the profile or try another origin.
+
+Publication atomically adds `context_binding` and required feature
+`root-context-binding-v1` to `root.json`. It preserves registration, profile,
+credentials, canonical request and outcome bytes. Older readers refuse the new
+feature. The original token preimage is immutable; current canonical
+path/device/inode stays exact. Another device-number change requires explicit
+repair; copied, moved or replaced roots are refused. Run `gateway doctor` before
+starting the saved service. Follow the
+[operator order](https://github.com/hishamkaram/delegation-layer/blob/main/docs/cli-reference.md#root-context-repair)
+with the exact recorded root/profile selection. No automatic stable Darwin
+volume-identity mapping or task/provider retry is provided. Exit `0` completes
+prepare/confirmation only. `root_context_transition_pending` and
+`root_context_runtime_active` exit `3`; history/evidence faults exit `1`.
+Inspect the same root/profile and follow the returned next action.
+
 ### Maintenance-only settlement
 
 ```sh

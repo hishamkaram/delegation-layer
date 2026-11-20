@@ -15,6 +15,7 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/predicate"
 	"github.com/hishamkaram/delegation-layer/internal/provider"
 	"github.com/hishamkaram/delegation-layer/internal/task"
+	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 	"github.com/hishamkaram/delegation-layer/internal/tasklifecycle"
 	"github.com/hishamkaram/delegation-layer/internal/verifiedexec"
 )
@@ -30,23 +31,27 @@ type Dependencies struct {
 	Input        io.Reader
 	OpenBrowser  func(context.Context, string) error
 	Services     ServiceFactory
+	// RootContextGate can supply the runtime owner at the application boundary.
+	// The default composes Native's existing bootstrap and closure authorities.
+	RootContextGate taskdir.RootContextReconciliationGate
 }
 
 type Response struct {
-	SchemaVersion      int                            `json:"schema_version"`
-	Command            string                         `json:"command"`
-	Action             string                         `json:"action"`
-	Profile            string                         `json:"profile,omitempty"`
-	Credential         *deviceclient.ConnectionStatus `json:"credential,omitempty"`
-	Online             string                         `json:"online"`
-	ExecutionReadiness string                         `json:"execution_readiness"`
-	Workspaces         *[]deviceclient.Workspace      `json:"workspaces,omitempty"`
-	Workspace          *deviceclient.Workspace        `json:"workspace,omitempty"`
-	Doctor             *DoctorObservation             `json:"doctor,omitempty"`
-	Service            *gatewayservice.Status         `json:"service,omitempty"`
-	Revoked            bool                           `json:"revoked,omitempty"`
-	Failure            string                         `json:"failure,omitempty"`
-	NextAction         string                         `json:"next_action,omitempty"`
+	SchemaVersion      int                                `json:"schema_version"`
+	Command            string                             `json:"command"`
+	Action             string                             `json:"action"`
+	Profile            string                             `json:"profile,omitempty"`
+	Credential         *deviceclient.ConnectionStatus     `json:"credential,omitempty"`
+	Online             string                             `json:"online"`
+	ExecutionReadiness string                             `json:"execution_readiness"`
+	Workspaces         *[]deviceclient.Workspace          `json:"workspaces,omitempty"`
+	Workspace          *deviceclient.Workspace            `json:"workspace,omitempty"`
+	Doctor             *DoctorObservation                 `json:"doctor,omitempty"`
+	Service            *gatewayservice.Status             `json:"service,omitempty"`
+	Revoked            bool                               `json:"revoked,omitempty"`
+	Failure            string                             `json:"failure,omitempty"`
+	NextAction         string                             `json:"next_action,omitempty"`
+	RootContext        *taskdir.RootContextReconciliation `json:"root_context,omitempty"`
 }
 
 type DoctorObservation struct {
@@ -119,6 +124,8 @@ func (c invocation) execute(ctx context.Context, response Response) (Response, e
 		return response, err
 	case "doctor":
 		return c.doctor(ctx, response)
+	case "repair-context":
+		return c.repairContext(ctx, response)
 	case "workspace":
 		return c.workspace(ctx, response)
 	case "disconnect":
@@ -229,6 +236,10 @@ func (c invocation) doctor(ctx context.Context, response Response) (Response, er
 }
 
 func publicError(err error) (failure, next string, exitCode int) {
+	if contextFailure, contextNext, contextCode, matched := rootContextPublicError(err); matched {
+		return contextFailure, contextNext, contextCode
+	}
+	serviceFailure, serviceNext, serviceCode, serviceMatched := servicePublicError(err)
 	switch {
 	case errors.Is(err, ErrOfflineCutoverRequired):
 		return "root_cutover_required", "run_explicit_offline_cutover", 1
@@ -246,18 +257,8 @@ func publicError(err error) (failure, next string, exitCode int) {
 		return "native_context_changed", "stop_and_report", 1
 	case errors.Is(err, task.ErrRequestConflict):
 		return "gateway_source_conflict", "inspect_same_profile", 1
-	case gatewayservice.IsPending(err):
-		return "gateway_stop_pending", "inspect_same_profile", 3
-	case errors.Is(err, gatewayservice.ErrGUIRequired):
-		return "gateway_gui_session_required", "run_from_user_gui_terminal", 1
-	case errors.Is(err, gatewayservice.ErrServiceChanged):
-		return "gateway_service_changed", "retry_same_profile", 1
-	case errors.Is(err, gatewayservice.ErrManagerCacheStale):
-		return "gateway_service_cache_stale", "retry_service_stop", 1
-	case errors.Is(err, gatewayservice.ErrForeignService):
-		return "gateway_service_changed", "stop_and_report", 1
-	case errors.Is(err, gatewayservice.ErrManager):
-		return "gateway_service_manager_failed", "inspect_user_service_manager", 1
+	case serviceMatched:
+		return serviceFailure, serviceNext, serviceCode
 	default:
 		failure, next = publicSDKError(err)
 		return failure, next, 1

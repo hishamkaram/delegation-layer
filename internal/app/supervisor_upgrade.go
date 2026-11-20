@@ -75,7 +75,7 @@ func finishSupervisorUpgradeDiagnostic(result, diagnostic commandResult) command
 		result.code = 1
 		result.err = publicSupervisorError("supervisor upgrade diagnostic failed", errors.Join(result.err, diagnostic.err))
 		control.NextAction = "stop_and_report"
-	} else if result.code == 3 && result.err == nil {
+	} else if result.code == 3 && result.err == nil && !upgradeStartRequiresReview(control.ReasonCode) {
 		applyMaintenanceGuidance(control)
 	}
 	return result
@@ -206,7 +206,9 @@ func finishSupervisorUpgrade(a Arguments, response Response, outcome infrastruct
 	switch outcome.Condition {
 	case infrastructure.UpgradePending, infrastructure.UpgradeBusy:
 		control.NextAction = "repeat_supervisor_ensure_owner"
-		if strings.HasPrefix(outcome.ReasonCode, "ordinary_migration_") {
+		if upgradeStartRequiresReview(outcome.ReasonCode) {
+			control.NextAction = "stop_and_report"
+		} else if strings.HasPrefix(outcome.ReasonCode, "ordinary_migration_") {
 			control.NextAction = "run_supervisor_migrate"
 		}
 		return commandResult{response: response, code: 3}
@@ -221,6 +223,18 @@ func finishSupervisorUpgrade(a Arguments, response Response, outcome infrastruct
 	case infrastructure.UpgradeOK:
 	}
 	return finishSuccessfulSupervisorUpgrade(a, response, outcome)
+}
+
+// Accepted-but-uncertain or exhausted native Starts have no replay authority.
+// A later queue diagnostic cannot turn that retained operation into a retry.
+func upgradeStartRequiresReview(reason string) bool {
+	switch reason {
+	case "predecessor_birth_unknown", "predecessor_boot_changed", "predecessor_boot_unknown", "predecessor_wait_closed", "predecessor_not_ready", "predecessor_pid_mismatch", "predecessor_pair_missing",
+		"successor_birth_unknown", "successor_boot_changed", "successor_wait_closed", "successor_pid_mismatch", "successor_not_ready":
+		return true
+	default:
+		return false
+	}
 }
 
 func finishSuccessfulSupervisorUpgrade(a Arguments, response Response, outcome infrastructure.UpgradeOutcome) commandResult {

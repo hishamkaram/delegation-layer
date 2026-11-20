@@ -59,6 +59,20 @@ installed pair. After acceptance the target stays pinned. An unavailable
 accepted target is a fault; retain the OP and report its exact guidance.
 A lost acknowledgement is not permission to replay a task or mutation.
 
+A retained drain may recover its stopped predecessor once. It requires the
+exact saved installed pair, verified stopped identity and unchanged restore
+source, settled current/historical daemon Wait custody, and authenticated owner
+and bootstrap exclusion. Offline queue checks only reject unsafe recovery;
+advancement requires the actual live queue and canonical maintenance proof.
+
+The retained drain owns Start acceptance and birth. Unknown birth, changed or
+unknown boot, closed Wait, or absent/mismatched recorded child requires
+`stop_and_report`, including with exit 3. A later healthy endpoint cannot clear
+it. Only the live invocation proving Start never occurred may roll acceptance
+back; there is no automatic reset or provider retry. Older strict readers refuse
+a populated predecessor Start receipt. Keep them off that root and retain the
+OP when recovery is exhausted.
+
 ## Follow the actual blocker
 
 Use the installed build's typed reason and next action. An admission-only
@@ -83,6 +97,48 @@ No moving/deleting records, direct process killing, manual Pueue repair,
 executable copying/fingerprinting, invented roots or silent replay is a recovery
 step. A concrete refusal ends that attempt; bounded read-only diagnosis may
 continue. Preserve actionable evidence rather than retrying uncertain work.
+
+## Explicit Gateway root context repair
+
+For a saved SDK root token that no longer matches after a device-number change,
+use the installed `gateway repair-context` command only for the same original
+root, canonical path and inode. Do not re-enroll or edit the profile, credentials
+or task history. No automatic stable Darwin volume-identity mapping is used.
+
+1. Select/install the reviewed compatible build. Run
+   `delegate supervisor ensure-owner --refresh-owner --json` when an old helper
+   needs replacement, then finish the same retained OP. Reactive mode uses
+   ordinary ensure; proactive mode needs the saved `--complete-upgrade OP`
+   command. Require completed handoff and no pending generation transition.
+2. Stop the Gateway connector, scheduler and other writers/frontends through
+   their supported controls. Keep the compatible daemon running and ready for
+   confirmation; its healthy current helper may remain running.
+3. Run `delegate gateway repair-context --json`. Prepare is passive and returns
+   digests, origin/accepted coordinates, request counts and a concrete challenge,
+   never the saved token, its wire guard or secrets. On the first repair it
+   checks validated startup history; later repairs use the immutable binding
+   origin. Every canonical task/inspection request is checked. A matching legacy
+   context reports `root_context_not_required` without enabling the feature.
+4. Obtain explicit confirmation of that challenge and the offline assertion:
+   intended original root, no other live copy, incompatible writers/frontends
+   stopped. Then run
+   `delegate gateway repair-context --confirm CHALLENGE --offline-cutover-confirmed --json`.
+5. Run `delegate gateway doctor --json`; only after the root match is verified,
+   restore the saved service with `delegate gateway service start --json` if it
+   was running, and restore other producers to their original state.
+
+Use the same optional `--profile ABS` throughout Gateway commands and preserve
+only an explicitly selected/recorded `--root ABS`. Confirmation revalidates
+under profile/identity, bootstrap, live root-wide quiescence and nonblocking
+maintenance exclusions. It atomically adds the root feature and context binding;
+registration, profile, credentials, canonical requests and outcomes retain their
+bytes. Older binaries refuse the new feature. The original token preimage stays
+immutable; another device-number change requires another explicit repair. Moved,
+replaced or copied roots refuse; the no-other-live-copy fact remains the
+operator's attestation. A refusal is not permission to reset state or retry work.
+Clean native work or maintenance-lock contention reports exit `3` and
+`wait_for_native_work`; a stale challenge requires a new passive prepare.
+Evidence, observation and cleanup faults report exit `1` and `stop_and_report`.
 
 ## Verify and restore
 

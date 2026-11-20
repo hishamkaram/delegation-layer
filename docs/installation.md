@@ -249,3 +249,17 @@ old keg or downgrading a migrated scheduler database is not the recovery path.
 For an explicit migration response, follow
 [result handling](../skills/agent-integration/references/result-handling.md#task-creation);
 general supervisor administration is in the [CLI reference](cli-reference.md#supervisor-recovery).
+
+A retained drain can recover its stopped predecessor once when the exact saved
+installed pair, stopped identity, restore sources and daemon custody are proven.
+An accepted Start with unknown birth, changed boot or closed child cannot be
+replayed. Follow `stop_and_report` and retain the OP; never reset task state.
+Older binaries refuse a populated predecessor Start receipt. See the same
+[upgrade contract](cli-reference.md#installation-upgrades) before selecting an
+older build against that root.
+
+If an unchanged original root has a different device number after restart,
+complete the supervisor handoff first, then use the explicit
+[root context repair](cli-reference.md#root-context-repair). It preserves the
+saved connector registration, profile, credentials and task history; it is a
+one-way root-feature cutover. It does not move or adopt another root.

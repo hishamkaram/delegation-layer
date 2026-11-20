@@ -81,6 +81,15 @@ type DaemonWaitSettlementOwner interface {
 	ObserveDaemonWait(context.Context, string, lifetime.ProcessRef) (owned bool, closed bool, err error)
 }
 
+// DaemonWaitQuiescenceOwner supplies root-wide negative custody knowledge
+// before a cold predecessor Start. It must reject any unfinished current Wait
+// and any possible historical custodian, with registration serialized by the
+// caller's actual bootstrap EX. Missing PID/registration alone is not closure.
+type DaemonWaitQuiescenceOwner interface {
+	DaemonWaitOwner
+	RequireRootDaemonWaitQuiescence(context.Context, string) error
+}
+
 // Options controls caller observation and an optional explicit process context.
 // Nil Resolution and Environment use current process control values at each
 // fresh call; the default child environment is bounded to pueue's control

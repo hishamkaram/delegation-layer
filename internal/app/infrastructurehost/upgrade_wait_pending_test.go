@@ -36,6 +36,12 @@ func (e *historicalWaitPendingTestError) Error() string              { return "h
 func (e *historicalWaitPendingTestError) Unwrap() error              { return e.cause }
 func (*historicalWaitPendingTestError) HistoricalDaemonWaitPending() {}
 
+type rootWaitPendingTestError struct{ cause error }
+
+func (e *rootWaitPendingTestError) Error() string                  { return "current Wait fixture pending" }
+func (e *rootWaitPendingTestError) Unwrap() error                  { return e.cause }
+func (*rootWaitPendingTestError) RootDaemonWaitQuiescencePending() {}
+
 func canonicalUpgradeWaitError(cause error) error {
 	return fmt.Errorf("advance authorized upgrade generation: %w", fmt.Errorf("%w: wait for dispatched predecessor shutdown: %w", pueue.ErrPrivateSupervisorMigrationRequired, cause))
 }
@@ -190,6 +196,7 @@ func TestUpgradeWaitPendingClassificationPreservesIndependentFaults(t *testing.T
 	privatePending := &pueue.PrivateUpgradeError{ReasonCode: "predecessor_wait_pending", Err: pueue.ErrPrivateUpgradePending}
 	privateUnknown := &pueue.PrivateUpgradeError{ReasonCode: "successor_birth_unknown", Err: errors.Join(pueue.ErrPrivateUpgradePending, pueue.ErrUnknown)}
 	tagged := &historicalWaitPendingTestError{cause: infrastructure.ErrOwnerPending}
+	current := &rootWaitPendingTestError{cause: infrastructure.ErrOwnerPending}
 	for _, test := range []struct {
 		name      string
 		cause     error
@@ -204,6 +211,13 @@ func TestUpgradeWaitPendingClassificationPreservesIndependentFaults(t *testing.T
 		{"private unknown birth plus required context", canonicalUpgradeWaitError(privateUnknown), infrastructure.UpgradeFault, pueue.ErrPrivateSupervisorMigrationRequired},
 		{"independent required plus private pending", errors.Join(pueue.ErrPrivateSupervisorMigrationRequired, privatePending), infrastructure.UpgradeFault, pueue.ErrPrivateSupervisorMigrationRequired},
 		{"tagged historical custodian", tagged, infrastructure.UpgradePending, nil},
+		{"cold predecessor current Wait", &pueue.PrivateUpgradeError{ReasonCode: "predecessor_custody_unavailable", Err: current}, infrastructure.UpgradePending, nil},
+		{"cold predecessor historical Wait", &pueue.PrivateUpgradeError{ReasonCode: "predecessor_custody_unavailable", Err: tagged}, infrastructure.UpgradePending, nil},
+		{"current plus historical Wait", errors.Join(current, tagged), infrastructure.UpgradePending, nil},
+		{"cold current plus untagged owner", errors.Join(current, infrastructure.ErrOwnerPending), infrastructure.UpgradeFault, infrastructure.ErrOwnerPending},
+		{"cold current plus untagged upgrade", errors.Join(current, pueue.ErrPrivateUpgradePending), infrastructure.UpgradeFault, pueue.ErrPrivateUpgradePending},
+		{"cold current plus storage", errors.Join(current, os.ErrPermission), infrastructure.UpgradeFault, os.ErrPermission},
+		{"cold current tag contains joined cause", &rootWaitPendingTestError{cause: errors.Join(infrastructure.ErrOwnerPending, os.ErrPermission)}, infrastructure.UpgradeFault, os.ErrPermission},
 		{"wrapped tagged historical custodian", fmt.Errorf("advance authorized upgrade generation: %w", tagged), infrastructure.UpgradePending, nil},
 		{"multiple tagged historians", errors.Join(tagged, &historicalWaitPendingTestError{cause: infrastructure.ErrOwnerPending}), infrastructure.UpgradePending, nil},
 		{"tagged plus untagged owner", errors.Join(tagged, infrastructure.ErrOwnerPending), infrastructure.UpgradeFault, infrastructure.ErrOwnerPending},

@@ -445,12 +445,20 @@ func ValidateRootRecord(r *RootRecord) error {
 	if err := validateRootRequiredFeatures(r.RequiredFeatures); err != nil {
 		return err
 	}
+	if slices.Contains(r.RequiredFeatures, RootContextBindingFeature) != (r.ContextBinding != nil) {
+		return fmt.Errorf("%w: root context binding and required feature must agree", ErrIdentityMismatch)
+	}
+	if r.ContextBinding != nil {
+		if err := r.ContextBinding.Validate(); err != nil {
+			return err
+		}
+	}
 	return validateTimestamp(r.CreatedAt)
 }
 
 func validateRootRequiredFeatures(features []string) error {
 	for _, feature := range features {
-		if feature != NamespaceAdmissionFeature && feature != NamespaceMutationFeature && feature != WorkspaceConstrainedConnectorFeature && feature != PathProjectConnectorFeature {
+		if feature != NamespaceAdmissionFeature && feature != NamespaceMutationFeature && feature != WorkspaceConstrainedConnectorFeature && feature != PathProjectConnectorFeature && feature != RootContextBindingFeature {
 			return fmt.Errorf("%w: required feature %q", ErrUnsupportedSchema, feature)
 		}
 	}

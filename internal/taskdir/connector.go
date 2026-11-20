@@ -51,12 +51,25 @@ func (s *Store) RootTokenContext(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return identityToken(struct {
-		Version int    `json:"version"`
-		RootID  string `json:"root_id"`
-		Device  uint64 `json:"device"`
-		Inode   uint64 `json:"inode"`
-	}{1, pin.RootID(), pin.Device(), pin.Inode()})
+	record, _, err := s.readRootContextRecord(ctx)
+	if err != nil {
+		return "", err
+	}
+	coordinates := rootContextCoordinates(pin)
+	if binding := record.ContextBinding; binding != nil {
+		if binding.Root != pin.Root() || binding.Accepted != coordinates {
+			return "", fmt.Errorf("%w: root context requires explicit physical reconciliation", task.ErrIdentityMismatch)
+		}
+		current, pinErr := s.PinRootContext(ctx)
+		if pinErr != nil {
+			return "", pinErr
+		}
+		if !current.Equal(pin) {
+			return "", task.ErrIdentityMismatch
+		}
+		coordinates = binding.Origin
+	}
+	return task.ConnectorRootToken(pin.RootID(), coordinates)
 }
 
 func ObserveProjectContext(ctx context.Context, path string) (identity task.DirectoryIdentity, resultErr error) {

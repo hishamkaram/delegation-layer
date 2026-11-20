@@ -13,6 +13,7 @@ func gatewaySpec() commandSpec {
 		{Name: "connect", Summary: "Enroll this device using browser, headless Device Flow or an unattended token", Operands: "HTTPS_URL"},
 		leaf("status", "Read local credentials without claiming online execution readiness", ""),
 		leaf("doctor", "Check local Gateway profile and Native root statically", ""),
+		leaf("repair-context", "Prepare or explicitly confirm a history-preserving native root reconciliation", ""),
 		leaf("serve", "Run the saved connector in this foreground process", ""),
 		leaf("disconnect", "Stop and uninstall only this profile's connector service; retain credentials and tasks", ""),
 		{Name: "service", Summary: "Manage only this profile's per-user connector service", Children: []commandSpec{

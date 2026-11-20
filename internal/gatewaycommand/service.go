@@ -9,6 +9,25 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/gatewayservice"
 )
 
+func servicePublicError(err error) (failure, next string, exitCode int, matched bool) {
+	switch {
+	case gatewayservice.IsPending(err):
+		return "gateway_stop_pending", "inspect_same_profile", 3, true
+	case errors.Is(err, gatewayservice.ErrGUIRequired):
+		return "gateway_gui_session_required", "run_from_user_gui_terminal", 1, true
+	case errors.Is(err, gatewayservice.ErrServiceChanged):
+		return "gateway_service_changed", "retry_same_profile", 1, true
+	case errors.Is(err, gatewayservice.ErrManagerCacheStale):
+		return "gateway_service_cache_stale", "retry_service_stop", 1, true
+	case errors.Is(err, gatewayservice.ErrForeignService):
+		return "gateway_service_changed", "stop_and_report", 1, true
+	case errors.Is(err, gatewayservice.ErrManager):
+		return "gateway_service_manager_failed", "inspect_user_service_manager", 1, true
+	default:
+		return "", "", 0, false
+	}
+}
+
 // Service manages only this profile's connector registration. Its stop result
 // does not describe the lifetime of Delegate-owned tasks.
 type Service interface {
