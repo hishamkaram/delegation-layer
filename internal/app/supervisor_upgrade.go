@@ -117,7 +117,12 @@ func supervisorMaintenanceClient(ctx context.Context, store *taskdir.Store, bind
 			return clientExecutable, daemonExecutable, nil
 		})
 	}
-	return pueue.BindSavedForMigrationWithClient(ctx, binding, clientExecutable, options)
+	client, err := pueue.BindSavedForMigrationWithClient(ctx, binding, clientExecutable, options)
+	// Only the optional upgrade probe can report clean transport absence.
+	if client == nil && err == nil {
+		return nil, task.ErrEvidenceFault
+	}
+	return client, err
 }
 
 func supervisorUpgradeStatus(ctx context.Context, store *taskdir.Store, deps Dependencies, options pueue.Options, response Response, observed pueue.PrivateUpgradeObservation) commandResult {
