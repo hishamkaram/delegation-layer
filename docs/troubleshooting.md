@@ -27,6 +27,58 @@ destination replacement still need authorization covering that action.
 | Rejected answer | Follow [result handling](../skills/agent-integration/references/result-handling.md#observe-and-collect); use [offline recheck](../skills/agent-integration/references/result-handling.md#offline-recovery) only when offered. |
 | Valid outcome accompanied by an operational error | Keep the outcome and report the ancillary error; follow [result handling](../skills/agent-integration/references/result-handling.md#observe-and-collect). |
 
+## Gateway upgrade and scope errors
+
+The prepared Native 0.9.0 / Gateway 0.2.0 candidate is not a published release.
+Check installed help before using its new surface. Native owns execution choices
+and defaults; connection/workspace commands no longer accept provider/model/
+effort/permission/budget policy flags. Do not reconstruct an old ceiling as a
+client-side execution rule. Native budgets remain finite.
+
+A saved old-policy profile or unavailable saved executable uses the supported
+same-profile upgrade flow:
+
+```sh
+delegate gateway upgrade --preview --json
+delegate gateway upgrade --accept-execution-policy-removal --json
+```
+
+Preview reports source/count observations; it does not run Native/service checks.
+Acceptance needs authorization to remove obsolete execution policy. It stops the
+owned connector and uses existing SDK profile, Native supervisor and OS service
+owners, with a compare against the saved source before selecting the installed
+binary. Registration, credentials/generation, original root, disabled approvals,
+revisions, pins and history stay preserved. Follow `upgrade.phase`, `failure`,
+`next_action` and pending supervisor evidence. Do not edit journals/source paths,
+create replacement state, copy an executable, use tmux or repeat login to bypass
+a blocked prerequisite. A stopped connector is not provider-task closure.
+
+Approve an existing ancestor once. New project selection and browsing use a
+scope ID and relative path; manual project/temp aliases are not needed. Whole
+Linux `/tmp` and macOS resolved user temp plus shared `/tmp`/`/private/tmp` are
+automatic. Preserve `scope_discovery_error` instead of substituting a guessed
+path. Missing paths, changed versions, special-file reads and escaping symlinks
+are explicit failures, not evidence that content was filtered. Git structural
+`candidate`/`partial` is not repository validation.
+
+Scoped models requires all three selection guards and an exact opaque path
+workspace token in a bounded regular file, not JSON or a regenerated token.
+A supplied cwd must match the derived canonical path. Historical project-token
+SHA guards are for saved tasks, not fresh admission. See the
+[connector contract](connector-contract.md#scoped-model-discovery).
+
+Gateway `prepare_continuation` remains unfinished even though guarded Native
+`continue` supports explicit successor IDs/fresh origins. Preserve uncertainty;
+do not fall back to another dispatch. **Unverified:** new origin-binding/recovery,
+full installed-provider coverage, native macOS and actual cloud acceptance.
+
+If a cloud login expires, follow the Gateway
+[cloud login guide](https://github.com/hishamkaram/delegation-layer-gateway/blob/main/docs/cloud-login.md).
+The IdP must issue refresh grants and the real client must use them. Increasing
+device certificate or WSS timeouts cannot establish a seven-day cloud session.
+No tenant change or seven-day soak is proven by local tests. After refresh,
+resolve the original operation; authentication renewal does not authorize a retry.
+
 ## Supervisor configuration fails
 
 Use [supervisor recovery](cli-reference.md#supervisor-recovery) for explicit

@@ -246,14 +246,7 @@ func (g *ConnectorControlGuard) Validate(ctx context.Context) error {
 }
 
 func (s *Store) BorrowConnectorControlContext(ctx context.Context, rootToken, projectToken string) (*ConnectorControlGuard, error) {
-	if _, err := parseProjectToken(projectToken); err != nil {
-		return nil, err
-	}
-	guard := &ConnectorControlGuard{store: s, rootToken: rootToken}
-	if err := guard.Validate(ctx); err != nil {
-		return nil, err
-	}
-	return guard, nil
+	return s.BorrowConnectorControlSelectionContext(ctx, rootToken, projectToken, "")
 }
 
 func (r *ReadOnlyStore) BorrowConnectorControlContext(ctx context.Context, rootToken, projectToken string) (*ConnectorControlGuard, error) {
@@ -1373,11 +1366,7 @@ func (s *Store) OriginInventoryContext(ctx context.Context, gateway, generation,
 	if state == nil || state.Generation != generation {
 		return result, task.ErrRequestConflict
 	}
-	entries, err := s.originMembershipContext(ctx, gateway)
-	if err != nil {
-		return result, err
-	}
-	return pageOriginInventory(*state, entries, cursor, limit)
+	return s.originInventoryPageContext(ctx, *state, cursor, limit)
 }
 
 func validateOriginInventoryQuery(cursor string, limit int) error {
@@ -1388,30 +1377,6 @@ func validateOriginInventoryQuery(cursor string, limit int) error {
 		return task.ValidateTaskID(cursor)
 	}
 	return nil
-}
-
-func pageOriginInventory(state OriginAdmission, entries []OriginInventoryEntry, cursor string, limit int) (result OriginInventory, resultErr error) {
-	membership, err := identityToken(entries)
-	if err != nil {
-		return result, err
-	}
-	result.MembershipSHA256 = membership
-	result.Entries = []OriginInventoryEntry{}
-	for _, entry := range entries {
-		if entry.TaskID <= cursor {
-			continue
-		}
-		if len(result.Entries) == limit {
-			result.NextCursor = result.Entries[len(result.Entries)-1].TaskID
-			break
-		}
-		result.Entries = append(result.Entries, entry)
-	}
-	result.Complete = result.NextCursor == ""
-	if result.Complete {
-		result.CompletenessReceipt, err = originCompletenessToken(state, membership)
-	}
-	return result, err
 }
 
 func originCompletenessToken(state OriginAdmission, membership string) (string, error) {
@@ -1447,11 +1412,7 @@ func (s *Store) OriginReopenContext(ctx context.Context, gateway, recovery, gene
 	if state.AdmissionOpen {
 		return s.verifyOpenedOriginRetryContext(ctx, state, receipt)
 	}
-	entries, err := s.originMembershipContext(ctx, gateway)
-	if err != nil {
-		return nil, err
-	}
-	membership, err := identityToken(entries)
+	membership, err := s.scanOriginMembershipContext(ctx, gateway, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -1466,34 +1427,6 @@ func (s *Store) OriginReopenContext(ctx context.Context, gateway, recovery, gene
 	next := *state
 	next.AdmissionOpen, next.MembershipSHA256 = true, membership
 	return s.commitOriginAdmissionContext(ctx, state, next)
-}
-
-// Membership is immutable request/refusal identity only. Lifecycle changes do
-// not invalidate inventory; incomplete/unreadable attribution prevents a proof.
-func (s *Store) originMembershipContext(ctx context.Context, gateway string) ([]OriginInventoryEntry, error) {
-	ids, err := s.scanPrivateDirectoryIDs(ctx, filepath.Join(s.Root, "tasks"), "task")
-	if err != nil {
-		return nil, err
-	}
-	entries := map[string]OriginInventoryEntry{}
-	for _, id := range ids {
-		entry, readErr := s.originTaskEntryContext(ctx, gateway, id)
-		if readErr != nil {
-			return nil, readErr
-		}
-		if entry != nil {
-			entries[id] = *entry
-		}
-	}
-	if err = s.appendOriginRefusalEntriesContext(ctx, gateway, entries); err != nil {
-		return nil, err
-	}
-	result := make([]OriginInventoryEntry, 0, len(entries))
-	for _, entry := range entries {
-		result = append(result, entry)
-	}
-	slices.SortFunc(result, func(a, b OriginInventoryEntry) int { return strings.Compare(a.TaskID, b.TaskID) })
-	return result, nil
 }
 
 func (s *Store) originTaskEntryContext(ctx context.Context, gateway, id string) (*OriginInventoryEntry, error) {
@@ -1578,40 +1511,6 @@ func originRefusalEntry(gateway, id string, refusal *NamespaceRefusal) *OriginIn
 		return nil
 	}
 	return &OriginInventoryEntry{TaskID: id, Resolution: "permanently_refused", Origin: refusal.Origin}
-}
-
-func (s *Store) appendOriginRefusalEntriesContext(ctx context.Context, gateway string, entries map[string]OriginInventoryEntry) error {
-	directory, err := s.openDir(filepath.Join(s.Root, "task-refusals"))
-	if directoryAbsent(err) {
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-	return scanDirectoryNames(func() error { return ctx.Err() }, directory, func(name string) error {
-		if isStageFile(name) {
-			return nil
-		}
-		id := strings.TrimSuffix(name, ".json")
-		if name != id+".json" {
-			return task.ErrEvidenceFault
-		}
-		refusal, readErr := s.ReadNamespaceRefusalContext(ctx, id)
-		if readErr != nil {
-			return readErr
-		}
-		if refusal == nil {
-			return task.ErrEvidenceFault
-		}
-		entry, readErr := s.originRefusalEntryContext(ctx, gateway, id, refusal)
-		if readErr != nil {
-			return readErr
-		}
-		if entry != nil {
-			entries[id] = *entry
-		}
-		return nil
-	})
 }
 
 // Passive inventory borrows only the existing maintenance inode. It performs

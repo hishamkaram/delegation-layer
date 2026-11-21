@@ -19,7 +19,8 @@ const (
 	OutputSchemaVersion = 1
 	defaultPublisher    = "delegate"
 	// MaxJSONResponseBytes is the ordinary public JSON response bound; schedule
-	// show has its own bound. Only diagnostic text may be shortened to fit.
+	// show and guarded controls select their own presentation bounds. Only
+	// diagnostic text may be shortened to fit.
 	MaxJSONResponseBytes = task.MaxControlRecordSize
 )
 
@@ -201,7 +202,8 @@ type PendingResponse struct {
 const pendingLifetimeFinalization = "lifetime-finalization"
 
 type commandResult struct {
-	response Response
-	code     int
-	err      error
+	response        Response
+	code            int
+	err             error
+	connectorOutput connectorOutputPolicy
 }

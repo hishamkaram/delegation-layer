@@ -96,15 +96,25 @@ func runCapabilityCommand(scope execution.PreflightScope, definition provider.Ru
 	cmd.Stdout, cmd.Stderr = stdout.writer, stderr.writer
 	go stdout.drain()
 	go stderr.drain()
-	startErr := scope.StartCommand(cmd, cmd.Start)
+	started := false
+	startErr := scope.StartCommand(cmd, func() error {
+		commandErr := cmd.Start()
+		started = commandErr == nil
+		return commandErr
+	})
 	closeErr := errors.Join(stdout.writer.Close(), stderr.writer.Close())
 	var waitErr error
-	if startErr == nil {
+	// Scope cleanup can fail after native Start. That error never transfers
+	// ownership of the command's sole Wait, FinishCommand or capture joins.
+	if started {
 		waitErr = cmd.Wait()
 		waitErr = errors.Join(waitErr, scope.FinishCommand(cmd))
 		if cmd.ProcessState == nil || !cmd.ProcessState.Success() {
 			waitErr = errors.Join(waitErr, errRuntimeProbe)
 		}
+	}
+	if startErr == nil && !started {
+		startErr = errRuntimeProbe
 	}
 	stdoutErr, stderrErr := <-stdout.done, <-stderr.done
 	if joined := errors.Join(startErr, closeErr, waitErr, stdoutErr, stderrErr, ctx.Err()); joined != nil {

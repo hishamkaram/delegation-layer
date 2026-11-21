@@ -4,6 +4,7 @@ import (
 	commonprovider "github.com/hishamkaram/delegation-layer/internal/provider"
 	"github.com/hishamkaram/delegation-layer/internal/resourceadmission"
 	"github.com/hishamkaram/delegation-layer/internal/task"
+	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 	"github.com/hishamkaram/delegation-layer/internal/workspaces"
 )
 
@@ -12,6 +13,9 @@ type ContinuationOptions struct {
 	// SuccessorTaskID is an optional caller-allocated identity for tracking an
 	// in-flight admission. It grants no admission or compatibility authority.
 	SuccessorTaskID string
+	// PredecessorGuard selects canonical saved evidence before any continuation
+	// mutation. Guarded callers supply a stable successor ID and fresh origin.
+	PredecessorGuard *taskdir.ConnectorTaskSelection
 }
 
 type ContinuationPhase uint8

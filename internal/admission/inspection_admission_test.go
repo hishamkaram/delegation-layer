@@ -5,6 +5,7 @@ import (
 	"errors"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	admissionfixture "github.com/hishamkaram/delegation-layer/internal/admission/testsupport"
@@ -20,25 +21,28 @@ import (
 func TestRunAdmissionInspectionReplaysRecordedFactsAfterDeadline(t *testing.T) {
 	store := supervisorfixture.NewInspectionStore(t)
 	bound, _, _ := admissionfixture.NewUncertainGroupSupervisor(t, store.RootID)
-	createdAt := time.Now().UTC().Add(-inspection.AdmissionTimeout - time.Second)
-	operation := admissionfixture.NewInspectionPollTestOperationAt(t, store, bound, createdAt)
-	completeInspectionPollTestOperation(t, operation)
-	if err := operation.RecordReceiptContext(t.Context(), 7); err != nil {
-		t.Fatal(err)
-	}
-	admissionfixture.CompleteInspectionPollTestLifetime(t, operation, task.LifetimeTerminationCompleted)
-	rewriteInspectionPollTestTerminationTime(t, store, operation, createdAt.Add(4*time.Millisecond))
-	if err := operation.RecordWorkerSuccessContext(t.Context(), 7); err != nil {
-		t.Fatal(err)
-	}
+	// Replay must use local proof without waiting on the external fixture; a hang is a regression.
+	synctest.Test(t, func(t *testing.T) {
+		createdAt := time.Now().UTC().Add(-inspection.AdmissionTimeout - time.Second)
+		operation := admissionfixture.NewInspectionPollTestOperationAt(t, store, bound, createdAt)
+		completeInspectionPollTestOperation(t, operation)
+		if err := operation.RecordReceiptContext(t.Context(), 7); err != nil {
+			t.Fatal(err)
+		}
+		admissionfixture.CompleteInspectionPollTestLifetime(t, operation, task.LifetimeTerminationCompleted)
+		rewriteInspectionPollTestTerminationTime(t, store, operation, createdAt.Add(4*time.Millisecond))
+		if err := operation.RecordWorkerSuccessContext(t.Context(), 7); err != nil {
+			t.Fatal(err)
+		}
 
-	facts, deadline, err := RunInspection(operation, nil, "", "")
-	if err != nil || string(facts) != "{\"eligible\":true}\n" {
-		t.Fatalf("expired replay discarded validated admission facts: facts=%s deadline=%v err=%v", facts, deadline, err)
-	}
-	if !operation.Expired(time.Now()) {
-		t.Fatal("replay fixture was not expired")
-	}
+		facts, deadline, err := RunInspection(operation, nil, "", "")
+		if err != nil || string(facts) != "{\"eligible\":true}\n" {
+			t.Fatalf("expired replay discarded validated admission facts: facts=%s deadline=%v err=%v", facts, deadline, err)
+		}
+		if !operation.Expired(time.Now()) {
+			t.Fatal("replay fixture was not expired")
+		}
+	})
 }
 
 func TestRunAdmissionInspectionReplaysHistoricalRecordedFactsAfterDeadline(t *testing.T) {

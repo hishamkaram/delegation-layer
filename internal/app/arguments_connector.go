@@ -17,6 +17,8 @@ type ConnectorArguments struct {
 	Action                     string
 	ExpectedRoot               string
 	ExpectedProject            string
+	ExpectedProjectSHA256      string
+	SuccessorOriginFile        string
 	ExpectedWorkspace          string
 	RelativeProject            string
 	WorkspaceConstrained       bool
@@ -41,6 +43,7 @@ type ConnectorArguments struct {
 	ResultLimit                int64
 	origin                     *task.GatewayOrigin
 	binding                    *task.ConnectorContext
+	outputPolicy               connectorOutputPolicy
 }
 
 func registerConnectorFlags(fs *flag.FlagSet, a *Arguments) {
@@ -53,6 +56,7 @@ func registerConnectorFlags(fs *flag.FlagSet, a *Arguments) {
 	}
 	fs.StringVar(&c.ExpectedRoot, "expected-root", "", "expected opaque root context token")
 	fs.StringVar(&c.ExpectedProject, "expected-project", "", "expected opaque project context token")
+	fs.StringVar(&c.ExpectedProjectSHA256, "expected-project-sha256", "", "SHA-256 of exact saved project token for historical controls")
 	fs.StringVar(&c.ExpectedWorkspace, "expected-workspace", "", "expected opaque approved workspace token")
 	fs.StringVar(&c.RelativeProject, "relative-project", "", "project selection beneath approved workspace")
 	fs.BoolVar(&c.IncludeWorkspaceConstraint, "include-workspace-constraint", false, "include workspace constraints in local receipt projections")
@@ -64,8 +68,11 @@ func registerConnectorFlags(fs *flag.FlagSet, a *Arguments) {
 		return
 	}
 	fs.StringVar(&c.OriginFile, "expected-origin", "", "expected immutable origin JSON file or - for stdin")
+	if a.Command == "continue" {
+		fs.StringVar(&c.SuccessorOriginFile, "origin", "", "fresh successor immutable origin JSON file")
+	}
 	switch a.Command {
-	case "resolve", "status", "collect", "cancel", "result":
+	case "resolve", "status", "collect", "cancel", "result", "continue":
 		fs.StringVar(&c.ExpectedSpecSHA256, "expected-spec-sha256", "", "expected immutable Delegate spec digest")
 	}
 	switch a.Command {
@@ -97,7 +104,7 @@ func registerConnectorFlags(fs *flag.FlagSet, a *Arguments) {
 
 func registerConnectorCommandFlags(fs *flag.FlagSet, a *Arguments) bool {
 	switch a.Command {
-	case "dispatch", "cancel", "status", "collect":
+	case "dispatch", "cancel", "status", "collect", "continue":
 		registerConnectorFlags(fs, a)
 		return false
 	case "context", "resolve", "result", "origin":
@@ -109,10 +116,13 @@ func registerConnectorCommandFlags(fs *flag.FlagSet, a *Arguments) bool {
 }
 
 func hasConnectorGuards(c ConnectorArguments) bool {
-	return c.ExpectedRoot != "" || c.ExpectedProject != "" || c.OriginFile != "" || c.ExpectedSpecSHA256 != "" || c.ExpectedWorkspace != "" || c.RelativeProject != ""
+	return c.ExpectedRoot != "" || c.ExpectedProjectSHA256 != "" || c.SuccessorOriginFile != "" || c.ExpectedProject != "" || c.OriginFile != "" || c.ExpectedSpecSHA256 != "" || c.ExpectedWorkspace != "" || c.RelativeProject != ""
 }
 
 func usesConnectorControl(a Arguments) bool {
+	if a.Command == "continue" {
+		return false
+	} // Continuation remains owned by the normal lifecycle admission path.
 	switch a.Command {
 	case "context", "resolve", "result", "origin":
 		return true
@@ -122,6 +132,9 @@ func usesConnectorControl(a Arguments) bool {
 }
 
 func validateGuardedDispatchArguments(a *Arguments) error {
+	if a.Connector.ExpectedProjectSHA256 != "" {
+		return errors.New("dispatch requires the raw project binding, not a historical project digest")
+	}
 	if a.Connector.ExpectedSpecSHA256 != "" {
 		return errors.New("dispatch does not accept expected spec; use guarded existing resolve")
 	}
@@ -148,6 +161,9 @@ func connectorWorkspace(c ConnectorArguments) *task.WorkspaceConstraint {
 }
 
 func validateConnectorArguments(a *Arguments, positional []string) error {
+	if len(a.Connector.ExpectedProject) > task.MaxControlRecordSize {
+		return task.ErrControlRecordTooBig
+	}
 	if err := connectorWorkspace(a.Connector).Validate(); err != nil {
 		return err
 	}
@@ -206,7 +222,7 @@ func validateConnectorContextArguments(a Arguments, positional []string) error {
 	if err := validateConnectorContextSelection(a); err != nil {
 		return err
 	}
-	if a.Connector.ExpectedRoot != "" || a.Connector.ExpectedProject != "" || a.Connector.OriginFile != "" {
+	if a.Connector.ExpectedRoot != "" || a.Connector.ExpectedProject != "" || a.Connector.ExpectedProjectSHA256 != "" || a.Connector.OriginFile != "" {
 		return errors.New("context does not accept task context or origin guards")
 	}
 	if a.Connector.Action != "inspect" && a.Connector.Action != "enable-connector" && a.Connector.Action != "initialize" {
@@ -225,7 +241,7 @@ func validateConnectorContextArguments(a Arguments, positional []string) error {
 
 func validateConnectorOriginArguments(a Arguments, positional []string) error {
 	c := a.Connector
-	if c.ExpectedProject != "" || c.OriginFile != "" || connectorWorkspace(c) != nil {
+	if c.ExpectedProject != "" || c.ExpectedProjectSHA256 != "" || c.OriginFile != "" || connectorWorkspace(c) != nil {
 		return errors.New("origin does not accept task project or origin guards")
 	}
 	if c.Action != "barrier" && c.Action != "inventory" && c.Action != "reopen" {
@@ -244,6 +260,9 @@ func validateConnectorOriginArguments(a Arguments, positional []string) error {
 }
 
 func validateConnectorResolveAction(c ConnectorArguments) error {
+	if c.ResumeAdmission && c.ExpectedProjectSHA256 != "" {
+		return errors.New("admission recovery requires a raw live project binding")
+	}
 	actions := 0
 	for _, selected := range []bool{c.ResumeAdmission, c.FenceIfAbsent, c.FenceUnattributedPartial} {
 		if selected {
@@ -283,7 +302,15 @@ func validateConnectorGuardFields(a Arguments) error {
 	if !required && !hasConnectorGuards(a.Connector) {
 		return nil
 	}
-	if a.Connector.ExpectedRoot == "" || a.Connector.ExpectedProject == "" || a.Connector.OriginFile == "" {
+	if a.Connector.ExpectedProject != "" && a.Connector.ExpectedProjectSHA256 != "" {
+		return errors.New("choose raw project or project digest guard")
+	}
+	if a.Connector.ExpectedProjectSHA256 != "" {
+		if err := task.ValidateSHA256(a.Connector.ExpectedProjectSHA256); err != nil {
+			return err
+		}
+	}
+	if a.Connector.ExpectedRoot == "" || (a.Connector.ExpectedProject == "" && a.Connector.ExpectedProjectSHA256 == "") || a.Connector.OriginFile == "" {
 		return errors.New("guarded task controls require expected root, project and immutable origin together")
 	}
 	if a.Connector.ExpectedSpecSHA256 != "" {

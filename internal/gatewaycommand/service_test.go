@@ -69,7 +69,7 @@ func TestGatewayConnectInstallsStartsAndRetainsEnrollmentOnManagerFailure(t *tes
 			}
 			deps := commandDependencies(t, client)
 			deps.Services = commandServices{service: service}
-			a := Arguments{Action: "connect", GatewayURL: "https://gateway.example", Headless: true, Permission: "read-only", MaximumBudget: 60 * time.Second, DeviceName: "test-device"}
+			a := Arguments{Action: "connect", GatewayURL: "https://gateway.example", Headless: true, DeviceName: "test-device"}
 			var output, diagnostic bytes.Buffer
 			code := Run(boundedTestContext(t), a, filepath.Join(t.TempDir(), "state"), true, &output, &diagnostic, deps)
 			wantCalls, wantCode := []string{"install", "start"}, 0
@@ -136,7 +136,7 @@ func TestGatewayConnectForegroundDoesNotInstallService(t *testing.T) {
 	service := &commandService{}
 	deps := commandDependencies(t, client)
 	deps.Services = commandServices{service: service}
-	a := Arguments{Action: "connect", GatewayURL: "https://gateway.example", Foreground: true, Headless: true, Permission: "read-only", MaximumBudget: 60 * time.Second, DeviceName: "test-device"}
+	a := Arguments{Action: "connect", GatewayURL: "https://gateway.example", Foreground: true, Headless: true, DeviceName: "test-device"}
 	var output, diagnostic bytes.Buffer
 	code := Run(ctx, a, filepath.Join(t.TempDir(), "state"), true, &output, &diagnostic, deps)
 	if code != 0 || client.connectCalls != 1 || !runtime.served || !runtime.closed || len(service.calls) != 0 {

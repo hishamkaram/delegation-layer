@@ -283,6 +283,8 @@ func LabelForIdentity(rootID, taskID string) string { return GroupForRoot(rootID
 func CloneTaskRecord(record task.TaskRecord) task.TaskRecord {
 	copy := record
 	copy.Workspace = record.Workspace.Clone()
+	copy.Origin = record.Origin.Clone()
+	copy.ConnectorContext = record.ConnectorContext.Clone()
 	if record.PriorSession != nil {
 		prior := *record.PriorSession
 		copy.PriorSession = &prior

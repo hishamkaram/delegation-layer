@@ -15,7 +15,6 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/execution/plan"
 	"github.com/hishamkaram/delegation-layer/internal/providerjson"
 	"github.com/hishamkaram/delegation-layer/internal/task"
-	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 )
 
 // Plan is the immutable launch plan constructed by a trusted compiled adapter.
@@ -86,6 +85,13 @@ type ProjectLifetime interface {
 	StartProjectCommand(*exec.Cmd, *os.File, task.ProjectLaunchContext, func() error) error
 }
 
+// ProjectDirectory lends directory custody to the existing native start owner.
+// Files are borrowed only for the callback. Validation grants no launch permit.
+type ProjectDirectory interface {
+	WithProjectDirectory(context.Context, func(*os.File, task.ProjectLaunchContext) error) error
+	ValidateProject(context.Context) error
+}
+
 type budgetRequestContextKey struct{}
 
 var budgetRequestContextMarker budgetRequestContextKey
@@ -138,7 +144,8 @@ type Hooks struct {
 }
 
 type Options struct {
-	project *taskdir.StartPermit
+	project       ProjectDirectory
+	strictProject bool
 	// Protocol selects a machine-only native protocol on the same transport as
 	// Interaction, without a user interaction journal. It is valid only for a
 	// non-interactive task; see ValidateProtocolSelection.
@@ -185,7 +192,7 @@ func (o Options) validateProject(ctx context.Context) error {
 	if o.project == nil {
 		return nil
 	}
-	return o.project.RunnerLease().ValidateProject(ctx)
+	return o.project.ValidateProject(ctx)
 }
 
 type Result struct {

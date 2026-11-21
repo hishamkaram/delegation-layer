@@ -13,6 +13,7 @@ func gatewaySpec() commandSpec {
 		{Name: "connect", Summary: "Enroll this device using browser, headless Device Flow or an unattended token", Operands: "HTTPS_URL"},
 		leaf("status", "Read local credentials without claiming online execution readiness", ""),
 		leaf("doctor", "Check local Gateway profile and Native root statically", ""),
+		leaf("upgrade", "Preview or explicitly apply a profile and installed executable handoff", ""),
 		leaf("repair-context", "Prepare or explicitly confirm a history-preserving native root reconciliation", ""),
 		leaf("serve", "Run the saved connector in this foreground process", ""),
 		leaf("disconnect", "Stop and uninstall only this profile's connector service; retain credentials and tasks", ""),
@@ -26,7 +27,7 @@ func gatewaySpec() commandSpec {
 		{Name: "workspace", Summary: "Approve and revise explicit local Gateway workspace roots", Children: []commandSpec{
 			leaf("list", "List local approvals and disabled history", ""),
 			leaf("allow", "Approve one existing local workspace root", "DIRECTORY"),
-			leaf("update", "Revise alias or provider ceiling without retargeting identity", "WORKSPACE_ID"),
+			leaf("update", "Revise an alias without retargeting workspace identity", "WORKSPACE_ID"),
 			leaf("remove", "Disable one approval and retain its history", "WORKSPACE_ID"),
 		}},
 	}}
@@ -60,9 +61,6 @@ func runGatewayCLI(ctx context.Context, a Arguments, deps Dependencies, stdout, 
 	catalog := deps.Catalog
 	if catalog.IsZero() {
 		catalog = NativeCatalog()
-	}
-	if input.Descriptions == nil {
-		input.Descriptions = catalog.Descriptions()
 	}
 	input.Predicates = catalog.Registry()
 	if input.Environment == nil {

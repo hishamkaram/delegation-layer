@@ -11,7 +11,8 @@ The main skill owns [root selection](../SKILL.md#3-prepare-separate-paths-and-a-
 | `delegate --version` | Check the control CLI | None |
 | `providers --json` | List compiled profiles | None |
 | `capabilities --provider ID --json` | Read a compiled contract | None |
-| `models --provider ID [--cwd ABS] --json` | Discover model/effort facts | Native inspection, no admitted task |
+| `models --provider ID [--cwd ABS] --json` | Discover model/effort facts; optional approved [scope guards](#scoped-model-discovery) | Native inspection, no admitted task |
+| `filesystem scopes/list/read/inspect/git --request FILE_OR_DASH --json` | [Bounded filesystem observations](#filesystem-observations) | None; scopes may use the fixed Native OS temp lookup |
 | `doctor [--provider ID --cwd ABS] --json` | Optional passive bundle/root/provider observations | None |
 | `preflight --provider ID --cwd ABS --json` | Check static readiness | None |
 | `dispatch [--auto \| --provider ID] ... --json` | Admit a bounded turn; a Member may supply the destination | At most one launch attempt |
@@ -959,8 +960,7 @@ them. Keep defaults when no explicit choice is needed. Resolve a natural-languag
 name through native discovery:
 
 ```sh
-delegate models \
-  --provider PROVIDER_ID --cwd ABSOLUTE_WORKSPACE --json
+delegate models --provider PROVIDER_ID --cwd ABSOLUTE_WORKSPACE --json
 ```
 
 If discovery cannot resolve a name to one exact ID, ask for that ID; never
@@ -996,6 +996,55 @@ with the result; follow `failure.next_action`, stopping on `stop_and_report`.
 Supervisor refusals retain `supervisor_migration_blocked`,
 `supervisor_migration_unsupported`, or `supervisor_upgrade_required` as
 reason codes and return no model facts.
+
+### Scoped model discovery
+
+An already selected Gateway connector uses Native's saved path approval. It
+keeps the root/project tokens local and supplies the exact workspace token bytes
+through a private regular file (not JSON, no added newline):
+
+```sh
+delegate models --root ABS --provider PROVIDER_ID --cwd CANONICAL_PROJECT --expected-root ROOT_TOKEN --expected-workspace-file /absolute/private/workspace-token --relative-project team/service --json
+```
+
+The three guards are required together; the file is bounded to 1 MiB. Native
+derives the path binding. A supplied cwd must match it; omitting cwd derives
+it. Do not decode/regenerate a token or replace this with a historical project
+SHA. Physical approvals are not accepted by this new route. Each native command
+starts through the existing project-aware lifetime; custody/finish errors cannot
+become model facts. Setup and work share the saved absolute inspection deadline.
+Ordinary `models`, task budgets and local/SSH/Scheduler/TUI defaults are unchanged.
+
+### Filesystem observations
+
+Use the connector's returned scope ID and a relative selector for new cloud
+browsing; it maps those values to Native's saved local approval. No manual alias
+or permanent project pin is needed. Approve an ancestor once; new child projects
+need no new approval. Whole `/tmp` is automatic on Linux. macOS resolves user
+temp through trusted `getconf DARWIN_USER_TEMP_DIR` and includes shared
+`/tmp`/`/private/tmp`, with canonical deduplication. A lookup failure stays an
+explicit discovery error.
+
+The public local CLI accepts a strict JSON regular file or stdin:
+
+```sh
+printf '%s\n' '{}' | delegate filesystem scopes --request - --json
+delegate filesystem list --root ABS --request /absolute/private/list.json --json
+delegate filesystem read --root ABS --request /absolute/private/read.json --json
+delegate filesystem inspect --root ABS --request /absolute/private/inspect.json --json
+delegate filesystem git --root ABS --request /absolute/private/git.json --json
+```
+
+Requests are at most 1 MiB; `--control-timeout` defaults to `30s` and cannot
+exceed `30s`. Pure scopes `{}` needs no root. Other operations retain the root
+guard. Lists have at most 100 entries; reads return at most 65536 requested
+regular-file bytes. Round-trip opaque cursors/versions and base64 names exactly.
+Hidden files, hard links, non-UTF-8 names and binary requested content are not
+filtered or secret-scanned. Special entries can be listed/inspected, but not
+read as content. Symlinks stay within the same selected scope. Git inspection
+reports structural `candidate`/`partial` evidence, never definitive validation.
+See [observation results](result-handling.md#filesystem-and-model-observations)
+and the [local request contract](https://github.com/hishamkaram/delegation-layer/blob/main/docs/connector-contract.md#read-only-filesystem-observations).
 
 ## Checking readiness
 
@@ -1051,6 +1100,44 @@ guidance; never replace this with manual journal deletion.
 
 ## Guarded local connectors
 
-Operator-managed connectors use the public guarded context, resolve, result and
-origin commands described in the [connector contract](https://github.com/hishamkaram/delegation-layer/blob/main/docs/connector-contract.md).
-Ordinary agent task creation and recovery rules above remain unchanged.
+Operator-managed connectors use the public guarded context, resolve, result,
+filesystem, models and origin contracts described in the
+[connector contract](https://github.com/hishamkaram/delegation-layer/blob/main/docs/connector-contract.md).
+Native alone validates provider/model/effort/permission/budget choices. Connection
+and workspace approval save routing, not policy seeds or execution ceilings.
+Omissions retain Native defaults; budgets stay positive and finite (`30m`, or
+`1h` for `codex:review`). Model catalogs and capability options are advisory.
+
+For historical task controls, `--expected-project-sha256` compares SHA256 of the
+exact saved token bytes instead of requiring the vanished project's raw token.
+It is not a fresh project selection and cannot authorize fresh dispatch or
+scoped model discovery. Preserve the original root, origin and spec guards.
+
+Guarded Native continuation accepts a distinct stable successor ID and fresh
+successor origin:
+
+```sh
+delegate continue --root ABS --task PREDECESSOR --id SUCCESSOR --brief /absolute/brief.txt --expected-root ROOT_TOKEN --expected-project-sha256 PROJECT_TOKEN_SHA --expected-origin /absolute/private/predecessor-origin.json --expected-spec-sha256 PREDECESSOR_SPEC_SHA --origin /absolute/private/successor-origin.json --json
+```
+
+Keep successor ID and both immutable origins across uncertainty. Native inherits
+the frozen project/workspace constraint. Gateway `prepare_continuation` remains
+unfinished; do not substitute another dispatch or claim cloud continuation
+parity. These candidate contracts have no implied full-provider, native macOS,
+new-origin/recovery or cloud acceptance. Ordinary task creation, continuation
+and recovery rules above remain unchanged.
+
+For an existing connector profile, review the preview before an authorized
+migration:
+
+```sh
+delegate gateway upgrade --preview --json
+delegate gateway upgrade --accept-execution-policy-removal --json
+```
+
+The acceptance flag authorizes removing obsolete saved execution policy. The
+command uses existing Native and
+OS service owners, compares the saved source before replacement, and preserves
+registration, credentials, original root, disabled approvals/revisions, pins and
+history. Follow blockers; do not replace state, copy an executable or repeat
+login as a shortcut. See the [upgrade guide](https://github.com/hishamkaram/delegation-layer/blob/main/docs/gateway-connect.md#native-root-and-profile).

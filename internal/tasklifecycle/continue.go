@@ -13,6 +13,9 @@ func Continue(request DispatchRequest, options ContinuationOptions) (result Cont
 }
 
 func ContinueContext(ctx context.Context, request DispatchRequest, options ContinuationOptions) (result ContinuationResult) {
+	if err := validateContinuationSelection(request, options); err != nil {
+		return continuationFailure(result, ContinueValidation, "validate-continuation", err)
+	}
 	if options.SuccessorTaskID != "" {
 		if err := task.ValidateTaskID(options.SuccessorTaskID); err != nil {
 			return continuationFailure(result, ContinueValidation, "validate-continuation", err)
@@ -23,7 +26,7 @@ func ContinueContext(ctx context.Context, request DispatchRequest, options Conti
 		return continuationFailure(result, ContinueResolveRoot, "resolve-state-root", err)
 	}
 	result.Root = root
-	predecessor, meta, brief, err := loadContinuationPredecessorContext(ctx, root, request.TaskID, options.Dispatch)
+	predecessor, meta, brief, err := loadSelectedContinuationPredecessorContext(ctx, root, &request, options.Dispatch, options.PredecessorGuard)
 	if err != nil {
 		return continuationFailure(result, ContinueLoadPredecessor, "load-predecessor", err)
 	}

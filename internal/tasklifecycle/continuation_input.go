@@ -6,6 +6,7 @@ import (
 
 	supervisorcore "github.com/hishamkaram/delegation-layer/internal/supervisor"
 	"github.com/hishamkaram/delegation-layer/internal/task"
+	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 )
 
 func LoadContinuationInput(root string, a DispatchRequest, options DispatchOptions) (req *task.TaskRecord, meta *task.MetaRecord, brief []byte, resultErr error) {
@@ -27,18 +28,42 @@ func LoadContinuationInputContext(ctx context.Context, root string, a DispatchRe
 // The predecessor store owns record, ownership and inherited-brief validation.
 // Join all owned closes before a caller override can be read or classified.
 func loadContinuationPredecessorContext(ctx context.Context, root, id string, options DispatchOptions) (req *task.TaskRecord, meta *task.MetaRecord, brief []byte, resultErr error) {
+	return loadSelectedContinuationPredecessorContext(ctx, root, &DispatchRequest{TaskID: id}, options, nil)
+}
+
+func loadSelectedContinuationPredecessorContext(ctx context.Context, root string, request *DispatchRequest, options DispatchOptions, selection *taskdir.ConnectorTaskSelection) (req *task.TaskRecord, meta *task.MetaRecord, brief []byte, resultErr error) {
 	store, err := options.openStore(root, false)
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	td, err := store.OpenTask(id)
+	var guard *taskdir.ConnectorControlGuard
+	if selection != nil {
+		var guardErr error
+		guard, guardErr = store.BorrowConnectorTaskControlContext(ctx, request.TaskID, *selection)
+		if guardErr != nil {
+			return nil, nil, nil, errors.Join(guardErr, store.Close())
+		}
+	}
+	td, err := store.OpenTask(request.TaskID)
 	if err != nil {
 		return nil, nil, nil, errors.Join(err, store.Close())
 	}
-	defer func() { resultErr = errors.Join(resultErr, td.Close(), store.Close()) }()
+	defer func() {
+		if guard != nil {
+			resultErr = errors.Join(resultErr, guard.Validate(ctx))
+		}
+		resultErr = errors.Join(resultErr, td.Close(), store.Close())
+	}()
 	req, meta, err = td.PreparedRecords()
 	if err != nil {
 		return nil, nil, nil, err
+	}
+	if selection != nil {
+		binding, bindingErr := guardedContinuationContext(req.ConnectorContext, request.ConnectorContext)
+		if bindingErr != nil {
+			return nil, nil, nil, bindingErr
+		}
+		request.ConnectorContext = binding
 	}
 	ownership, err := supervisorcore.RunnerOwnershipForTaskContext(ctx, root, td, meta)
 	if err != nil {

@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -170,6 +171,9 @@ func discoverModels(a Arguments, deps Dependencies) (catalog commonprovider.Mode
 	if err != nil {
 		return catalog, admission.WithStage("resolve-state-root", err)
 	}
+	if err = prepareScopedModels(context.Background(), &a, root, deps); err != nil {
+		return catalog, admission.WithStage("validate-request", err)
+	}
 	if a.Cwd == "" {
 		a.Cwd, err = os.Getwd()
 		if err != nil {
@@ -184,11 +188,16 @@ func discoverModels(a Arguments, deps Dependencies) (catalog commonprovider.Mode
 	if err != nil || registration.Models == nil || len(registration.Description.SupportedModes) == 0 {
 		return catalog, admission.WithStage("select-provider", commonprovider.ErrProfileUnavailable)
 	}
-	store, err := openStore(root, deps.storeDependencies(), true)
+	store, custody, err := openModelsStore(context.Background(), a, root, deps)
 	if err != nil {
 		return catalog, admission.WithStage("open-state", err)
 	}
 	defer func() { resultErr = closeModelDiscoveryStore(resultErr, store) }()
+	if custody != nil {
+		defer func() {
+			resultErr = errors.Join(resultErr, admission.WithStage("validate-request", custody.ValidateProject(context.Background())))
+		}()
+	}
 	return discoverModelsInStore(a, deps, store, cwd, registration.Description.SupportedModes[0])
 }
 
@@ -216,6 +225,7 @@ func discoverModelsInStore(a Arguments, deps Dependencies, store *taskdir.Store,
 	if err != nil {
 		return commonprovider.ModelCatalog{}, admission.WithStage("prepare-model-discovery", err)
 	}
+	req.ConnectorContext = a.Models.binding.Clone()
 	candidate, err := prepareModelsCandidate(deps, store.Root, req)
 	if err != nil {
 		return commonprovider.ModelCatalog{}, admission.WithStage("prepare-model-discovery", err)

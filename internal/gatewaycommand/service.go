@@ -51,7 +51,7 @@ func (c invocation) serviceManager(executable string) (Service, error) {
 }
 
 func (c invocation) service(ctx context.Context, response Response) (Response, error) {
-	local, err := c.dependencies.Client.LocalContext(ctx, c.profile)
+	local, err := c.dependencies.Client.ProfileMigrationSource(ctx, c.profile)
 	if err != nil {
 		return response, err
 	}
@@ -82,6 +82,9 @@ func (c invocation) service(ctx context.Context, response Response) (Response, e
 		err = errors.New("unsupported_gateway_service_action")
 	}
 	response.Service = &status
+	if err == nil && c.arguments.ServiceAction == "status" {
+		_, err = c.selectedContext(ctx)
+	}
 	return response, err
 }
 

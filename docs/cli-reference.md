@@ -42,6 +42,8 @@ input. Invalid requests keep exit `2` with scoped usage on the error stream.
 | `result save` | [Complete verified local answer export](../skills/agent-integration/references/command-reference.md#result-save) |
 | `context`, `resolve`, guarded `result read`, `origin` | [Guarded local connector contract](connector-contract.md) |
 | `gateway connect/status/doctor/serve/disconnect`, `gateway workspace`, `gateway service` | [Gateway login, workspace approvals and per-user service](gateway-connect.md) |
+| `filesystem scopes/list/read/inspect/git` | [Bounded filesystem observations](connector-contract.md#read-only-filesystem-observations) |
+| `gateway upgrade --preview/--accept-execution-policy-removal` | [Existing-profile upgrade](gateway-connect.md#native-root-and-profile) |
 | `gateway repair-context` | [Explicit root context repair](#root-context-repair) |
 | `supervisor status/ensure-owner/migrate/restart` | [Operator recovery](#supervisor-recovery) |
 | `settle ID [--kind task|inspection] --prepare/--confirm` | [Human maintenance permission](#human-maintenance-permission) |
@@ -273,7 +275,22 @@ and [provider differences](providers.md).
 
 ## Models (implemented)
 
-See [model discovery](../skills/agent-integration/references/command-reference.md#choosing-models-and-effort).
+See [model discovery](../skills/agent-integration/references/command-reference.md#choosing-models-and-effort)
+and [scoped model guards](connector-contract.md#scoped-model-discovery). Native
+owns provider/model/effort/permission/budget validation and defaults. Discovery
+is advisory; an explicit model ID need not appear in a catalog. Native budgets
+remain finite (`30m` by default, `1h` for `codex:review`). Gateway connection and
+workspace approval save routing, not execution-policy defaults.
+
+## Filesystem and guarded continuation
+
+Use [filesystem observations](connector-contract.md#read-only-filesystem-observations)
+for strict request files, bounded pages/bytes and lossless names. Use
+[guarded Native continuation](connector-contract.md#guarded-native-continuation)
+for successor IDs and fresh origins. Historical project-token SHA guards compare
+saved task bindings; they do not authorize fresh admission. Gateway
+`prepare_continuation` remains unfinished. These candidate contracts do not
+establish cloud or installed-provider acceptance.
 
 ## Capabilities
 

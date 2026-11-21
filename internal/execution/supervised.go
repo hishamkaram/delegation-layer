@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/hishamkaram/delegation-layer/internal/task"
-	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 )
 
 // PreflightScope borrows an already-supervised lifetime. Its context cancels
@@ -20,7 +19,8 @@ type PreflightScope struct {
 	authorize          func() error
 	start              func(func() error) error
 	lifetime           Lifetime
-	project            *taskdir.StartPermit
+	project            ProjectDirectory
+	strictProject      bool
 	prepareEnvironment func(context.Context, []string) ([]string, error)
 }
 
@@ -61,6 +61,11 @@ func (s PreflightScope) StartCommand(cmd *exec.Cmd, start func() error) error {
 	if cmd == nil || start == nil {
 		return errBudgetExpiredBeforeStart
 	}
+	if s.strictProject {
+		if _, supported := s.lifetime.(ProjectLifetime); !supported {
+			return task.ErrInvalidPermit
+		}
+	}
 	if s.lifetime == nil {
 		return s.Start(start)
 	}
@@ -68,6 +73,11 @@ func (s PreflightScope) StartCommand(cmd *exec.Cmd, start func() error) error {
 		return s.Start(func() error {
 			return s.project.WithProjectDirectory(s.ctx, func(directory *os.File, launch task.ProjectLaunchContext) error {
 				if cmd.Dir != launch.Binding.Project.Path {
+					if s.strictProject {
+						return task.ErrIdentityMismatch
+					}
+					// Historical task inspection may run a credential helper in
+					// the provider home. Scoped discovery requires the project cwd.
 					return s.lifetime.StartCommand(cmd, start)
 				}
 				lifetime, supported := s.lifetime.(ProjectLifetime)
@@ -94,7 +104,7 @@ func (s PreflightScope) FinishCommand(cmd *exec.Cmd) error {
 	ctx := context.WithoutCancel(s.ctx)
 	err := s.lifetime.FinishCommand(ctx, cmd)
 	if s.project != nil {
-		err = errors.Join(err, s.project.RunnerLease().ValidateProject(ctx))
+		err = errors.Join(err, s.project.ValidateProject(ctx))
 	}
 	return err
 }
@@ -124,6 +134,7 @@ func (b *budgetOwner) runScopedPlan(opts Options, plan Plan, work func(Preflight
 		start:              func(start func() error) error { return b.authorizeAndStart(opts, start) },
 		lifetime:           opts.Lifetime,
 		project:            opts.project,
+		strictProject:      opts.strictProject,
 		prepareEnvironment: opts.PrepareEnvironment,
 	}
 	if err := scope.Authorize(); err != nil {
@@ -139,6 +150,7 @@ type SupervisedOptions struct {
 	Clock              Clock
 	Stopper            Stopper
 	Lifetime           Lifetime
+	Project            ProjectDirectory
 }
 
 // RunSupervised runs finite inspection work inside an existing supervisor job.
@@ -160,7 +172,7 @@ func RunSupervisedContext(ctx context.Context, deadline time.Time, opts Supervis
 	if deadline.IsZero() || work == nil || opts.Stopper == nil {
 		return errors.New("invalid supervised inspection lifetime"), nil
 	}
-	executionOptions := Options{Clock: opts.Clock, Stopper: opts.Stopper, Lifetime: opts.Lifetime, PrepareEnvironment: opts.PrepareEnvironment}
+	executionOptions := Options{Clock: opts.Clock, Stopper: opts.Stopper, Lifetime: opts.Lifetime, PrepareEnvironment: opts.PrepareEnvironment, project: opts.Project, strictProject: opts.Project != nil}
 	budget := armBudgetUntilContext(ctx, executionOptions.clock(), deadline, executionOptions)
 	workErr = budget.runScoped(executionOptions, work)
 	if workErr == nil {
@@ -180,5 +192,6 @@ func RunSupervisedContext(ctx context.Context, deadline time.Time, opts Supervis
 		// The Lifetime implementation retains its existing bounded stop policy.
 		workErr = errors.Join(workErr, opts.Lifetime.CloseTask(context.WithoutCancel(ctx)))
 	}
+	workErr = errors.Join(workErr, executionOptions.validateProject(context.WithoutCancel(ctx)))
 	return workErr, stopErr
 }

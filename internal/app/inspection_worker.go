@@ -334,7 +334,17 @@ func runSupervisedInspection(operation *inspection.Operation, supervisor *pueue.
 	stopper := &inspectionBudgetStopper{operation: operation, client: supervisor, identity: identity, lifetime: lifetime}
 	var facts json.RawMessage
 	options := execution.SupervisedOptions{Stopper: stopper, Lifetime: lifetime, PrepareEnvironment: operationalEnvironmentPreparation(store)}
+	// This worker has only its persisted deadline, not caller cancellation.
+	// Bound custody observation by that deadline, then cancel its setup observer
+	// before the existing process budget owner arms the same absolute deadline.
+	setup, cancel := context.WithDeadline(context.Background(), operation.Deadline())
+	project, projectErr := scopedModelCustody(setup, store, record)
+	cancel()
+	options.Project = project
 	workErr, stopErr := execution.RunSupervised(operation.Deadline(), options, func(scope execution.PreflightScope) error {
+		if projectErr != nil {
+			return inspectionWorkerFailure("project-custody")
+		}
 		return runInspectionCallback(scope, operation, deps, store, record, meta, &facts)
 	})
 	return facts, workErr, stopErr

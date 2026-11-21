@@ -35,7 +35,7 @@ type commandClient struct {
 func (c *commandClient) Connect(ctx context.Context, o deviceclient.ConnectOptions) (deviceclient.ConnectionStatus, error) {
 	c.connectCalls++
 	c.options = o
-	c.local = deviceclient.LocalContextInfo{DelegateRoot: o.DelegateRoot, DelegateRootContext: o.DelegateRootContext, DelegateExecutable: o.DelegateExecutable, Providers: o.Providers}
+	c.local = deviceclient.LocalContextInfo{DelegateRoot: o.DelegateRoot, DelegateRootContext: o.DelegateRootContext, DelegateExecutable: o.DelegateExecutable}
 	if c.challenge {
 		if err := o.PresentChallenge(ctx, deviceclient.Challenge{VerificationURI: "https://issuer.example/activate", VerificationURIComplete: "https://issuer.example/activate?user_code=PRIVATE-COMPLETE", UserCode: "USER-CODE", ExpiresAt: time.Now().Add(time.Minute)}); err != nil {
 			return deviceclient.ConnectionStatus{}, err
@@ -45,7 +45,17 @@ func (c *commandClient) Connect(ctx context.Context, o deviceclient.ConnectOptio
 }
 
 func (c *commandClient) LocalContext(context.Context, string) (deviceclient.LocalContextInfo, error) {
-	return c.local, nil
+	local := c.local
+	if local.DelegateExecutable == "" {
+		var err error
+		local.DelegateExecutable, err = verifiedexec.LocatePath("/usr/bin/true")
+		return local, err
+	}
+	return local, nil
+}
+
+func (c *commandClient) ProfileMigrationSource(ctx context.Context, directory string) (deviceclient.LocalContextInfo, error) {
+	return c.LocalContext(ctx, directory)
 }
 
 func (c *commandClient) AllowWorkspace(_ context.Context, _ string, a deviceclient.WorkspaceApproval) (deviceclient.Workspace, error) {
@@ -69,20 +79,18 @@ func commandDependencies(t *testing.T, client Client) Dependencies {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return Dependencies{Client: client, Executable: executable, Descriptions: policyDescriptions(), Predicates: predicate.Default(), Environment: []string{}, Services: commandServices{service: &commandService{}}}
+	return Dependencies{Client: client, Executable: executable, Predicates: predicate.Default(), Environment: []string{}, Services: commandServices{service: &commandService{}}}
 }
 
-func TestGatewayWorkspaceBudgetUpdatePreservesSDKRestrictions(t *testing.T) {
-	policy := deviceclient.ProviderPolicy{Provider: "claude:print", Models: []string{"approved-model"}, Efforts: []string{"high"}, Permissions: []string{"read-only"}, MaxBudgetSeconds: 120}
+func TestGatewayWorkspaceAliasUpdatePreservesSDKRevision(t *testing.T) {
 	id := strings.Repeat("a", 32)
-	client := &commandClient{workspaces: []deviceclient.Workspace{{ID: id, Revision: 7, Enabled: true, Providers: []deviceclient.ProviderPolicy{policy}}}}
+	client := &commandClient{}
 	a := Arguments{Action: "workspace", WorkspaceAction: "update"}
-	fs := flag.NewFlagSet("policy", flag.ContinueOnError)
+	fs := flag.NewFlagSet("workspace", flag.ContinueOnError)
 	RegisterFlags(fs, &a)
-	if err := fs.Parse([]string{"--expected-revision", "7", "--max-budget", "60s"}); err != nil {
+	if err := fs.Parse([]string{"--expected-revision", "7", "--alias", "renamed"}); err != nil {
 		t.Fatal(err)
 	}
-	a.NoteFlags(fs)
 	if err := a.Validate([]string{id}); err != nil {
 		t.Fatal(err)
 	}
@@ -95,15 +103,11 @@ func TestGatewayWorkspaceBudgetUpdatePreservesSDKRestrictions(t *testing.T) {
 	if code := Run(boundedTestContext(t), a, root, true, io.Discard, io.Discard, commandDependencies(t, client)); code != 0 {
 		t.Fatalf("update exit%d", code)
 	}
-	if client.updateRevision != 7 || len(client.update.Providers) != 1 {
-		t.Fatalf("lost explicit revision/provider scope: %+v", client.update)
-	}
-	p := client.update.Providers[0]
-	if p.NativeModel || p.NativeEffort || p.Models[0] != "approved-model" || p.Efforts[0] != "high" || p.MaxBudgetSeconds != 60 {
-		t.Fatalf("budget-only update broadened policy: %+v", p)
+	if client.updateRevision != 7 || client.update.Alias != "renamed" {
+		t.Fatalf("lost exact alias or revision: %+v", client.update)
 	}
 	if _, err := os.Stat(root); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("local SDK policy update initialized Native state: %v", err)
+		t.Fatalf("local SDK alias update initialized Native state: %v", err)
 	}
 }
 
@@ -120,7 +124,7 @@ func TestGatewayExplicitRootCannotOverrideSavedProfileSource(t *testing.T) {
 func TestGatewayConnectPinsNativeSourceWithoutApprovingWorkspaces(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "state")
 	client := &commandClient{}
-	a := Arguments{Action: "connect", GatewayURL: "https://gateway.example", Headless: true, Permission: "read-only", MaximumBudget: 300 * time.Second, DeviceName: "test-device"}
+	a := Arguments{Action: "connect", GatewayURL: "https://gateway.example", Headless: true, DeviceName: "test-device"}
 	var output, diagnostic bytes.Buffer
 	if code := Run(boundedTestContext(t), a, root, true, &output, &diagnostic, commandDependencies(t, client)); code != 0 {
 		t.Fatalf("connect exit=%d output=%s diagnostic=%s", code, output.String(), diagnostic.String())
@@ -161,7 +165,7 @@ func testGatewayDeviceFlowChallenge(t *testing.T, headless bool) {
 		}
 		return errors.New("activation unavailable")
 	}
-	a := Arguments{Action: "connect", GatewayURL: "https://gateway.example", Headless: headless, Permission: "read-only", MaximumBudget: 300 * time.Second, DeviceName: "test-device"}
+	a := Arguments{Action: "connect", GatewayURL: "https://gateway.example", Headless: headless, DeviceName: "test-device"}
 	var output, diagnostic bytes.Buffer
 	if code := Run(boundedTestContext(t), a, filepath.Join(t.TempDir(), "state"), true, &output, &diagnostic, deps); code != 0 {
 		t.Fatalf("flow exit=%d output=%s", code, output.String())
@@ -182,7 +186,7 @@ func TestGatewayUnattendedStdinUsesSameSDKSource(t *testing.T) {
 	deps := commandDependencies(t, client)
 	input := bytes.NewBufferString("owned test token source")
 	deps.Input = input
-	a := Arguments{Action: "connect", GatewayURL: "https://gateway.example", TokenFile: "-", Headless: true, Permission: "read-only", MaximumBudget: 300 * time.Second, DeviceName: "test-device"}
+	a := Arguments{Action: "connect", GatewayURL: "https://gateway.example", TokenFile: "-", Headless: true, DeviceName: "test-device"}
 	if code := Run(boundedTestContext(t), a, filepath.Join(t.TempDir(), "state"), true, io.Discard, io.Discard, deps); code != 0 {
 		t.Fatalf("unattended exit%d", code)
 	}
@@ -203,7 +207,7 @@ func TestGatewayAllowInspectsExplicitExistingDirectoryAndHidesTokens(t *testing.
 	if code := Run(ctx, a, root, true, &output, &diagnostic, commandDependencies(t, client)); code != 0 {
 		t.Fatalf("allow exit=%d output=%s", code, output.String())
 	}
-	if client.allowCalls != 1 || client.approval.NativeContext == "" || client.approval.Alias != "approved" || client.approval.Providers != nil {
+	if client.allowCalls != 1 || client.approval.NativeContext == "" || client.approval.Alias != "approved" {
 		t.Fatal("workspace approval lost inspected context or copied a second policy authority")
 	}
 	if bytes.Contains(output.Bytes(), []byte(client.approval.NativeContext)) || bytes.Contains(output.Bytes(), []byte(observation.RootToken)) {

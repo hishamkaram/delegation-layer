@@ -55,7 +55,8 @@ func dispatch(a Arguments, deps Dependencies) commandResult {
 	return dispatchContext(context.Background(), a, deps)
 }
 
-func dispatchContext(ctx context.Context, a Arguments, deps Dependencies) commandResult {
+func dispatchContext(ctx context.Context, a Arguments, deps Dependencies) (result commandResult) {
+	defer func() { result.connectorOutput = a.Connector.outputPolicy }()
 	if err := prepareGuardedDispatchContext(ctx, &a, deps); err != nil {
 		return connectorFailure(newResponse("dispatch"), err)
 	}
@@ -74,7 +75,7 @@ func dispatchContext(ctx context.Context, a Arguments, deps Dependencies) comman
 			return store, nil
 		}
 	}
-	result := dispatchCommandResult(tasklifecycle.DispatchContext(ctx, dispatchRequest(a, deps), options))
+	result = dispatchCommandResult(tasklifecycle.DispatchContext(ctx, dispatchRequest(a, deps), options))
 	return attachConnectorDispatchReceipt(ctx, a, deps, result)
 }
 
@@ -82,9 +83,40 @@ func continueTask(a Arguments, deps Dependencies) commandResult {
 	return continueTaskContext(context.Background(), a, deps)
 }
 
-func continueTaskContext(ctx context.Context, a Arguments, deps Dependencies) commandResult {
+func continueTaskContext(ctx context.Context, a Arguments, deps Dependencies) (result commandResult) {
+	defer func() { result.connectorOutput = a.Connector.outputPolicy }()
+	if hasConnectorGuards(a.Connector) {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, a.Connector.ControlTimeout)
+		defer cancel()
+	}
 	deps = deps.withCapturedEnvironmentContext(ctx)
 	options := tasklifecycle.ContinuationOptions{Dispatch: dispatchOptionsContext(ctx, deps, true), SuccessorTaskID: a.SuccessorTaskID}
 	options.Dispatch.ResourceGuards = a.ResourceGuards
-	return continuationCommandResult(tasklifecycle.ContinueContext(ctx, dispatchRequest(a, deps), options))
+	if hasConnectorGuards(a.Connector) {
+		if err := loadConnectorOrigin(ctx, &a, deps); err != nil {
+			return connectorFailure(newResponse("continue"), err)
+		}
+		guard := connectorTaskSelection(a)
+		if err := guard.Validate(); err != nil {
+			return connectorFailure(newResponse("continue"), err)
+		}
+		options.PredecessorGuard = &guard
+		var origin task.GatewayOrigin
+		if err := readConnectorJSON(ctx, a.Connector.SuccessorOriginFile, deps.Input, &origin); err != nil {
+			return connectorFailure(newResponse("continue"), err)
+		}
+		if err := task.ValidateGatewayOrigin(origin); err != nil {
+			return connectorFailure(newResponse("continue"), err)
+		}
+		a.Connector.origin = &origin
+		a.Connector.outputPolicy = a.Connector.outputPolicy.withOrigin(origin)
+	}
+	result = continuationCommandResult(tasklifecycle.ContinueContext(ctx, dispatchRequest(a, deps), options))
+	if hasConnectorGuards(a.Connector) {
+		a.TaskID = a.SuccessorTaskID
+		a.Connector.ExpectedSpecSHA256 = ""
+		result = attachConnectorDispatchReceipt(ctx, a, deps, result)
+	}
+	return result
 }

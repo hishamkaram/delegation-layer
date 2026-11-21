@@ -17,6 +17,7 @@ func cancel(a Arguments, deps Dependencies) commandResult {
 }
 
 func cancelContext(ctx context.Context, a Arguments, deps Dependencies) (result commandResult) {
+	defer func() { result.connectorOutput = a.Connector.outputPolicy }()
 	response := newResponse("cancel")
 	root, err := tasklifecycle.ResolveRoot(a.Root)
 	if err != nil {

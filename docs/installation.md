@@ -6,6 +6,8 @@ startup. Provider CLIs and their native logins remain yours to install and manag
 These repository docs describe current main. The
 [latest published release](https://github.com/hishamkaram/delegation-layer/releases/latest)
 can lag main; repository instructions do not prove a change is in your installed build.
+Native 0.9.0 and Gateway 0.2.0 are prepared candidates, not published releases;
+this guide does not assert their npm/Homebrew/GitHub availability.
 
 ## Recommended standalone setup
 
@@ -217,7 +219,11 @@ To make this device available through a trusted self-hosted Gateway, follow
 device and installs/starts its per-user connector service by default;
 `--foreground` instead runs in the current terminal. This explicit Gateway
 feature does not install a scheduler service or change ordinary SSH/TUI use.
-Approve existing workspace roots separately before remote task admission.
+Approve an existing ancestor once for project routing; whole OS temporary scopes
+are discovered automatically. Connection/approval save no provider, model,
+effort, permission or budget ceiling. Native owns those task choices and finite
+defaults. New scope selection needs no manual project/temp aliases. Local,
+Scheduler, SSH and TUI defaults are unchanged.
 
 ## Updates
 
@@ -238,6 +244,23 @@ Keep its operation ID and completion argv. Update with the same installer
 returned completion command from the new installation before restarting those
 producers. This also handles an installer that retains the same executable paths.
 Restart the harness and review changed hooks as required.
+
+For a saved Gateway profile, use the current installed build's supported
+handoff after reviewing its preview:
+
+```sh
+delegate gateway upgrade --preview --json
+delegate gateway upgrade --accept-execution-policy-removal --json
+```
+
+Keep its original profile/root selection. This removes obsolete saved execution
+policy through the SDK migration owner and uses the existing Native supervisor
+and OS service owners for the installed-source handoff. It preserves device
+registration, credentials/generation, original root, disabled approvals and
+revisions, pins and history. Preview performs no Native/service command and
+cannot prove prerequisites. Pending/blocked responses require their reported
+next action; no replacement root, copied binary, tmux setup or repeat login is
+part of recovery. See the [Gateway upgrade guide](gateway-connect.md#native-root-and-profile).
 
 Keep existing task state. Removing an old Homebrew keg must not require retaining
 its executables: if an update already removed them, the current installation can

@@ -13,7 +13,6 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/gatewaycommand/browser"
 	"github.com/hishamkaram/delegation-layer/internal/gatewayservice"
 	"github.com/hishamkaram/delegation-layer/internal/predicate"
-	"github.com/hishamkaram/delegation-layer/internal/provider"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 	"github.com/hishamkaram/delegation-layer/internal/tasklifecycle"
@@ -23,14 +22,14 @@ import (
 // Dependencies are selected command-edge resources, never global hooks.
 // The caller owns the input streams and immutable Native catalog snapshot.
 type Dependencies struct {
-	Client       Client
-	Executable   string
-	Descriptions []provider.Description
-	Predicates   predicate.Registry
-	Environment  []string
-	Input        io.Reader
-	OpenBrowser  func(context.Context, string) error
-	Services     ServiceFactory
+	Client             Client
+	Executable         string
+	Predicates         predicate.Registry
+	Environment        []string
+	Input              io.Reader
+	OpenBrowser        func(context.Context, string) error
+	Services           ServiceFactory
+	NativeInstallation NativeInstallation
 	// RootContextGate can supply the runtime owner at the application boundary.
 	// The default composes Native's existing bootstrap and closure authorities.
 	RootContextGate taskdir.RootContextReconciliationGate
@@ -52,6 +51,7 @@ type Response struct {
 	Failure            string                             `json:"failure,omitempty"`
 	NextAction         string                             `json:"next_action,omitempty"`
 	RootContext        *taskdir.RootContextReconciliation `json:"root_context,omitempty"`
+	Upgrade            *UpgradeObservation                `json:"upgrade,omitempty"`
 }
 
 type DoctorObservation struct {
@@ -104,7 +104,7 @@ func Run(parent context.Context, a Arguments, rawRoot string, jsonOutput bool, s
 }
 
 func (c invocation) requireSelectedRoot(ctx context.Context) error {
-	local, err := c.dependencies.Client.LocalContext(ctx, c.profile)
+	local, err := c.dependencies.Client.ProfileMigrationSource(ctx, c.profile)
 	if err != nil {
 		return err
 	}
@@ -119,9 +119,9 @@ func (c invocation) execute(ctx context.Context, response Response) (Response, e
 	case "connect":
 		return c.connect(ctx, response)
 	case "status":
-		status, err := c.dependencies.Client.Status(ctx, c.profile)
-		response.Credential = &status
-		return response, err
+		return c.status(ctx, response)
+	case "upgrade":
+		return c.upgrade(ctx, response)
 	case "doctor":
 		return c.doctor(ctx, response)
 	case "repair-context":
@@ -153,10 +153,6 @@ func (c invocation) connect(ctx context.Context, response Response) (Response, e
 }
 
 func (c invocation) enroll(ctx context.Context, response Response) (Response, error) {
-	policies, err := providerPolicies(c.arguments, c.dependencies.Descriptions)
-	if err != nil {
-		return response, err
-	}
 	root, observed, err := rootContext(ctx, c.root, c.dependencies.Predicates, true)
 	if err != nil {
 		return response, err
@@ -172,7 +168,7 @@ func (c invocation) enroll(ctx context.Context, response Response) (Response, er
 			return response, err
 		}
 	}
-	options := deviceclient.ConnectOptions{GatewayURL: c.arguments.GatewayURL, ProfileDirectory: c.profile, DelegateExecutable: executable, DelegateRoot: root, DelegateRootContext: observed.RootToken, DeviceName: name, Providers: policies, ReplaceExisting: c.arguments.Replace, PresentChallenge: c.challenge(executable)}
+	options := deviceclient.ConnectOptions{GatewayURL: c.arguments.GatewayURL, ProfileDirectory: c.profile, DelegateExecutable: executable, DelegateRoot: root, DelegateRootContext: observed.RootToken, DeviceName: name, ReplaceExisting: c.arguments.Replace, PresentChallenge: c.challenge(executable)}
 	if c.arguments.PrivateCA != "" {
 		options.PrivateCAFile, err = filepath.Abs(c.arguments.PrivateCA)
 		if err != nil {
@@ -209,6 +205,9 @@ func (c invocation) selectedContext(ctx context.Context) (deviceclient.LocalCont
 	if err != nil {
 		return local, err
 	}
+	if selected, sourceErr := verifiedexec.LocatePath(local.DelegateExecutable); sourceErr != nil || selected != local.DelegateExecutable {
+		return local, errors.Join(ErrInstallationMigrationRequired, sourceErr)
+	}
 	root, observation, err := rootContext(ctx, local.DelegateRoot, c.dependencies.Predicates, false)
 	if err != nil {
 		return local, err
@@ -241,6 +240,12 @@ func publicError(err error) (failure, next string, exitCode int) {
 	}
 	serviceFailure, serviceNext, serviceCode, serviceMatched := servicePublicError(err)
 	switch {
+	case errors.Is(err, deviceclient.ErrMigrationRequired), errors.Is(err, ErrInstallationMigrationRequired):
+		return "migration_required", "run_gateway_upgrade_preview", 1
+	case errors.Is(err, deviceclient.ErrMigrationAcceptanceRequired):
+		return "migration_acceptance_required", "run_gateway_upgrade_with_acceptance", 1
+	case nativeUpgradePendingOnly(err):
+		return "gateway_upgrade_pending", "retry_gateway_upgrade_same_profile", 3
 	case errors.Is(err, ErrOfflineCutoverRequired):
 		return "root_cutover_required", "run_explicit_offline_cutover", 1
 	case errors.Is(err, ErrRootExists):
