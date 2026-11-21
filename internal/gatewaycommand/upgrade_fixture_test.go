@@ -162,7 +162,10 @@ func newUpgradeFixture(t *testing.T) *upgradeFixture {
 		t.Fatal(err)
 	}
 	f := &upgradeFixture{root: root, profile: filepath.Join(root, "gateway"), rootToken: observed.RootToken, enrollment: newUpgradeEnrollment(t)}
-	base := t.TempDir()
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
 	f.oldExecutable, f.newExecutable = filepath.Join(base, "old-keg", "delegate"), filepath.Join(base, "new-keg", "delegate")
 	for _, path := range []string{f.oldExecutable, f.newExecutable} {
 		if err = os.MkdirAll(filepath.Dir(path), 0o700); err != nil {

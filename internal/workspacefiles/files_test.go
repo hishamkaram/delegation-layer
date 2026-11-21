@@ -39,7 +39,8 @@ func must(t *testing.T, err error) {
 
 func newFixture(t *testing.T) fixture {
 	t.Helper()
-	base := t.TempDir()
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	must(t, err)
 	store, err := taskdir.InitStoreWithPredicatesContext(t.Context(), filepath.Join(base, "native"), predicate.Default())
 	must(t, err)
 	rootToken, err := store.RootTokenContext(t.Context())
@@ -145,8 +146,13 @@ func TestPublicReadsPreserveNativeStateAndExactRanges(t *testing.T) {
 }
 
 func TestDirectoryPagesAreLosslessBoundedAndRestartAfterChanges(t *testing.T) {
+	testDirectoryPagesAreLosslessBoundedAndRestartAfterChanges(t, "b雪")
+}
+
+func testDirectoryPagesAreLosslessBoundedAndRestartAfterChanges(t *testing.T, specialName string) {
+	t.Helper()
 	f := newFixture(t)
-	names := []string{".hidden", "colon:name", "back\\slash", "control\x01", "white space", "new\nline", "日本語", string([]byte{'b', 0xff})}
+	names := []string{".hidden", "colon:name", "back\\slash", "control\x01", "white space", "new\nline", "日本語", specialName}
 	for index := range 207 {
 		names = append(names, fmt.Sprintf("file%03d", index))
 	}
@@ -471,28 +477,47 @@ func TestOptionsAndCancellationFailWithoutPartialData(t *testing.T) {
 
 func TestLargeEscapedDirectoryPagesRemainWithinTheFrameBudget(t *testing.T) {
 	f := newFixture(t)
-	path := f.path
+	root, err := os.OpenRoot(f.path)
+	must(t, err)
+	t.Cleanup(func() { must(t, root.Close()) })
+	// Root walks components, so the fixture does not pass a long absolute
+	// pathname to one syscall on platforms with a smaller PATH_MAX.
+	var path string
 	var segments []string
 	for range 16 {
 		segment := strings.Repeat("\x01", 200)
 		segments = append(segments, segment)
-		path = filepath.Join(path, segment)
-		must(t, os.Mkdir(path, 0o700))
+		path = filepath.Join(segments...)
+		must(t, root.Mkdir(path, 0o700))
 	}
-	for index := range 100 {
-		write(t, filepath.Join(path, fmt.Sprintf("entry%03d", index)), nil)
+	const entryCount = 100
+	for index := range entryCount {
+		must(t, root.WriteFile(filepath.Join(path, fmt.Sprintf("entry%03d", index)), nil, 0o600))
 	}
 	request := f.request
-	request.RelativePath = filepath.Join(segments...)
+	request.RelativePath = path
+	encodedPath, err := json.Marshal(path)
+	must(t, err)
+	// Each entry repeats this path. Raw-size accounting fits, while just
+	// the JSON-escaped path fields exceed the response budget.
+	if len(path)*entryCount >= MaxResponseBytes || len(encodedPath)*entryCount <= MaxResponseBytes {
+		t.Fatal("fixture no longer distinguishes raw and encoded page sizes")
+	}
 	result, err := Execute(t.Context(), f.root, List, request)
 	requireCode(t, err, ResourceLimit)
 	if !reflect.DeepEqual(result, Result{}) {
 		t.Fatal("oversized page escaped the response budget")
 	}
 	request.Limit = 10
-	page := execute(t, f, List, request).List
+	small := execute(t, f, List, request)
+	page := small.List
 	if len(page.Entries) != 10 || page.EOF || page.NextCursor == "" {
 		t.Fatal("smaller explicit page could not access the same unfiltered names")
+	}
+	encoded, err := json.Marshal(small)
+	must(t, err)
+	if len(encoded) > MaxResponseBytes {
+		t.Fatal("smaller page exceeded the encoded response budget")
 	}
 }
 
