@@ -573,36 +573,23 @@ delegate supervisor ensure-owner --prepare-upgrade --json
 delegate supervisor ensure-owner --complete-upgrade OP --refresh-owner --json
 ```
 
-Keep the exact root. Ordinary ensure starts/resumes a reactive drain for a
-different selected installation; a healthy current pair is reused. Proactive
-prepare precedes an installer, including same-path replacements, and requires
-its exact completion OP afterward. `--refresh-owner` alone refreshes the serving
-helper, not the daemon upgrade authorization. Read `supervisor_control.upgrade`
-(`operation_id`, `mode`, `phase`, optional `completed` and `completion_command`)
-with `state`, `next_action` and errors. A repeated completed OP is historical,
-not a fresh readiness check. Exit `0` includes prepared/helper/history responses;
-`3` is pending; `1` fault/refusal; `2` invalid input.
+Keep the root, OP and returned completion argv. Ordinary ensure starts/resumes
+a reactive drain for a different installed pair; healthy current pairs are reused.
+Proactive prepare precedes replacement, including same-path updates; complete
+its exact OP afterward. `--refresh-owner` alone refreshes the serving helper,
+without daemon replacement authority.
 
-Stop the selected root's scheduler/connector and quiesce external/custom writers,
-including aliases addressing its private endpoint from other roots, before
-maintenance. Private Drain fences participating private admissions only. Follow
-the [upgrade procedure](https://github.com/hishamkaram/delegation-layer/blob/main/docs/cli-reference.md#installation-upgrades)
-and preserve returned completion argv boundaries. Do not clear a fence, replay
-an uncertain task or infer closure from queue completion.
-Finish this handoff before another installation replacement. The same operation
-can reselect a missing candidate only before migration accepts a target; an
-unavailable accepted target remains a fault. Preserve its OP and report the
-failure without clearing records or substituting another target.
+Read `supervisor_control.upgrade` (`operation_id`, `mode`, `phase`, optional
+`completed` and `completion_command`) with `state`, `next_action` and errors.
+Exit `0` includes preparation, helper refresh and history, not current readiness.
+Exit `3` is pending, `1` fault/refusal, `2` invalid input. Follow `stop_and_report`
+even with exit `3`; a repeated completed OP proves only history.
 
-A retained draining operation may start its stopped predecessor once using
-only the exact saved installed pair, verified restore/stopped facts and settled
-current/historical daemon custody. The drain retains Start acceptance and birth;
-only a fresh live queue check permits advancement. Unknown birth, changed or
-unknown boot, a closed Wait or absent/mismatched recorded child means
-`stop_and_report`, including with exit `3`. A later diagnostic cannot authorize
-replay. Only the live owner proving Start never occurred can roll acceptance
-back. Older strict readers refuse a populated `predecessor_start` drain field;
-never run them against that root or clear the operation to bypass it.
+Stop scheduler/connector and quiesce external writers, including endpoint aliases
+from other roots. Drain fences only participating admissions. Follow the
+[upgrade workflow](delegate-upgrade.md) for target pinning, cold recovery and
+compatibility fences. Never clear records, replay accepted/uncertain work or
+infer closure from queue completion.
 
 ### Gateway root context repair
 
@@ -611,54 +598,11 @@ delegate gateway repair-context [--profile ABS] [--json]
 delegate gateway repair-context [--profile ABS] --confirm CHALLENGE --offline-cutover-confirmed [--json]
 ```
 
-Prepare is passive. It validates the saved SDK root token against historical
-startup coordinates on the first repair, then uses the immutable binding origin.
-It scans all canonical task/inspection requests. The bounded `root_context`
-response contains origin/accepted coordinates, digests, request counts and a
-challenge, never the saved token, its wire guard or secrets. It supports only the
-same original canonical path and inode after a device-number change. A matching
-legacy context returns `root_context_not_required` without enabling the feature.
-
-Select the reviewed compatible installation, run
-`delegate supervisor ensure-owner --refresh-owner --json` when the serving
-helper needs replacement, then finish the same retained OP under its actual
-reactive/proactive mode. No generation transition may remain pending. Stop the
-Gateway connector, scheduler and nonparticipating writers/frontends before
-confirming. The flag attests intended original root, no other live copy and
-stopped incompatible writers/frontends; it is not evidence of their closure.
-Confirmation rechecks profile/identity, bootstrap and live root-wide quiescence
-under nonblocking store maintenance exclusion. The compatible daemon must be
-running and ready; its healthy current helper may remain running. Clean native
-work reports `root_context_native_work_pending`, exit `3`, `wait_for_native_work`.
-Evidence, observation and cleanup faults report `root_context_evidence_unreadable`,
-exit `1`, `stop_and_report`.
-Maintenance-lock contention also returns exit `3`; stale challenges return
-`root_context_challenge_stale` and `prepare_root_context_reconciliation`.
-Prepare again and obtain confirmation for that exact new challenge. A profile
-token inconsistent with a binding remains `native_context_changed`, never a
-reason to replace the profile or try another origin.
-
-A pure cancellation or deadline returns `gateway_operation_interrupted`. An
-interrupted confirmation may already have committed; do not infer rollback or
-repeat confirmation automatically. Run passive `gateway repair-context` on the
-same profile, or `gateway doctor`, before another action. For an interrupted
-confirmation, passive prepare with `already_reconciled: true` means the binding
-is already committed: run `gateway doctor` instead of confirming again. A joined
-concrete fault still reports the evidence failure.
-
-Publication atomically adds `context_binding` and required feature
-`root-context-binding-v1` to `root.json`. It preserves registration, profile,
-credentials, canonical request and outcome bytes. Older readers refuse the new
-feature. The original token preimage is immutable; current canonical
-path/device/inode stays exact. Another device-number change requires explicit
-repair; copied, moved or replaced roots are refused. Run `gateway doctor` before
-starting the saved service. Follow the
-[operator order](https://github.com/hishamkaram/delegation-layer/blob/main/docs/cli-reference.md#root-context-repair)
-with the exact recorded root/profile selection. No automatic stable Darwin
-volume-identity mapping or task/provider retry is provided. Exit `0` completes
-prepare/confirmation only. `root_context_transition_pending` and
-`root_context_runtime_active` exit `3`; history/evidence faults exit `1`.
-Inspect the same root/profile and follow the returned next action.
+Prepare is passive; confirmation explicitly accepts a same-path/same-inode
+device-number change for the original root. Follow the
+[repair procedure and response decisions](delegate-upgrade.md#explicit-gateway-root-context-repair)
+for exact root/profile selection, human attestation, compatibility and failure
+handling. Never auto-confirm or retry uncertain work.
 
 ### Maintenance-only settlement
 
