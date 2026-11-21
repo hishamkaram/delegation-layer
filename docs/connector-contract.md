@@ -71,11 +71,11 @@ they do not require its workspace to remain present. For an absent request,
 the echoed project token is validated input, not a verified project receipt.
 No binding changes its saved canonical path.
 
-Root guards remain physical and exact. A restart that changes the root's
-observed device/inode changes its guard and fails closed; it is not silently
-mapped to saved approvals or tasks. This contract does not promise survival
-across every filesystem's mount-identity changes. Operator reconciliation must
-preserve Native's task history and establish the intended root explicitly.
+Root guards remain physical and exact. A device/inode change fails closed;
+it is never silently mapped to saved approvals or tasks. The explicit
+[root context repair](#root-context-repair) below can accept a device-number
+change for the same original canonical path and inode while preserving its
+saved token. It provides no automatic stable Darwin volume-identity mapping.
 
 Guarded execution retains the selected project directory through the existing
 runner lease. Preflight commands for that project and the provider
@@ -92,6 +92,46 @@ they do not make later third-party absolute path access atomic or provide an OS
 sandbox. Ordinary unguarded tasks retain their existing launch behavior.
 Because each command acquires the current path, a replacement between preflight
 and provider launch can select different directories for those commands.
+
+## Root context repair
+
+```text
+delegate gateway repair-context [--profile ABS] [--json]
+delegate gateway repair-context [--profile ABS] --confirm CHALLENGE --offline-cutover-confirmed [--json]
+```
+
+Native's task store owns the binding; the Gateway command coordinates the saved
+SDK profile and runtime exclusions. Prepare is passive. It validates the saved
+SDK token against historical infrastructure startup coordinates on the first
+repair, then uses the immutable origin in `root.json` for later repairs. It scans
+all canonical task and inspection requests, including requests without connector
+context. Mixed root tokens, incomplete evidence and unresolved staging refuse
+repair. `root_context` contains origin/accepted coordinates, request counts,
+evidence digests and a challenge; it never returns the saved token, its wire guard
+or secrets. A matching legacy context returns `root_context_not_required` without
+enabling the feature.
+
+Complete the retained installation handoff and all generation transitions
+before confirmation. Stop the connector and nonparticipating writers/frontends.
+`--offline-cutover-confirmed` attests that this is the intended original root,
+no other live copy exists, and incompatible writers/frontends are stopped.
+Confirmation takes the profile lock, checks inactive connector identity, retains
+bootstrap exclusion, verifies live canonical root-wide quiescence and takes the
+store maintenance exclusion nonblocking. The compatible daemon must be running
+and ready for confirmation; its healthy current helper may remain running.
+Follow the exact order and commands in
+[operator recovery](cli-reference.md#root-context-repair).
+
+Confirmation atomically publishes the optional `context_binding` and required
+`root-context-binding-v1` feature in `root.json`. Older strict readers refuse
+that feature; already-open old writers still require operator closure.
+Registration, profile, credentials, canonical requests and outcome bytes are
+preserved. The binding keeps its immutable origin token preimage and accepts
+one exact current canonical path/device/inode. It refuses moved, replaced or
+copied roots; a later device-number change needs another explicit repair with
+the same path and inode. The attestation supplies the no-other-live-copy fact;
+local evidence cannot establish it. After confirmation, run Gateway doctor and
+restore the saved service only after it verifies the root match.
 
 ## Workspace-constrained selection
 

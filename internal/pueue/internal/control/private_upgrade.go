@@ -71,14 +71,15 @@ type privateUpgradeOperationRef struct {
 // native progress and validates its derived target against SelectedPair.
 // All writers hold the actual bootstrap EX and resident commit guard.
 type privateUpgradeDrain struct {
-	Root                    migration.UpgradeRoot      `json:"root"`
-	Predecessor             task.SupervisorRef         `json:"predecessor"`
-	OperationID             UpgradeOperationID         `json:"operation_id"`
-	Mode                    UpgradeMode                `json:"mode"`
-	Phase                   UpgradePhase               `json:"phase"`
-	CompletionAuthorization privateUpgradeOperationRef `json:"completion_authorization,omitzero"`
-	SelectedPair            privateUpgradePair         `json:"selected_pair,omitzero"`
-	MigrationReference      privateUpgradeOperationRef `json:"migration_reference,omitzero"`
+	Root                    migration.UpgradeRoot                `json:"root"`
+	Predecessor             task.SupervisorRef                   `json:"predecessor"`
+	OperationID             UpgradeOperationID                   `json:"operation_id"`
+	Mode                    UpgradeMode                          `json:"mode"`
+	Phase                   UpgradePhase                         `json:"phase"`
+	CompletionAuthorization privateUpgradeOperationRef           `json:"completion_authorization,omitzero"`
+	SelectedPair            privateUpgradePair                   `json:"selected_pair,omitzero"`
+	MigrationReference      privateUpgradeOperationRef           `json:"migration_reference,omitzero"`
+	PredecessorStart        privateUpgradePredecessorStartRecord `json:"predecessor_start,omitzero"`
 }
 
 func ParseUpgradeOperationID(value string) (UpgradeOperationID, error) {
@@ -103,6 +104,12 @@ func validatePrivateUpgradeDrain(root string, record privateUpgradeDrain) error 
 	}
 	if err := migration.ValidateUpgradeSubject(record.Root, record.Predecessor, record.OperationID, record.Mode); err != nil {
 		return errors.Join(ErrBinding, err)
+	}
+	if err := record.PredecessorStart.validate(); err != nil {
+		return err
+	}
+	if record.Phase != UpgradeDraining && record.PredecessorStart.accepted() && record.PredecessorStart.PID == 0 {
+		return ErrBinding
 	}
 	switch record.Phase {
 	case UpgradeDraining, UpgradeAwaitingInstallation:
@@ -480,6 +487,9 @@ func validatePrivateUpgradeTransition(before, after privateUpgradeDrain) error {
 	if before.Root != after.Root || before.OperationID != after.OperationID || before.Mode != after.Mode || before.Predecessor != after.Predecessor {
 		return ErrBinding
 	}
+	if err := validatePrivateUpgradePredecessorProgress(before, after); err != nil {
+		return err
+	}
 	if before.SelectedPair != (privateUpgradePair{}) && before.SelectedPair != after.SelectedPair {
 		return ErrBinding
 	}
@@ -567,7 +577,7 @@ func AdvancePrivateUpgradeDrainWithLock(ctx context.Context, root taskdir.RootPi
 	if record.Phase != UpgradeDraining {
 		return record.observation(), nil
 	}
-	client, err := preparePrivateUpgradePredecessor(ctx, root, record, options)
+	client, record, err := preparePrivateUpgradeDrainPredecessor(ctx, root, record, options)
 	if err != nil {
 		return record.observation(), err
 	}
@@ -910,7 +920,7 @@ func validatePrivateUpgradeMigration(ctx context.Context, root taskdir.RootPin, 
 		drain.SelectedPair.ClientExecutable != u.Target.ClientExecutable || drain.SelectedPair.DaemonExecutable != u.Target.DaemonExecutable {
 		return ErrBinding
 	}
-	return nil
+	return validatePrivateUpgradeRecoveredPredecessor(drain.PredecessorStart, record)
 }
 
 func (c *Client) requirePrivateUpgradePredecessorClosed(ctx context.Context, base string, record privateMigrationRecord) error {

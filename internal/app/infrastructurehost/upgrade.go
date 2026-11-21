@@ -223,7 +223,7 @@ func upgradeOutcome(observed pueue.PrivateUpgradeObservation, cause error) (infr
 		outcome.Condition = infrastructure.UpgradeFault
 		return outcome, errors.Join(cause, outcome.Validate())
 	}
-	if supervisor.MaintenanceBusy(cause) || pureUpgradePending(cause) || pureHistoricalDaemonWaitPending(cause) {
+	if supervisor.MaintenanceBusy(cause) || pureUpgradePending(cause) || pureDaemonWaitPending(cause) {
 		outcome.Condition = infrastructure.UpgradePending
 		return outcome, outcome.Validate()
 	}
@@ -244,21 +244,28 @@ func pureUpgradePending(cause error) bool {
 	})
 }
 
-// Infrastructure alone marks a validated native-present historical custodian.
-// The application reads that origin without changing the Wait settlement port.
+// Infrastructure alone marks a validated live historical custodian or an
+// actual outstanding current Wait. Neither marker grants closure or Start.
 type historicalDaemonWaitPending interface {
 	HistoricalDaemonWaitPending()
 }
 
-func pureHistoricalDaemonWaitPending(cause error) bool {
-	return !taskdir.CleanupFault(cause) && historicalDaemonWaitPendingBranch(cause)
+type rootDaemonWaitQuiescencePending interface {
+	RootDaemonWaitQuiescencePending()
 }
 
-func historicalDaemonWaitPendingBranch(cause error) bool {
+func pureDaemonWaitPending(cause error) bool {
+	return !taskdir.CleanupFault(cause) && daemonWaitPendingBranch(cause)
+}
+
+func daemonWaitPendingBranch(cause error) bool {
 	if cause == nil {
 		return false
 	}
 	if _, marked := cause.(historicalDaemonWaitPending); marked {
+		return singleOwnerPendingCause(errors.Unwrap(cause))
+	}
+	if _, marked := cause.(rootDaemonWaitQuiescencePending); marked {
 		return singleOwnerPendingCause(errors.Unwrap(cause))
 	}
 	if joined, ok := cause.(interface{ Unwrap() []error }); ok {
@@ -269,13 +276,13 @@ func historicalDaemonWaitPendingBranch(cause error) bool {
 		for _, child := range children {
 			// Each independent branch needs its own origin. An untagged
 			// pending or migration-required fault cannot borrow a sibling tag.
-			if !historicalDaemonWaitPendingBranch(child) {
+			if !daemonWaitPendingBranch(child) {
 				return false
 			}
 		}
 		return true
 	}
-	return historicalDaemonWaitPendingBranch(errors.Unwrap(cause))
+	return daemonWaitPendingBranch(errors.Unwrap(cause))
 }
 
 func singleOwnerPendingCause(cause error) bool {

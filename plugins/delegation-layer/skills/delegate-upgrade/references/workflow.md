@@ -31,7 +31,9 @@ name `delegate` does not establish a formula name. If native inventory cannot
 establish the package, stop with the preserved OP instead of guessing.
 
 Quiesce authorized scheduler, connector and external producers through their
-supported controls. Preserve definitions, service profiles and credentials.
+supported controls, including other-root aliases to the same private endpoint.
+Drain fences participating admissions only. Preserve definitions, service
+profiles and credentials.
 Do not enable producers or schedules that were already stopped or paused.
 
 Check `delegate help supervisor ensure-owner`. Where supported, run
@@ -54,10 +56,25 @@ Inspect the existing OP before another mutation. Ordinary
 selected installed pair changed. Do not create a replacement OP, reinstall
 again, or repeatedly refresh the owner to escape a blocker.
 
-Before target acceptance the existing operation may select the compatible
-installed pair. After acceptance the target stays pinned. An unavailable
+Finish this handoff before another installation replacement. Before target
+acceptance, the same operation may reselect a missing candidate using the current
+compatible installed pair. After acceptance the target stays pinned. An unavailable
 accepted target is a fault; retain the OP and report its exact guidance.
 A lost acknowledgement is not permission to replay a task or mutation.
+
+A retained drain may recover its stopped predecessor once. It requires the
+exact saved installed pair, verified stopped identity and unchanged restore
+source, settled current/historical daemon Wait custody, and authenticated owner
+and bootstrap exclusion. Offline queue checks only reject unsafe recovery;
+advancement requires the actual live queue and canonical maintenance proof.
+
+The retained drain owns Start acceptance and birth. Unknown birth, changed or
+unknown boot, closed Wait, or absent/mismatched recorded child requires
+`stop_and_report`, including with exit 3. A later healthy endpoint cannot clear
+it. Only the live invocation proving Start never occurred may roll acceptance
+back; there is no automatic reset or provider retry. Older strict readers refuse
+a populated predecessor Start receipt. Keep them off that root and retain the
+OP when recovery is exhausted.
 
 ## Follow the actual blocker
 
@@ -83,6 +100,71 @@ No moving/deleting records, direct process killing, manual Pueue repair,
 executable copying/fingerprinting, invented roots or silent replay is a recovery
 step. A concrete refusal ends that attempt; bounded read-only diagnosis may
 continue. Preserve actionable evidence rather than retrying uncertain work.
+
+## Explicit Gateway root context repair
+
+For a saved SDK root token that no longer matches after a device-number change,
+use the installed `gateway repair-context` command only for the same original
+root, canonical path and inode. Do not re-enroll or edit the profile, credentials
+or task history. No automatic stable Darwin volume-identity mapping is used.
+
+1. Select/install the reviewed compatible build. Run
+   `delegate supervisor ensure-owner --refresh-owner --json` when an old helper
+   needs replacement, then finish the same retained OP. Reactive mode uses
+   ordinary ensure; proactive mode needs the saved `--complete-upgrade OP`
+   command. Require completed handoff and no pending generation transition.
+2. Stop the Gateway connector, scheduler and other writers/frontends through
+   their supported controls. Keep the compatible daemon running and ready for
+   confirmation; its healthy current helper may remain running.
+3. Run `delegate gateway repair-context --json`. Prepare is passive and returns
+   digests, origin/accepted coordinates, request counts and a concrete challenge,
+   never the saved token, its wire guard or secrets. On the first repair it
+   checks validated startup history; later repairs use the immutable binding
+   origin. Every canonical task/inspection request is checked. A matching legacy
+   context reports `root_context_not_required` with exit `1` and
+   `run_gateway_doctor` without enabling the feature.
+4. Obtain the human's explicit confirmation of that exact challenge and offline
+   assertion: intended original root, no other live copy, incompatible
+   writers/frontends stopped. Never auto-confirm. Then run
+   `delegate gateway repair-context --confirm CHALLENGE --offline-cutover-confirmed --json`.
+5. Run `delegate gateway doctor --json`; only after the root match is verified,
+   restore the saved service with `delegate gateway service start --json` if it
+   was running, and restore other producers to their original state.
+
+Use the same optional `--profile ABS` throughout Gateway commands. Omit `--root`
+for the CLI default; preserve the exact explicitly selected or recorded
+custom/historical `--root ABS` otherwise. Never invent or search another root.
+Confirmation revalidates under profile/identity, bootstrap, live root-wide
+quiescence and nonblocking maintenance exclusions. It atomically adds `context_binding` and required
+`root-context-binding-v1` to `root.json`; registration, profile, credentials,
+canonical requests and outcomes retain their bytes. Older strict readers refuse
+the new feature on their next open; already-open incompatible writers still
+require operator closure. The original token preimage stays immutable; every
+acquisition must match the accepted canonical path/device/inode exactly. Another
+device-number change requires another explicit repair. Moved,
+replaced or copied roots refuse; the no-other-live-copy fact remains the
+operator's attestation. Local checks cannot prove closure of nonparticipating old writers or absence
+of another copy. A refusal is not permission to reset state or retry work.
+
+Read the typed failure and next action with the exit status. Exit `0` completes
+only prepare/confirmation, not service or provider readiness:
+
+| Failure | Exit | Required action |
+| --- | --- | --- |
+| `root_context_transition_pending` | `3` | `complete_existing_supervisor_transition`; finish the same OP. |
+| `root_context_runtime_active` | `3` | `stop_gateway_service_and_producers`. |
+| `root_context_native_work_pending`, including maintenance-lock contention | `3` | `wait_for_native_work`; do not bypass the owner. |
+| `root_context_challenge_stale` | `1` | `prepare_root_context_reconciliation`; obtain human confirmation for that exact new challenge. |
+| `root_context_history_unavailable` or `root_context_evidence_unreadable` | `1` | `stop_and_report`; evidence, observation and cleanup faults are not retryable busy. |
+| `native_context_changed` | `1` | `stop_and_report`; never replace a profile or try another origin to hide a binding/token mismatch. |
+
+Pure cancellation or deadline reports `gateway_operation_interrupted`, exit `1`,
+`inspect_same_profile`. An interrupted confirmation may already have committed;
+do not infer rollback or confirm again automatically. Run passive
+`gateway repair-context` on that same profile, or `gateway doctor`, first.
+`already_reconciled: true` means the binding is committed: run doctor rather than
+confirm again. A joined concrete fault remains an evidence failure. No response
+authorizes a task/provider retry or state reset.
 
 ## Verify and restore
 

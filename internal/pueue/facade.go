@@ -588,6 +588,7 @@ type (
 	PrivateGenerationGuard      = control.PrivateGenerationGuard
 	DaemonStartGuard            = control.DaemonStartGuard
 	DaemonWaitOwner             = control.DaemonWaitOwner
+	DaemonWaitQuiescenceOwner   = control.DaemonWaitQuiescenceOwner
 	DaemonWaitBirthOwner        = control.DaemonWaitBirthOwner
 	DaemonWaitCustodyOwner      = control.DaemonWaitCustodyOwner
 	DaemonWaitSettlementOwner   = control.DaemonWaitSettlementOwner

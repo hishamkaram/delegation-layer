@@ -186,6 +186,34 @@ quiescing nonparticipating writers. Observation itself never repairs it.
 Finish that handoff before another installation replacement. A fault involving
 an accepted target is not permission to choose another target or clear its
 records; preserve the OP and report the failure under the same upgrade contract.
+
+For a retained drain, a passive status can exit `0` while predecessor
+observation is unavailable: `active_work` and `migration_readiness` stay
+`unknown`, with `first_blocker.reason_code: predecessor_unavailable`. This is
+neither readiness nor an empty queue. Pending ensure remains exit `3`; concrete
+storage, transport or cleanup faults remain exit `1`.
+
+A drain-owned cold predecessor recovery has one accepted Start. Retained
+`predecessor_birth_unknown`, `predecessor_boot_changed`,
+`predecessor_boot_unknown`, `predecessor_wait_closed`, `predecessor_not_ready`
+or `predecessor_pid_mismatch` requires `stop_and_report`, even with exit `3`.
+The equivalent successor Start blockers also forbid replay. A later healthy
+endpoint/queue observation does not override that reason. Preserve the OP;
+never reset acceptance, retry a provider, or switch binaries to evade it. Older
+strict readers refuse the populated predecessor receipt. Follow the
+[upgrade contract](command-reference.md#supervisor-owner-control).
+
+`predecessor_pair_missing` also requires `stop_and_report`: an operator must
+restore the exact selected pair before recovery. Repeating ensure does not
+restore missing executable files.
+
+A saved Gateway root-context mismatch is separate from task retry. Only the
+explicit [root context repair](command-reference.md#gateway-root-context-repair)
+can reconcile a proven same-path/same-inode device-number change after upgrade
+completion and producer quiescence. Prepare is passive; confirmation requires
+the concrete challenge and explicit offline attestation. Never edit credentials
+or canonical requests to make existing guards match.
+
 Ordinary admission can also refresh a missing installed
 infrastructure helper through the existing outside-owner handoff. Busy or
 concurrent handoffs remain explicit refusals; nested invocations cannot perform

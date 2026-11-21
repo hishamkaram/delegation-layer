@@ -65,6 +65,20 @@ can be reselected before target acceptance; an unavailable accepted target
 remains a fault. Preserve that operation and report it. See the same upgrade
 procedure for the exact boundary.
 
+A clean absent or refused predecessor during a retained drain can make passive
+`supervisor status` exit `0` with `active_work: "unknown"`,
+`migration_readiness: "unknown"` and a `predecessor_unavailable` observation
+blocker. This is a completed observation, not readiness or an empty queue.
+`ensure-owner` pending remains exit `3`; real evidence/cleanup faults exit `1`.
+
+A retained drain can perform one proven cold predecessor Start. If its reason
+reports unknown birth, changed/unknown boot, a closed Wait, or an absent/mismatched
+recorded child, follow `stop_and_report` even with exit `3`. A healthy endpoint
+or later clear queue cannot authorize another Start. Preserve the OP and records;
+there is no automatic reset or provider retry. Older binaries refuse a populated
+`predecessor_start` receipt. See
+[installation upgrades](cli-reference.md#installation-upgrades).
+
 For an installation mismatch, compare both client and daemon observations in
 `installation_binding`. File availability and path equality are metadata only.
 Neither a missing old keg nor a reachable endpoint establishes which executable
@@ -92,6 +106,20 @@ preserve rejected tasks and verify any separately authorized new task normally.
 If the old daemon is alive but unreachable, repeating restart cannot progress;
 investigate that daemon's availability without clearing the saved fence. A
 pending shutdown may persist until its underlying command fault is fixed.
+
+## Gateway root context no longer matches
+
+A changed device number does not automatically change the saved connector token.
+For the same original root, canonical path and inode, follow
+[root context repair](cli-reference.md#root-context-repair): select the compatible
+build, refresh the serving helper, finish the same upgrade OP, stop producers,
+prepare, then explicitly confirm the returned challenge and offline attestation.
+The compatible daemon must remain running and ready for confirmation; its
+healthy helper may remain running. Run Gateway doctor before starting
+the saved service. Do not re-enroll, edit credentials, delete history or move the
+root to bypass this mismatch. A copied, moved or replaced root is refused.
+Another device-number change needs explicit repair again; no automatic stable
+Darwin volume identity is used.
 
 ## Provider starts but the result is rejected
 

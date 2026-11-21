@@ -89,10 +89,11 @@ func SameSupervisorIdentity(left, right SupervisorRef) bool {
 
 // RootRecord is stored in root.json.
 type RootRecord struct {
-	SchemaVersion    int      `json:"schema_version"`
-	RootID           string   `json:"root_id"`
-	CreatedAt        string   `json:"created_at"`
-	RequiredFeatures []string `json:"required_features,omitempty"`
+	SchemaVersion    int                 `json:"schema_version"`
+	RootID           string              `json:"root_id"`
+	CreatedAt        string              `json:"created_at"`
+	RequiredFeatures []string            `json:"required_features,omitempty"`
+	ContextBinding   *RootContextBinding `json:"context_binding,omitempty"`
 }
 
 // TaskRecord is stored in task.json (the immutable task request).

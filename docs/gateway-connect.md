@@ -102,6 +102,11 @@ service and request credential revocation. Those cleanup commands use the
 current executable as their helper without changing the saved service source.
 New installation or startup refuses a missing or redirected saved executable.
 
+If only the native device number changed for the same original root path and
+inode, use [explicit root context repair](cli-reference.md#root-context-repair).
+That preserves the saved profile identity and task history; it does not retarget
+the root or installed executable.
+
 An absent root is initialized with the required connector features through a
 create-only operation. An existing root is never silently upgraded. If connection
 reports `root_cutover_required`, first stop older Delegate writers/frontends and

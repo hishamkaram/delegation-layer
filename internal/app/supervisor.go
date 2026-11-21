@@ -613,6 +613,12 @@ func supervisorMaintenanceDiagnostic(ctx context.Context, store *taskdir.Store, 
 	if err != nil {
 		return failedSupervisorCause(response, "saved supervisor transport could not be inspected", err, 1)
 	}
+	if owner.Client() == nil {
+		// The optional upgrade probe found no usable predecessor. Its queue
+		// remains unknown; an empty snapshot would invent drain authority.
+		control.FirstBlocker = &supervisorcore.MaintenanceBlocker{Kind: "observation", ReasonCode: "predecessor_unavailable", NextAction: "stop_and_report"}
+		return commandResult{response: response}
+	}
 	snapshot, err := owner.Client().Snapshot(ctx)
 	cleanupCause = err
 	if err != nil {

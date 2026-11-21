@@ -573,26 +573,36 @@ delegate supervisor ensure-owner --prepare-upgrade --json
 delegate supervisor ensure-owner --complete-upgrade OP --refresh-owner --json
 ```
 
-Keep the exact root. Ordinary ensure starts/resumes a reactive drain for a
-different selected installation; a healthy current pair is reused. Proactive
-prepare precedes an installer, including same-path replacements, and requires
-its exact completion OP afterward. `--refresh-owner` alone refreshes the serving
-helper, not the daemon upgrade authorization. Read `supervisor_control.upgrade`
-(`operation_id`, `mode`, `phase`, optional `completed` and `completion_command`)
-with `state`, `next_action` and errors. A repeated completed OP is historical,
-not a fresh readiness check. Exit `0` includes prepared/helper/history responses;
-`3` is pending; `1` fault/refusal; `2` invalid input.
+Keep the root, OP and returned completion argv. Ordinary ensure starts/resumes
+a reactive drain for a different installed pair; healthy current pairs are reused.
+Proactive prepare precedes replacement, including same-path updates; complete
+its exact OP afterward. `--refresh-owner` alone refreshes the serving helper,
+without daemon replacement authority.
 
-Stop the selected root's scheduler/connector and quiesce external/custom writers,
-including aliases addressing its private endpoint from other roots, before
-maintenance. Private Drain fences participating private admissions only. Follow
-the [upgrade procedure](https://github.com/hishamkaram/delegation-layer/blob/main/docs/cli-reference.md#installation-upgrades)
-and preserve returned completion argv boundaries. Do not clear a fence, replay
-an uncertain task or infer closure from queue completion.
-Finish this handoff before another installation replacement. The same operation
-can reselect a missing candidate only before migration accepts a target; an
-unavailable accepted target remains a fault. Preserve its OP and report the
-failure without clearing records or substituting another target.
+Read `supervisor_control.upgrade` (`operation_id`, `mode`, `phase`, optional
+`completed` and `completion_command`) with `state`, `next_action` and errors.
+Exit `0` includes preparation, helper refresh and history, not current readiness.
+Exit `3` is pending, `1` fault/refusal, `2` invalid input. Follow `stop_and_report`
+even with exit `3`; a repeated completed OP proves only history.
+
+Stop scheduler/connector and quiesce external writers, including endpoint aliases
+from other roots. Drain fences only participating admissions. Follow the
+[upgrade workflow](delegate-upgrade.md) for target pinning, cold recovery and
+compatibility fences. Never clear records, replay accepted/uncertain work or
+infer closure from queue completion.
+
+### Gateway root context repair
+
+```text
+delegate gateway repair-context [--profile ABS] [--json]
+delegate gateway repair-context [--profile ABS] --confirm CHALLENGE --offline-cutover-confirmed [--json]
+```
+
+Prepare is passive; confirmation explicitly accepts a same-path/same-inode
+device-number change for the original root. Follow the
+[repair procedure and response decisions](delegate-upgrade.md#explicit-gateway-root-context-repair)
+for exact root/profile selection, human attestation, compatibility and failure
+handling. Never auto-confirm or retry uncertain work.
 
 ### Maintenance-only settlement
 

@@ -9,6 +9,8 @@ import (
 	"net/url"
 	"path/filepath"
 	"time"
+
+	"github.com/hishamkaram/delegation-layer/internal/task"
 )
 
 const defaultMaximumBudget = 60 * time.Second
@@ -36,6 +38,8 @@ type Arguments struct {
 	Effort           string
 	Permission       string
 	MaximumBudget    time.Duration
+	ConfirmContext   string
+	OfflineConfirmed bool
 	policySet        bool
 	permissionSet    bool
 	budgetSet        bool
@@ -57,6 +61,9 @@ func RegisterFlags(fs *flag.FlagSet, a *Arguments) {
 	case "disconnect":
 		fs.BoolVar(&a.Revoke, "revoke", false, "after confirmed local connector stop, request fresh login to revoke this device credential")
 		fs.BoolVar(&a.Headless, "headless", false, "print the revocation login challenge without opening a browser; requires --revoke")
+	case "repair-context":
+		fs.StringVar(&a.ConfirmContext, "confirm", "", "confirm the exact reconciliation challenge returned by a passive prepare")
+		fs.BoolVar(&a.OfflineConfirmed, "offline-cutover-confirmed", false, "attest this is the intended original root, no other live copy exists, and incompatible writers and frontends are stopped")
 	case "workspace":
 		switch a.WorkspaceAction {
 		case "allow":
@@ -114,6 +121,8 @@ func (a *Arguments) Validate(positional []string) error {
 	switch a.Action {
 	case "connect":
 		return a.validateConnect(positional)
+	case "repair-context":
+		return a.validateContextRepair(positional)
 	case "status", "doctor", "disconnect", "serve", "service":
 		return a.validateSavedProfile(positional)
 	case "workspace":
@@ -121,6 +130,19 @@ func (a *Arguments) Validate(positional []string) error {
 	default:
 		return errors.New("unknown gateway action")
 	}
+}
+
+func (a *Arguments) validateContextRepair(positional []string) error {
+	if len(positional) != 0 || a.OfflineConfirmed && a.ConfirmContext == "" {
+		return errors.New("gateway repair-context accepts no operands; offline-cutover-confirmed requires confirm")
+	}
+	if a.ConfirmContext != "" && !a.OfflineConfirmed {
+		return errors.New("gateway repair-context confirmation requires offline-cutover-confirmed")
+	}
+	if a.ConfirmContext != "" {
+		return task.ValidateSHA256(a.ConfirmContext)
+	}
+	return nil
 }
 
 func (a *Arguments) validateConnect(positional []string) error {
