@@ -215,7 +215,7 @@ func TestGUIUpgradeInitialVerificationFailureAllowsExplicitRetry(t *testing.T) {
 func assertGUIInitialRetryCompleted(t *testing.T, f *upgradeFixture, first Response) {
 	t.Helper()
 	second, code := f.run(t, false)
-	if code != 0 || second.Upgrade == nil || second.Upgrade.Phase != "complete" || f.gui.starts != 2 || f.native.ensures != 0 {
+	if code != 0 || second.Upgrade == nil || second.Upgrade.Phase != "complete" || f.gui.starts != 2 || f.native.ensures != 1 {
 		t.Fatalf("known pre-Ensure verification failure locked out explicit retry: code=%d failure=%s starts=%d ensures=%d first_phase=%s", code, second.Failure, f.gui.starts, f.native.ensures, first.Upgrade.Phase)
 	}
 	request := f.gui.requests[1]
@@ -243,7 +243,7 @@ func TestGUIUpgradeKnownPostCASServiceFailureRetriesRealProfile(t *testing.T) {
 			runner := guiSDKControl(t, f)
 			f.services.fault = stage
 			first, code := f.run(t, false)
-			if code == 0 || first.Upgrade == nil || !first.Upgrade.DeviceIdentityPreserved {
+			if code == 0 || first.Upgrade == nil || !first.Upgrade.DeviceIdentityPreserved || f.native.ensures != 1 {
 				t.Fatalf("fixture did not reach post-CAS failure: code=%d response=%+v", code, first.Upgrade)
 			}
 			current, err := f.client.ProfileMigrationSource(boundedTestContext(t), f.profile)
@@ -252,7 +252,7 @@ func TestGUIUpgradeKnownPostCASServiceFailureRetriesRealProfile(t *testing.T) {
 			}
 			f.services.fault = ""
 			second, code := f.run(t, false)
-			if code != 0 || second.Upgrade.Phase != "complete" || runner.starts != 2 || f.native.ensures != 0 {
+			if code != 0 || second.Upgrade.Phase != "complete" || runner.starts != 2 || f.native.ensures != 1 {
 				t.Fatalf("known closed service failure became permanent uncertainty or new Native operation: code=%d starts=%d ensures=%d", code, runner.starts, f.native.ensures)
 			}
 			if !runner.requests[1].NoNewNativeOperation || runner.requests[1].SavedSource.Executable != f.newExecutable || runner.requests[1].PATHSource != "prior_receipt" {
