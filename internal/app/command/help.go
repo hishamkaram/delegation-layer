@@ -49,7 +49,7 @@ func (e Engine[T]) renderFlags(out *strings.Builder, spec Spec[T], path []string
 	}
 	out.WriteString("\nFlags:\n")
 	fs.VisitAll(func(f *flag.Flag) {
-		if f.Name == "h" || strings.HasPrefix(f.Name, "scheduler-host-") {
+		if f.Name == "h" || f.Name == "gui-upgrade-request" || strings.HasPrefix(f.Name, "scheduler-host-") {
 			return
 		}
 		kind, usage := flag.UnquoteUsage(f)

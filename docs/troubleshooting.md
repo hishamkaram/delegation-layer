@@ -58,6 +58,11 @@ calling shell need not run in Aqua. `gateway_gui_session_required` with
 `check_user_gui_session` means that domain is unavailable. Check that the intended
 user has a graphical login; do not create another registration or tmux session.
 Registration still does not prove provider authentication or execution readiness.
+Accepted upgrade maintenance also uses that GUI domain automatically, preserving
+the existing validated service PATH across pending retries. It copies no other
+SSH environment or credentials. `gateway_upgrade_uncertain` requires inspection
+of the same profile; do not launch replacement maintenance. An invalid private
+record reports `gateway_upgrade_record_invalid` with `stop_and_report`.
 
 Approve an existing ancestor once. New project selection and browsing use a
 scope ID and relative path; manual project/temp aliases are not needed. Whole
@@ -73,10 +78,11 @@ A supplied cwd must match the derived canonical path. Historical project-token
 SHA guards are for saved tasks, not fresh admission. See the
 [connector contract](connector-contract.md#scoped-model-discovery).
 
-Gateway `prepare_continuation` remains unfinished even though guarded Native
-`continue` supports explicit successor IDs/fresh origins. Preserve uncertainty;
-do not fall back to another dispatch. **Unverified:** new origin-binding/recovery,
-full installed-provider coverage, native macOS and actual cloud acceptance.
+The paired Gateway candidate exposes `prepare_continuation` over guarded Native
+`continue`, using the exact predecessor and a separately correlated successor.
+Preserve uncertain delivery and observe the same operation; do not fall back to
+another dispatch. Installed-provider and Cloud acceptance are specific to the
+tested installation/client, not implied by CLI capability discovery.
 
 If a cloud login expires, follow the Gateway
 [cloud login guide](https://github.com/hishamkaram/delegation-layer-gateway/blob/main/docs/cloud-login.md).
@@ -122,6 +128,13 @@ Finish the handoff before another installation replacement. A missing candidate
 can be reselected before target acceptance; an unavailable accepted target
 remains a fault. Preserve that operation and report it. See the same upgrade
 procedure for the exact boundary.
+
+`owner_refresh_successor_start_accepted` means Native cannot validate completion
+of an accepted target Start. Refresh would detach progress from the resident that
+may own its Wait, so Native keeps that owner serving and reports
+`stop_and_report`. Do not repeat refresh, reset the journal or launch a second
+target. Preserve the exact OP and use the matching resident installation for
+completion; see [installation upgrades](cli-reference.md#installation-upgrades).
 
 A clean absent or refused predecessor during a retained drain can make passive
 `supervisor status` exit `0` with `active_work: "unknown"`,

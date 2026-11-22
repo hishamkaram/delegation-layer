@@ -245,6 +245,9 @@ quiescing nonparticipating writers. Observation itself never repairs it.
 Finish that handoff before another installation replacement. A fault involving
 an accepted target is not permission to choose another target or clear its
 records; preserve the OP and report the failure under the same upgrade contract.
+In particular, `owner_refresh_successor_start_accepted` means refresh would
+retire a resident that may own the accepted target's Wait. Follow
+`stop_and_report`; never repeat refresh or substitute a new target.
 
 For a retained drain, a passive status can exit `0` while predecessor
 observation is unavailable: `active_work` and `migration_readiness` stay

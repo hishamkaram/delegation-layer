@@ -45,42 +45,47 @@ func (m *Manager) checkServiceDirectory() error {
 	return privateDirectory(info, m.config.UID, false)
 }
 
-func (m *Manager) readUnit() (present bool, resultErr error) {
+func (m *Manager) readUnit() (bool, error) {
+	_, present, err := m.readUnitDefinition()
+	return present, err
+}
+
+func (m *Manager) readUnitDefinition() (data []byte, present bool, resultErr error) {
 	if err := m.checkServiceDirectory(); err != nil {
-		return false, err
+		return nil, false, err
 	}
 	directory, err := os.OpenRoot(m.config.Directory)
 	if errors.Is(err, os.ErrNotExist) {
-		return false, nil
+		return nil, false, nil
 	}
 	if err != nil {
-		return false, err
+		return nil, false, err
 	}
 	defer func() { resultErr = errors.Join(resultErr, directory.Close()) }()
 	before, err := directory.Lstat(m.filename)
 	if errors.Is(err, os.ErrNotExist) {
-		return false, nil
+		return nil, false, nil
 	}
 	if err != nil {
-		return false, err
+		return nil, false, err
 	}
 	if err = privateUnit(before, m.config.UID); err != nil {
-		return true, err
+		return nil, true, err
 	}
 	file, err := directory.OpenFile(m.filename, os.O_RDONLY|unix.O_NOFOLLOW|unix.O_NONBLOCK, 0)
 	if err != nil {
-		return true, err
+		return nil, true, err
 	}
 	defer func() { resultErr = errors.Join(resultErr, file.Close()) }()
 	after, err := file.Stat()
 	if err != nil || !os.SameFile(before, after) {
-		return true, errors.Join(ErrForeignService, err)
+		return nil, true, errors.Join(ErrForeignService, err)
 	}
-	data, err := io.ReadAll(io.LimitReader(file, maxServiceDefinition+1))
+	data, err = io.ReadAll(io.LimitReader(file, maxServiceDefinition+1))
 	if err != nil {
-		return true, err
+		return nil, true, err
 	}
-	return true, m.verifyDefinition(data)
+	return data, true, m.verifyDefinition(data)
 }
 
 func (m *Manager) installUnit() (resultErr error) {

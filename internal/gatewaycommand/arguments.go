@@ -34,6 +34,7 @@ type Arguments struct {
 	AcceptExecutionPolicyRemoval bool
 	ConfirmContext               string
 	OfflineConfirmed             bool
+	GUIUpgradeRequest            string
 }
 
 func RegisterFlags(fs *flag.FlagSet, a *Arguments) {
@@ -47,6 +48,7 @@ func RegisterFlags(fs *flag.FlagSet, a *Arguments) {
 		fs.StringVar(&a.TokenFile, "token-file", "", "unattended enrollment token JSON file, or - for stdin")
 		fs.BoolVar(&a.Replace, "replace", false, "explicit credential replacement for this same selected profile")
 	case "upgrade":
+		fs.StringVar(&a.GUIUpgradeRequest, "gui-upgrade-request", "", "private fixed-purpose GUI upgrade request locator")
 		fs.BoolVar(&a.Preview, "preview", false, "preview profile and installed executable handoff without mutation")
 		fs.BoolVar(&a.AcceptExecutionPolicyRemoval, "accept-execution-policy-removal", false, "explicitly remove saved execution policy and hand this profile to the current installed binary")
 	case "disconnect":
@@ -69,6 +71,9 @@ func RegisterFlags(fs *flag.FlagSet, a *Arguments) {
 }
 
 func (a *Arguments) Validate(positional []string) error {
+	if a.GUIUpgradeRequest != "" && a.Action != "upgrade" {
+		return errors.New("private GUI upgrade locator requires upgrade")
+	}
 	if a.Profile != "" && !filepath.IsAbs(a.Profile) {
 		return errors.New("gateway profile must be absolute")
 	}
@@ -78,10 +83,7 @@ func (a *Arguments) Validate(positional []string) error {
 	case "repair-context":
 		return a.validateContextRepair(positional)
 	case "upgrade":
-		if len(positional) != 0 || a.Preview == a.AcceptExecutionPolicyRemoval {
-			return errors.New("gateway upgrade requires exactly one of --preview or --accept-execution-policy-removal, with no operands")
-		}
-		return nil
+		return a.validateUpgrade(positional)
 	case "status", "doctor", "disconnect", "serve", "service":
 		return a.validateSavedProfile(positional)
 	case "workspace":
@@ -89,6 +91,16 @@ func (a *Arguments) Validate(positional []string) error {
 	default:
 		return errors.New("unknown gateway action")
 	}
+}
+
+func (a *Arguments) validateUpgrade(positional []string) error {
+	if a.GUIUpgradeRequest != "" && (!filepath.IsAbs(a.GUIUpgradeRequest) || !a.AcceptExecutionPolicyRemoval || a.Preview) {
+		return errors.New("invalid private GUI upgrade invocation")
+	}
+	if len(positional) != 0 || a.Preview == a.AcceptExecutionPolicyRemoval {
+		return errors.New("gateway upgrade requires exactly one of --preview or --accept-execution-policy-removal, with no operands")
+	}
+	return nil
 }
 
 func (a *Arguments) validateContextRepair(positional []string) error {

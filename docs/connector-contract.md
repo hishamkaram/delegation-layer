@@ -387,8 +387,9 @@ Normal local continuation keeps its existing behavior.
 
 The Gateway candidate implements `prepare_continuation`, followed by its existing
 `dispatch_task` confirmation. These Native flags and local tests do not prove
-deployed cloud continuation parity. **Unverified:** paired process acceptance,
-full installed-provider continuation and cloud-client acceptance.
+deployed cloud continuation parity. The [Gateway verification record](https://github.com/hishamkaram/delegation-layer-gateway/blob/main/docs/verification.md)
+identifies the exact paired-process, installed-provider and Cloud scenarios
+tested; those observations do not establish other revisions, clients or providers.
 
 Binding-present control output keeps full Outcome, receipts, descriptors/ranges,
 closure, fresh stop and structured failure data in a 4 MiB response envelope.

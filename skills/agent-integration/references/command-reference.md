@@ -583,6 +583,10 @@ without daemon replacement authority.
 Exact completion may advance only its own retained drain when Native's proofs
 permit. A completed OP replays its history without refreshing a later operation's
 owner. Mixed cancellation/cleanup faults are not clean pending progress.
+`owner_refresh_successor_start_accepted` refuses retirement after an unfinished
+target Start, including unknown birth. Keep the OP and current custodian;
+follow `stop_and_report`, not another refresh. See the
+[installation upgrade contract](../../../docs/cli-reference.md#installation-upgrades).
 
 Read `supervisor_control.upgrade` (`operation_id`, `mode`, `phase`, optional
 `completed` and `completion_command`) with `state`, `next_action` and errors.

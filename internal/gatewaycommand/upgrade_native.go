@@ -29,6 +29,7 @@ type NativeInstallation interface {
 // NativeMaintenance borrows the original App invocation for Native's existing
 // supervisor owner. Its observation never replaces the canonical journal.
 type NativeMaintenance interface {
+	ValidateUpgrade(context.Context) error
 	Ensure(context.Context, NativeMaintenanceRequest) (NativeTransition, error)
 }
 
@@ -62,9 +63,10 @@ type nativeCommandRunner interface {
 }
 
 type nativeInstallation struct {
-	executable   string
-	runner       nativeCommandRunner
-	dependencies Dependencies
+	executable        string
+	runner            nativeCommandRunner
+	dependencies      Dependencies
+	expectedOperation string
 }
 
 func (c invocation) nativeInstallation(executable string) (NativeInstallation, error) {
@@ -75,7 +77,7 @@ func (c invocation) nativeInstallation(executable string) (NativeInstallation, e
 	if err != nil {
 		return nil, err
 	}
-	return nativeInstallation{executable: executable, runner: runner, dependencies: c.dependencies}, nil
+	return nativeInstallation{executable: executable, runner: runner, dependencies: c.dependencies, expectedOperation: c.expectedOperation}, nil
 }
 
 // This is a consumer-owned projection of additive Native JSON. Only fields
@@ -219,6 +221,9 @@ func (n nativeInstallation) inspectJournal(ctx context.Context, root, expectedRo
 }
 
 func (n nativeInstallation) Inspect(ctx context.Context, root, expectedRoot string) (NativeTransition, error) {
+	if n.expectedOperation != "" {
+		return n.inspectExpectedOperation(ctx, root, expectedRoot)
+	}
 	transition, err := n.inspectJournal(ctx, root, expectedRoot, "")
 	if err != nil || transition.Pending {
 		return transition, err
@@ -239,6 +244,24 @@ func (n nativeInstallation) Inspect(ctx context.Context, root, expectedRoot stri
 		return transition, ErrInstallationMigrationRequired
 	}
 	return transition, nil
+}
+
+func (n nativeInstallation) inspectExpectedOperation(ctx context.Context, root, expectedRoot string) (NativeTransition, error) {
+	exact, err := n.inspectJournal(ctx, root, expectedRoot, n.expectedOperation)
+	if err != nil {
+		return exact, err
+	}
+	if exact.OperationID != n.expectedOperation {
+		return exact, task.ErrEvidenceFault
+	}
+	if !exact.Pending {
+		return exact, nil
+	}
+	current, err := n.inspectJournal(ctx, root, expectedRoot, "")
+	if err == nil && current.OperationID != exact.OperationID {
+		err = task.ErrRequestConflict
+	}
+	return exact, err
 }
 
 func nativeSupervisorPairCurrent(binding *installation.BindingObservation) bool {

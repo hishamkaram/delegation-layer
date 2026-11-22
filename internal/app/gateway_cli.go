@@ -80,8 +80,12 @@ func runGatewayCLI(ctx context.Context, a Arguments, deps Dependencies, stdout, 
 
 type gatewayNativeMaintenance struct{ dependencies Dependencies }
 
+func (m gatewayNativeMaintenance) ValidateUpgrade(ctx context.Context) error {
+	return m.dependencies.invocationSource.ValidateUpgrade(ctx)
+}
+
 func (m gatewayNativeMaintenance) Ensure(ctx context.Context, request gatewaycommand.NativeMaintenanceRequest) (gatewaycommand.NativeTransition, error) {
-	if err := m.dependencies.invocationSource.ValidateUpgrade(ctx); err != nil {
+	if err := m.ValidateUpgrade(ctx); err != nil {
 		return gatewaycommand.NativeTransition{}, err
 	}
 	if request.Root == "" || request.ExpectedRoot == "" {

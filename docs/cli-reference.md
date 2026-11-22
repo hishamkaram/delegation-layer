@@ -401,6 +401,13 @@ that root, and preserve the operation when recovery is exhausted.
 
 `--refresh-owner` alone replaces only the serving helper when needed; it does
 not authorize a prepared installation or claim daemon execution readiness.
+Upgrade-driven refresh refuses with `owner_refresh_successor_start_accepted`
+and `stop_and_report` when a successor Start was accepted without validated
+canonical completion, including an unknown birth. The current resident may own
+successor's only Wait. Keep its operation and installation; do not retire it or
+repeat refresh. Exact completion without refresh can proceed only when the
+selected runner matches that resident. Otherwise restore the appropriate
+installation before following the retained operation's recovery guidance.
 Read `state`, `next_action`, `upgrade` and errors together: exit `0` can mean
 prepared, helper refreshed, or historical completion. Only a response that
 actually reports `owner_ready` confirms current admission preparation. Exit `3`

@@ -31,12 +31,14 @@ type Dependencies struct {
 	Services           ServiceFactory
 	NativeInstallation NativeInstallation
 	NativeMaintenance  NativeMaintenance
+	GUIUpgrade         gatewayservice.GUIUpgradeControl
 	// RootContextGate can supply the runtime owner at the application boundary.
 	// The default composes Native's existing bootstrap and closure authorities.
 	RootContextGate taskdir.RootContextReconciliationGate
 }
 
 type Response struct {
+	guiExitCode        *int
 	SchemaVersion      int                                `json:"schema_version"`
 	Command            string                             `json:"command"`
 	Action             string                             `json:"action"`
@@ -64,11 +66,15 @@ type DoctorObservation struct {
 }
 
 type invocation struct {
-	arguments    Arguments
-	root         string
-	profile      string
-	dependencies Dependencies
-	diagnostic   io.Writer
+	arguments            Arguments
+	root                 string
+	profile              string
+	dependencies         Dependencies
+	diagnostic           io.Writer
+	expectedOperation    string
+	guiChild             bool
+	guiSource            *gatewayservice.GUIUpgradeSource
+	noNewNativeOperation bool
 }
 
 func Run(parent context.Context, a Arguments, rawRoot string, jsonOutput bool, stdout, stderr io.Writer, deps Dependencies) int {
@@ -101,6 +107,12 @@ func Run(parent context.Context, a Arguments, rawRoot string, jsonOutput bool, s
 		}
 	}
 	response, err = call.execute(ctx, response)
+	if err == nil && response.guiExitCode != nil {
+		if code := present(response, nil, jsonOutput, stdout, stderr); code != 0 {
+			return code
+		}
+		return *response.guiExitCode
+	}
 	return present(response, err, jsonOutput, stdout, stderr)
 }
 
@@ -238,6 +250,9 @@ func (c invocation) doctor(ctx context.Context, response Response) (Response, er
 func publicError(err error) (failure, next string, exitCode int) {
 	if contextFailure, contextNext, contextCode, matched := rootContextPublicError(err); matched {
 		return contextFailure, contextNext, contextCode
+	}
+	if guiFailure, guiNext, code, matched := guiUpgradePublicError(err); matched {
+		return guiFailure, guiNext, code
 	}
 	serviceFailure, serviceNext, serviceCode, serviceMatched := servicePublicError(err)
 	switch {

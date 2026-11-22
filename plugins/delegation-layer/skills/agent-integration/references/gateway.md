@@ -102,6 +102,14 @@ registration, credentials, original root, disabled approvals/revisions, pins and
 history. Follow blockers; do not replace state, copy an executable or repeat
 login as a shortcut. See the [upgrade guide](https://github.com/hishamkaram/delegation-layer/blob/main/docs/gateway-connect.md#native-root-and-profile).
 
+On macOS, accepted maintenance automatically runs in the same user's existing
+GUI domain, including calls from SSH. It preserves the validated service PATH,
+or a pending invocation's saved PATH after uninstall. It copies no other SSH
+environment or credentials. Preview remains passive. Pending reconciliation
+retains the exact Native operation; uncertain invocation/cleanup does not
+authorize another launch. Follow the reported next action for the same profile.
+Same-path replacement still uses Native's installation upgrade procedure.
+
 ## Gateway root context repair
 
 ```text

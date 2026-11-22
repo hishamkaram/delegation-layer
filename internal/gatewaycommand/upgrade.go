@@ -17,6 +17,7 @@ var (
 // UpgradeObservation is invocation-local progress, never a second journal.
 // SDK profile, OS service and Native supervisor owners retain durable state.
 type UpgradeObservation struct {
+	RuntimePATHSource       string                               `json:"runtime_path_source,omitempty"`
 	Phase                   string                               `json:"phase"`
 	Profile                 deviceclient.ProfileMigrationPreview `json:"profile"`
 	Native                  NativeInstallationObservation        `json:"native"`
@@ -55,6 +56,14 @@ func (c invocation) status(ctx context.Context, response Response) (Response, er
 }
 
 func (c invocation) upgrade(ctx context.Context, response Response) (Response, error) {
+	if !c.arguments.Preview && c.dependencies.NativeMaintenance != nil {
+		if err := c.dependencies.NativeMaintenance.ValidateUpgrade(ctx); err != nil {
+			return response, err
+		}
+	}
+	if c.arguments.GUIUpgradeRequest != "" {
+		return c.upgradeGUIChild(ctx, response)
+	}
 	response.Upgrade = &UpgradeObservation{Phase: "preview"}
 	preview, err := c.dependencies.Client.PreviewProfileMigration(ctx, c.profile)
 	response.Upgrade.Profile = preview
@@ -76,6 +85,18 @@ func (c invocation) upgrade(ctx context.Context, response Response) (Response, e
 	if !c.arguments.AcceptExecutionPolicyRemoval {
 		return response, deviceclient.ErrMigrationAcceptanceRequired
 	}
+	if c.guiSource != nil && guiUpgradeSource(local) != *c.guiSource {
+		return response, task.ErrRequestConflict
+	}
+	if !c.guiChild {
+		if handled, reply, guiErr := c.requestGUIUpgrade(ctx, local, executable, response); handled {
+			return reply, guiErr
+		}
+	}
+	return c.upgradeInstallation(ctx, local, executable, response)
+}
+
+func (c invocation) upgradeInstallation(ctx context.Context, local deviceclient.LocalContextInfo, executable string, response Response) (Response, error) {
 	response.Upgrade.Phase = "quiesce_connector"
 	manager, err := c.serviceManager(local.DelegateExecutable)
 	if err != nil {
@@ -155,6 +176,7 @@ func (c invocation) prepareUpgradeNative(ctx context.Context, local deviceclient
 		return err
 	}
 	transition, err := native.Inspect(ctx, local.DelegateRoot, local.DelegateRootContext)
+	transition, err = constrainNativeTransition(c.noNewNativeOperation, transition, err)
 	progress.Supervisor = transition
 	if err != nil {
 		return err
@@ -217,4 +239,14 @@ func (c invocation) commitUpgradeSelection(ctx context.Context, local deviceclie
 
 func sameCredentialIdentity(a, b deviceclient.ConnectionStatus) bool {
 	return a.GatewayID == b.GatewayID && a.GatewayURL == b.GatewayURL && a.DeviceID == b.DeviceID && a.OwnerPrincipal == b.OwnerPrincipal && a.CredentialGeneration == b.CredentialGeneration && a.CertificateExpiresAt.Equal(b.CertificateExpiresAt)
+}
+
+func constrainNativeTransition(noNew bool, transition NativeTransition, err error) (NativeTransition, error) {
+	if !noNew {
+		return transition, err
+	}
+	if transition.Pending || transition.HandoffNeeded || err != nil {
+		return NativeTransition{}, errors.Join(err, task.ErrRequestConflict)
+	}
+	return NativeTransition{}, nil
 }

@@ -264,6 +264,10 @@ revisions, pins and history. Preview performs no Native/service command and
 cannot prove prerequisites. Pending/blocked responses require their reported
 next action; no replacement root, copied binary, tmux setup or repeat login is
 part of recovery. See the [Gateway upgrade guide](gateway-connect.md#native-root-and-profile).
+On macOS this command performs its finite maintenance invocation in the existing
+user GUI session automatically and preserves the connector's validated PATH.
+Same-user SSH needs no extra terminal or tmux setup. A missing GUI login remains
+an explicit prerequisite; provider authentication stays with the provider.
 
 Keep existing task state. Removing an old Homebrew keg must not require retaining
 its executables: if an update already removed them, the current installation can

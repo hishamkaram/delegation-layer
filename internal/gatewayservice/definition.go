@@ -2,10 +2,26 @@ package gatewayservice
 
 import (
 	"bytes"
+	"context"
 	"encoding/xml"
 	"strconv"
 	"strings"
 )
+
+// RuntimePATH snapshots the explicit configuration from the fully validated
+// managed definition. A foreign or unreadable definition is never a fallback.
+func (m *Manager) RuntimePATH(ctx context.Context) (path string, found bool, resultErr error) {
+	resultErr = m.WithProfileLock(ctx, func() error {
+		data, present, err := m.readUnitDefinition()
+		found = present
+		if err != nil || !present {
+			return err
+		}
+		path, err = installedPath(m.config.Platform, data)
+		return err
+	})
+	return path, found, resultErr
+}
 
 const maxServiceDefinition = 128 * 1024
 

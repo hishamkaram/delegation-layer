@@ -116,12 +116,29 @@ root, approvals including disabled entries/revisions, frozen pins and task
 history are preserved. No replacement root, copied executable, tmux session or
 repeat login is part of this migration.
 
+On macOS, accepted maintenance runs automatically in the same user's existing
+GUI session, including when invoked through SSH. Preview stays passive. The
+fixed-purpose maintenance job is separate from the normal connector and is not
+installed for login autostart. It preserves PATH from the validated
+managed service definition. A retained pending invocation preserves that PATH
+even after service removal; only an initial invocation without either source
+uses the invoking user's PATH. No other SSH environment or credentials are
+copied into the GUI session.
+
 Read `upgrade.phase`, `failure`, `next_action` and the Native supervisor
 observation together. Missing prerequisites and pending handoffs block progress;
 service startup does not prove cloud connectivity or provider readiness. Retry
 the same supported command only as its reported next action allows. Do not edit
 saved source paths, credentials or journals to bypass a refusal. See
 [Gateway upgrade troubleshooting](troubleshooting.md#gateway-upgrade-and-scope-errors).
+
+Reconciliation retains the exact Native operation; it never substitutes a later
+operation or relaunches an uncertain invocation. `gateway_upgrade_uncertain`
+requires inspection of the same profile. An invalid private maintenance record
+reports `gateway_upgrade_record_invalid` and `stop_and_report`; do not delete
+records as repair. Same-path executable replacement still uses Native's
+[installation upgrade procedure](cli-reference.md#installation-upgrades).
+Gateway does not infer replacement from path equality or force a daemon reload.
 
 If only the native device number changed for the same original root path and
 inode, use [explicit root context repair](cli-reference.md#root-context-repair).
@@ -237,10 +254,11 @@ permission.
 
 Names are display metadata. Duplicate names or an offline device require an
 explicit device choice; do not guess or switch destinations. Connection and
-approval do not establish provider login or task readiness. Native supports
-[guarded continuation](connector-contract.md#guarded-native-continuation), but
-Gateway `prepare_continuation` remains unfinished; this candidate does not claim
-cloud continuation parity.
+approval do not establish provider login or task readiness. The paired candidate
+uses Gateway `prepare_continuation` followed by `dispatch_task` over Native's
+[guarded continuation](connector-contract.md#guarded-native-continuation).
+Retain the exact predecessor and successor identities through uncertain
+delivery; do not substitute a fresh dispatch.
 
 A cloud connection usable for at least seven days depends on the identity
 provider issuing refresh grants and the actual cloud client using them. Device
@@ -355,8 +373,10 @@ does not publish it or extend that evidence to other installations. Unit,
 fixture and race checks alone do not establish real browser authorization,
 provider authentication, service persistence or cloud-client compatibility.
 
-The prepared candidate has source, fixture and race evidence for these contracts.
-**Unverified:** native macOS behavior, full installed-provider coverage, cloud
-client/browser/headless refresh behavior over seven elapsed days, and the new
-origin-binding/recovery flows. Historical checkpoints remain dated evidence;
-they do not establish candidate release readiness.
+The current [Gateway verification record](https://github.com/hishamkaram/delegation-layer-gateway/blob/main/docs/verification.md)
+separates paired-process, native macOS, installed-provider and actual Cloud
+evidence by revision. Home's two-turn Native and ChatGPT continuation passed at
+the recorded candidate revisions. The automatic Mac maintenance correction,
+Office rollout, other-provider coverage and seven elapsed days of Cloud refresh
+remain unverified. Earlier results do not establish those later acceptance gates
+or candidate release readiness.

@@ -200,6 +200,8 @@ type upgradeMaintenanceReply struct {
 	cause    error
 }
 
+func (*upgradeMaintenanceReply) ValidateUpgrade(ctx context.Context) error { return ctx.Err() }
+
 func (m *upgradeMaintenanceReply) Ensure(ctx context.Context, request NativeMaintenanceRequest) (NativeTransition, error) {
 	m.request = request
 	return m.observed, errors.Join(m.cause, ctx.Err())
