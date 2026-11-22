@@ -245,6 +245,11 @@ quiescing nonparticipating writers. Observation itself never repairs it.
 Finish that handoff before another installation replacement. A fault involving
 an accepted target is not permission to choose another target or clear its
 records; preserve the OP and report the failure under the same upgrade contract.
+A clean shutdown acknowledgement is retained separately from daemon closure.
+Reconciliation does not resend that acknowledged request; Native still requires
+canonical closure before successor Start. Older strict readers refuse populated
+acknowledgement records and completed history. Keep a compatible build and the
+same OP; never clear those facts to retry or downgrade.
 In particular, `owner_refresh_successor_start_accepted` means refresh would
 retire a resident that may own the accepted target's Wait. Follow
 `stop_and_report`; never repeat refresh or substitute a new target.

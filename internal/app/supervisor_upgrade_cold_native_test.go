@@ -188,11 +188,15 @@ func assertColdUpgradeDistinctBirth(t *testing.T, before, after lifetime.Process
 // Readiness loss, unknown birth or another refusal is never a retry permission.
 func coldUpgradeCLIStep(t *testing.T, ctx context.Context, f *runtimeRestartCLINative, operation string, phase infrastructure.UpgradePhase, arguments ...string) SupervisorUpgradeResponse {
 	t.Helper()
-	for range 4 {
+	attempts := make([]coldUpgradeAttemptDiagnostic, 0, 4)
+	var lastResponse Response
+	for attempt := range 4 {
 		response, code, err := f.command(ctx, arguments...)
+		lastResponse = response
+		attempts = append(attempts, coldUpgradeAttemptFacts(f, response, attempt+1, code, err))
 		control := response.SupervisorControl
 		if err != nil || response.RootID != f.rootID || control == nil || control.Upgrade == nil {
-			logColdUpgradeFailure(t, f, response, arguments)
+			logColdUpgradeFailure(t, f, response, arguments, attempts)
 			t.Fatalf("public cold upgrade response unavailable: exit=%d err=%v", code, err)
 		}
 		view := *control.Upgrade
@@ -200,24 +204,27 @@ func coldUpgradeCLIStep(t *testing.T, ctx context.Context, f *runtimeRestartCLIN
 			operation = view.OperationID
 		}
 		if _, parseErr := infrastructure.ParseUpgradeOperationID(view.OperationID); parseErr != nil || view.OperationID != operation {
+			logColdUpgradeFailure(t, f, response, arguments, attempts)
 			t.Fatalf("public cold upgrade changed operation: %v", parseErr)
 		}
 		if code == 0 && view.Phase == string(phase) {
 			return view
 		}
 		if code != 3 || control.NextAction != "repeat_supervisor_ensure_owner" || !coldUpgradeRepeatableReason(control.ReasonCode) {
-			logColdUpgradeFailure(t, f, response, arguments)
+			logColdUpgradeFailure(t, f, response, arguments, attempts)
 			t.Fatalf("public cold upgrade blocked: exit=%d phase=%s reason=%s next=%s", code, view.Phase, control.ReasonCode, control.NextAction)
 		}
 	}
+	logColdUpgradeFailure(t, f, lastResponse, arguments, attempts)
 	t.Fatal("same public cold-upgrade operation remained pending within its finite workflow")
 	return SupervisorUpgradeResponse{}
 }
 
-func logColdUpgradeFailure(t *testing.T, f *runtimeRestartCLINative, response Response, arguments []string) {
+func logColdUpgradeFailure(t *testing.T, f *runtimeRestartCLINative, response Response, arguments []string, attempts []coldUpgradeAttemptDiagnostic) {
 	t.Helper()
 	phase, found, observeErr := pueue.ObservePrivateMigrationPhase(f.root)
 	facts := coldUpgradeFailureFacts(response, arguments, phase, found, observeErr)
+	facts.Attempts = attempts
 	data, err := json.Marshal(facts)
 	if err != nil {
 		t.Log("public cold upgrade failure metadata could not be encoded")
@@ -227,17 +234,60 @@ func logColdUpgradeFailure(t *testing.T, f *runtimeRestartCLINative, response Re
 }
 
 type coldUpgradeDiagnostic struct {
-	Step                string                      `json:"step"`
-	ControlPresent      bool                        `json:"control_present"`
-	State               string                      `json:"state"`
-	MigrationPhase      string                      `json:"migration_phase"`
-	UpgradePhase        string                      `json:"upgrade_phase"`
-	ReasonCode          string                      `json:"reason_code"`
-	NextAction          string                      `json:"next_action"`
-	OperationID         string                      `json:"operation_id"`
-	ControlFact         *ControlFactResponse        `json:"control_fact,omitempty"`
-	OwnerMigrationState string                      `json:"owner_migration_state"`
-	OwnerMigrationPhase pueue.PrivateMigrationPhase `json:"owner_migration_phase,omitempty"`
+	Step                string                         `json:"step"`
+	ControlPresent      bool                           `json:"control_present"`
+	State               string                         `json:"state"`
+	MigrationPhase      string                         `json:"migration_phase"`
+	UpgradePhase        string                         `json:"upgrade_phase"`
+	ReasonCode          string                         `json:"reason_code"`
+	NextAction          string                         `json:"next_action"`
+	OperationID         string                         `json:"operation_id"`
+	ControlFact         *ControlFactResponse           `json:"control_fact,omitempty"`
+	OwnerMigrationState string                         `json:"owner_migration_state"`
+	OwnerMigrationPhase pueue.PrivateMigrationPhase    `json:"owner_migration_phase,omitempty"`
+	Attempts            []coldUpgradeAttemptDiagnostic `json:"attempts,omitempty"`
+}
+
+type coldUpgradeAttemptDiagnostic struct {
+	Attempt                int                         `json:"attempt"`
+	ExitCode               int                         `json:"exit_code"`
+	CommandError           bool                        `json:"command_error"`
+	ResponseError          bool                        `json:"response_error"`
+	ResponseErrorTruncated bool                        `json:"response_error_truncated"`
+	RootMatches            bool                        `json:"root_matches"`
+	ControlPresent         bool                        `json:"control_present"`
+	UpgradePresent         bool                        `json:"upgrade_present"`
+	State                  string                      `json:"state"`
+	MigrationPhase         string                      `json:"migration_phase"`
+	UpgradePhase           string                      `json:"upgrade_phase"`
+	ReasonCode             string                      `json:"reason_code"`
+	NextAction             string                      `json:"next_action"`
+	OperationID            string                      `json:"operation_id"`
+	OwnerMigrationPhase    pueue.PrivateMigrationPhase `json:"owner_migration_phase,omitempty"`
+	OwnerMigrationFound    bool                        `json:"owner_migration_found"`
+	OwnerObservationError  bool                        `json:"owner_observation_error"`
+}
+
+// Each bounded attempt keeps only public metadata and the migration owner's
+// passive validated phase, never raw command/response/observation errors.
+func coldUpgradeAttemptFacts(f *runtimeRestartCLINative, response Response, attempt, code int, commandErr error) coldUpgradeAttemptDiagnostic {
+	phase, found, observeErr := pueue.ObservePrivateMigrationPhase(f.root)
+	facts := coldUpgradeAttemptDiagnostic{
+		Attempt: attempt, ExitCode: code, CommandError: commandErr != nil,
+		ResponseError: response.Error != "", ResponseErrorTruncated: response.ErrorTruncated,
+		RootMatches:         response.RootID == f.rootID,
+		OwnerMigrationPhase: phase, OwnerMigrationFound: found, OwnerObservationError: observeErr != nil,
+	}
+	if control := response.SupervisorControl; control != nil {
+		facts.ControlPresent = true
+		facts.State, facts.MigrationPhase = control.State, control.MigrationPhase
+		facts.ReasonCode, facts.NextAction = control.ReasonCode, control.NextAction
+		if control.Upgrade != nil {
+			facts.UpgradePresent = true
+			facts.OperationID, facts.UpgradePhase = control.Upgrade.OperationID, control.Upgrade.Phase
+		}
+	}
+	return facts
 }
 
 // The original response and migration owner supply facts. This test-only copy

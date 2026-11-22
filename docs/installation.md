@@ -288,6 +288,12 @@ Older binaries refuse a populated predecessor Start receipt. See the same
 [upgrade contract](cli-reference.md#installation-upgrades) before selecting an
 older build against that root.
 
+The migration journal also retains clean shutdown acknowledgement separately
+from confirmed daemon exit, including in completed history. Older strict readers
+refuse that populated field. Keep a compatible build; never remove migration
+history or clear an acknowledged shutdown to attempt a downgrade. See the same
+upgrade contract for pending and fault handling.
+
 If an unchanged original root has a different device number after restart,
 complete the supervisor handoff first, then use the explicit
 [root context repair](cli-reference.md#root-context-repair). It preserves the

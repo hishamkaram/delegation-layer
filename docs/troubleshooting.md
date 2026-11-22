@@ -184,6 +184,13 @@ If the old daemon is alive but unreachable, repeating restart cannot progress;
 investigate that daemon's availability without clearing the saved fence. A
 pending shutdown may persist until its underlying command fault is fixed.
 
+For an installation handoff, a clean shutdown acknowledgement does not prove
+daemon exit. The same operation waits for canonical closure without resending
+an acknowledged shutdown while the endpoint still responds. Keep following its
+reported pending or fault action. Do not delete the journal/history or switch to
+an older build that cannot read the retained acknowledgement; see
+[installation upgrades](cli-reference.md#installation-upgrades).
+
 ## Gateway root context no longer matches
 
 A changed device number does not automatically change the saved connector token.

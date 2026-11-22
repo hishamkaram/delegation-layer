@@ -583,6 +583,10 @@ without daemon replacement authority.
 Exact completion may advance only its own retained drain when Native's proofs
 permit. A completed OP replays its history without refreshing a later operation's
 owner. Mixed cancellation/cleanup faults are not clean pending progress.
+Native retains clean predecessor shutdown acknowledgement separately from
+closure. Reconciliation observes closure instead of resending an acknowledged
+request. Older strict readers refuse populated acknowledgement records,
+including completed history; preserve them and use a compatible build.
 `owner_refresh_successor_start_accepted` refuses retirement after an unfinished
 target Start, including unknown birth. Missing-helper refresh through ordinary
 ensure or manual migration uses the same fence. Keep the OP and current custodian;

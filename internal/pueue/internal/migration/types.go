@@ -15,15 +15,17 @@ type DaemonIdentity struct {
 }
 
 type Record struct {
-	SchemaVersion            int               `json:"schema_version"`
-	Legacy                   DaemonIdentity    `json:"legacy"`
-	Successor                DaemonIdentity    `json:"successor"`
-	LegacyPID                int               `json:"legacy_pid,omitempty"`
-	LegacyProcessStart       string            `json:"legacy_process_start,omitempty"`
-	LegacyShutdownRequested  bool              `json:"legacy_shutdown_requested,omitempty"`
-	LegacyShutdownDispatched bool              `json:"legacy_shutdown_dispatched,omitempty"`
-	LegacyStopped            bool              `json:"legacy_stopped,omitempty"`
-	UpgradeGeneration        UpgradeGeneration `json:"upgrade_generation,omitzero"`
+	SchemaVersion            int            `json:"schema_version"`
+	Legacy                   DaemonIdentity `json:"legacy"`
+	Successor                DaemonIdentity `json:"successor"`
+	LegacyPID                int            `json:"legacy_pid,omitempty"`
+	LegacyProcessStart       string         `json:"legacy_process_start,omitempty"`
+	LegacyShutdownRequested  bool           `json:"legacy_shutdown_requested,omitempty"`
+	LegacyShutdownDispatched bool           `json:"legacy_shutdown_dispatched,omitempty"`
+	// Acknowledgement proves clean shutdown command completion, never daemon closure.
+	LegacyShutdownAcknowledged bool              `json:"legacy_shutdown_acknowledged,omitempty"`
+	LegacyStopped              bool              `json:"legacy_stopped,omitempty"`
+	UpgradeGeneration          UpgradeGeneration `json:"upgrade_generation,omitzero"`
 }
 
 // UpgradeRoot is the immutable root observation bound by the bootstrap owner.

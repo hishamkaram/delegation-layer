@@ -83,6 +83,90 @@ func TestHistoryCodecRequiresStoppedPredecessors(t *testing.T) {
 	}
 }
 
+func TestShutdownAcknowledgmentRequiresRequestDispatchAndPredecessorBirth(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		mutate func(*Record)
+	}{
+		{"request", func(record *Record) { record.LegacyShutdownRequested = false }},
+		{"dispatch", func(record *Record) { record.LegacyShutdownDispatched = false }},
+		{"pid", func(record *Record) { record.LegacyPID = 0 }},
+		{"start", func(record *Record) { record.LegacyProcessStart = "" }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			record := migrationTestRecord()
+			record.LegacyShutdownAcknowledged = true
+			test.mutate(&record)
+			if _, invalid := EncodeRecord(record); invalid == nil || invalid.Code != ViolationProcessState {
+				t.Fatalf("invalid acknowledged shutdown was encoded: %v", invalid)
+			}
+			data, err := task.MarshalCanonical(record)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, invalid := DecodeRecord(data); invalid == nil || invalid.Code != ViolationProcessState {
+				t.Fatalf("invalid acknowledged shutdown was decoded: %v", invalid)
+			}
+		})
+	}
+}
+
+func TestShutdownAcknowledgmentRoundTripsAndOlderStrictReadersRefuse(t *testing.T) {
+	record := migrationTestRecord()
+	legacy, invalid := EncodeRecord(record)
+	if invalid != nil {
+		t.Fatal(invalid)
+	}
+	var old legacyShutdownRecord
+	if err := task.DecodeStrict(legacy, &old); err != nil {
+		t.Fatalf("frozen older shape did not accept its historical record: %v", err)
+	}
+	record.LegacyShutdownAcknowledged = true
+	record.LegacyStopped = false
+	data, invalid := EncodeRecord(record)
+	if invalid != nil {
+		t.Fatal(invalid)
+	}
+	decoded, invalid := DecodeRecord(data)
+	if invalid != nil || decoded != record {
+		t.Fatalf("acknowledged pending migration did not round trip: record=%+v invalid=%v", decoded, invalid)
+	}
+	if err := task.DecodeStrict(data, &old); err == nil || !strings.Contains(err.Error(), `"legacy_shutdown_acknowledged"`) {
+		t.Fatalf("older strict record reader did not refuse the populated fact: %v", err)
+	}
+	record.LegacyStopped = true
+	history := History{SchemaVersion: task.SchemaVersion, Migrations: []Record{record}}
+	data, invalid = EncodeHistory(history)
+	if invalid != nil {
+		t.Fatal(invalid)
+	}
+	decodedHistory, invalid := DecodeHistory(data)
+	if invalid != nil || len(decodedHistory.Migrations) != 1 || decodedHistory.Migrations[0] != record {
+		t.Fatalf("history lost acknowledged shutdown: history=%+v invalid=%v", decodedHistory, invalid)
+	}
+	var oldHistory struct {
+		SchemaVersion int                    `json:"schema_version"`
+		Migrations    []legacyShutdownRecord `json:"migrations"`
+	}
+	if err := task.DecodeStrict(data, &oldHistory); err == nil || !strings.Contains(err.Error(), `"legacy_shutdown_acknowledged"`) {
+		t.Fatalf("older strict history reader did not refuse the populated fact: %v", err)
+	}
+}
+
+// Frozen pre-acknowledgement JSON shape independently models older strict
+// readers. Its acceptance of the legacy fixture is checked before refusal.
+type legacyShutdownRecord struct {
+	SchemaVersion            int               `json:"schema_version"`
+	Legacy                   DaemonIdentity    `json:"legacy"`
+	Successor                DaemonIdentity    `json:"successor"`
+	LegacyPID                int               `json:"legacy_pid,omitempty"`
+	LegacyProcessStart       string            `json:"legacy_process_start,omitempty"`
+	LegacyShutdownRequested  bool              `json:"legacy_shutdown_requested,omitempty"`
+	LegacyShutdownDispatched bool              `json:"legacy_shutdown_dispatched,omitempty"`
+	LegacyStopped            bool              `json:"legacy_stopped,omitempty"`
+	UpgradeGeneration        UpgradeGeneration `json:"upgrade_generation,omitzero"`
+}
+
 func migrationTestRecord() Record {
 	return Record{
 		SchemaVersion: task.SchemaVersion,

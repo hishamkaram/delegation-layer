@@ -19,7 +19,7 @@ import (
 // native predecessor closure, daemon birth or completed Wait is fabricated.
 func TestUpgradeMigrationRetryUsesInstalledRecoveryTransport(t *testing.T) {
 	for _, requested := range []bool{false, true} {
-		phase := "dispatched shutdown"
+		phase := "acknowledged shutdown"
 		if requested {
 			phase = "requested before command Start"
 		}
@@ -74,7 +74,7 @@ func prepareUpgradeRetryTransportFixture(t *testing.T, requested bool) (*upgrade
 func testUpgradeMigrationRetryTransport(t *testing.T, requested bool) {
 	t.Helper()
 	f, record := prepareUpgradeRetryTransportFixture(t, requested)
-	// A responsive predecessor survived the first shutdown and still owns Wait.
+	// A clean shutdown response may precede closure while the endpoint is ready.
 	writePrivateSuccessorTestBytes(t, filepath.Join(f.stored.base, "ready"), nil)
 	var statuses, shutdowns atomic.Int32
 	f.options.Observer = func(event CommandEvent) {
@@ -100,12 +100,12 @@ func testUpgradeMigrationRetryTransport(t *testing.T, requested bool) {
 		logUpgradeRetryTransportCause(t, retryErr, f.stored.client.Binding().ClientExecutable)
 		t.Errorf("live predecessor retry did not retain safe pending through installed transport: phase=%s err=%v", observed.Phase, retryErr)
 	}
-	wantStatuses := int32(1)
+	wantShutdowns := int32(0)
 	if requested {
-		wantStatuses = 0
+		wantShutdowns = 1
 	}
-	if statuses.Load() != wantStatuses || shutdowns.Load() != 1 {
-		t.Errorf("retry skipped qualified protocol work: status=%d want=%d shutdown=%d want=1", statuses.Load(), wantStatuses, shutdowns.Load())
+	if statuses.Load() != 0 || shutdowns.Load() != wantShutdowns {
+		t.Errorf("retry changed required protocol work: status=%d want=0 shutdown=%d want=%d", statuses.Load(), shutdowns.Load(), wantShutdowns)
 	}
 	assertUpgradeRetryTransportFences(t, f, record, before)
 }
@@ -137,7 +137,7 @@ func assertUpgradeRetryTransportPrepared(t *testing.T, f *upgradeAliasReplayFixt
 
 func assertUpgradeRetryTransportPreparedPhase(t *testing.T, record privateMigrationRecord, requested bool, phase UpgradePhase) {
 	t.Helper()
-	if !record.LegacyShutdownRequested || record.LegacyShutdownDispatched == requested || record.LegacyStopped || record.UpgradeGeneration.AcceptedStart || phase != UpgradeMigrating {
+	if !record.LegacyShutdownRequested || record.LegacyShutdownDispatched == requested || record.LegacyShutdownAcknowledged == requested || record.LegacyStopped || record.UpgradeGeneration.AcceptedStart || phase != UpgradeMigrating {
 		t.Fatalf("first producer did not retain its exact native fence: record=%+v phase=%s", record, phase)
 	}
 }

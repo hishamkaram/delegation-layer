@@ -367,6 +367,13 @@ it never authorizes another operation. Replaying completed A while B is current
 returns A's history without refreshing B's serving owner. Cancellation,
 transport and cleanup faults remain faults even alongside pending progress.
 
+A successfully acknowledged predecessor shutdown is retained separately from
+process closure. Reconciliation observes that same predecessor without sending
+shutdown again just because its endpoint still responds. Successor launch still
+requires Native's canonical closure proof. Older strict readers refuse populated
+acknowledgement records, including completed migration history; use a compatible
+build and preserve the operation and records.
+
 If the installation was already replaced, ordinary
 `delegate supervisor ensure-owner --json` detects a different selected pair,
 creates or resumes one reactive operation, and fences new private admissions.

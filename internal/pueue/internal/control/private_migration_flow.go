@@ -300,7 +300,9 @@ func observeDispatchedPrivateMigrationShutdown(ctx context.Context, base string,
 	if err != nil {
 		return pending, fmt.Errorf("%w: inspect dispatched predecessor shutdown: %w", ErrPrivateSupervisorMigrationRequired, err)
 	}
-	if !processUnavailable {
+	// A clean acknowledgement can precede graceful daemon closure. Its retained
+	// fact permits only closure observation, even while the endpoint stays ready.
+	if !processUnavailable && !pending.LegacyShutdownAcknowledged {
 		transport, constructionErr := bindRecordedPredecessorTransport(ctx, filepath.Dir(base), legacyBinding, options)
 		if constructionErr != nil {
 			return pending, constructionErr
@@ -311,16 +313,10 @@ func observeDispatchedPrivateMigrationShutdown(ctx context.Context, base string,
 			return pending, dispatchedPredecessorObservationError(base, legacyBinding, pending, reachErr)
 		}
 		if observation.ready() {
-			// Bootstrap serialization outlives every pending command owner. A
-			// reachable exact predecessor here proves the prior shutdown command
-			// completed without stopping it, so retry the idempotent request.
-			retryable := pending
-			retryable.LegacyShutdownDispatched = false
-			if err := replacePrivateMigrationRecordContext(ctx, base, pending, retryable, options.PrivateGenerationGuard); err != nil {
-				return pending, fmt.Errorf("%w: restore retryable predecessor shutdown: %w", ErrPrivateSupervisorMigrationRequired, err)
-			}
-			stopped, _, retryErr := dispatchPrivateMigrationShutdown(ctx, base, transport, retryable)
-			return stopped, retryErr
+			// Without retained acknowledgement, preserve conservative idempotent
+			// request recovery. Bootstrap serialization outlives pending owners;
+			// readiness alone does not establish whether shutdown was acknowledged.
+			return retryUnacknowledgedPrivateMigrationShutdown(ctx, base, transport, pending, options.PrivateGenerationGuard)
 		}
 	}
 	if err := observer.waitPrivateMigrationClosed(ctx, base, pending); err != nil {
@@ -337,6 +333,16 @@ func observeDispatchedPrivateMigrationShutdown(ctx context.Context, base string,
 		return pending, fmt.Errorf("%w: record dispatched predecessor shutdown: %w", ErrPrivateSupervisorMigrationRequired, err)
 	}
 	return stopped, nil
+}
+
+func retryUnacknowledgedPrivateMigrationShutdown(ctx context.Context, base string, transport *Client, pending privateMigrationRecord, guard PrivateGenerationGuard) (privateMigrationRecord, error) {
+	retryable := pending
+	retryable.LegacyShutdownDispatched = false
+	if err := replacePrivateMigrationRecordContext(ctx, base, pending, retryable, guard); err != nil {
+		return pending, fmt.Errorf("%w: restore retryable predecessor shutdown: %w", ErrPrivateSupervisorMigrationRequired, err)
+	}
+	stopped, _, retryErr := dispatchPrivateMigrationShutdown(ctx, base, transport, retryable)
+	return stopped, retryErr
 }
 
 func (c *Client) waitPrivateMigrationClosed(ctx context.Context, base string, pending privateMigrationRecord) error {
@@ -589,7 +595,7 @@ func dispatchPrivateMigrationShutdown(ctx context.Context, base string, legacy *
 func requestPrivateMigrationShutdown(ctx context.Context, base string, legacy *Client, pending privateMigrationRecord) (privateMigrationRecord, bool, error) {
 	dispatched, shutdownErr := legacy.ShutdownDispatched(ctx)
 	if dispatched {
-		updated, err := recordPrivateMigrationShutdownDispatched(ctx, base, pending, legacy.options.PrivateGenerationGuard)
+		updated, err := recordPrivateMigrationShutdownDispatched(ctx, base, pending, shutdownErr == nil, legacy.options.PrivateGenerationGuard)
 		if err != nil {
 			return pending, true, err
 		}
@@ -604,9 +610,10 @@ func requestPrivateMigrationShutdown(ctx context.Context, base string, legacy *C
 	return pending, true, nil
 }
 
-func recordPrivateMigrationShutdownDispatched(ctx context.Context, base string, pending privateMigrationRecord, guard PrivateGenerationGuard) (privateMigrationRecord, error) {
+func recordPrivateMigrationShutdownDispatched(ctx context.Context, base string, pending privateMigrationRecord, acknowledged bool, guard PrivateGenerationGuard) (privateMigrationRecord, error) {
 	updated := pending
 	updated.LegacyShutdownDispatched = true
+	updated.LegacyShutdownAcknowledged = acknowledged
 	if err := replacePrivateMigrationRecordContext(ctx, base, pending, updated, guard); err != nil {
 		return pending, fmt.Errorf("%w: record dispatched predecessor shutdown: %w", ErrPrivateSupervisorMigrationRequired, err)
 	}

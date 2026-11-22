@@ -207,6 +207,9 @@ func replacePrivateMigrationRecord(base string, expected, replacement privateMig
 	if expected.Legacy != replacement.Legacy || expected.Successor != replacement.Successor {
 		return fmt.Errorf("%w: accepted private migration identities are immutable", ErrPrivateSupervisorMigrationRequired)
 	}
+	if expected.LegacyShutdownAcknowledged && (!replacement.LegacyShutdownAcknowledged || expected.LegacyPID != replacement.LegacyPID || expected.LegacyProcessStart != replacement.LegacyProcessStart) {
+		return fmt.Errorf("%w: acknowledged predecessor shutdown is immutable", ErrPrivateSupervisorMigrationRequired)
+	}
 	current, found, err := loadPrivateMigrationRecord(base)
 	if err != nil {
 		return err
