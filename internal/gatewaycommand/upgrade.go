@@ -171,7 +171,7 @@ func (c invocation) prepareUpgradeNative(ctx context.Context, local deviceclient
 	if err != nil {
 		return err
 	}
-	progress.Phase = "verify_selected_installation"
+	progress.Phase = "verify_initial_installation"
 	if err = native.Verify(ctx, local.DelegateRoot, local.DelegateRootContext); err != nil {
 		return err
 	}
@@ -201,7 +201,7 @@ func (c invocation) prepareUpgradeNative(ctx context.Context, local deviceclient
 		if transition.Pending {
 			return ErrNativeUpgradePending
 		}
-		progress.Phase = "verify_selected_installation"
+		progress.Phase = "verify_transitioned_installation"
 		if err = native.Verify(ctx, local.DelegateRoot, local.DelegateRootContext); err != nil {
 			return err
 		}

@@ -107,7 +107,11 @@ GUI domain, including calls from SSH. It preserves the validated service PATH,
 or a pending invocation's saved PATH after uninstall. It copies no other SSH
 environment or credentials. Preview remains passive. Pending reconciliation
 retains the exact Native operation; uncertain invocation/cleanup does not
-authorize another launch. Follow the reported next action for the same profile.
+authorize another launch. A clean `gateway_upgrade_not_started` permits only a
+later explicit same-profile invocation after exact-job cleanup; preserve the
+saved operation and PATH. `gateway_upgrade_review_required` preserves Native's
+`stop_and_report`, never retry guidance. Follow the reported next action for
+the same profile; see the [upgrade recovery guide](https://github.com/hishamkaram/delegation-layer/blob/main/docs/troubleshooting.md#gateway-upgrade-and-scope-errors).
 Same-path replacement still uses Native's installation upgrade procedure.
 
 ## Gateway root context repair

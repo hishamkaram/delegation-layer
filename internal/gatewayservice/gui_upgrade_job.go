@@ -31,6 +31,26 @@ var (
 	ErrGUIUpgradeRecord  = errors.New("gateway GUI upgrade private record is invalid")
 )
 
+// GUIUpgradeNotStartedError reports a positively observed preclaim job exit.
+// It proves no upgrade effects, not closure of arbitrary shim descendants.
+type GUIUpgradeNotStartedError struct{ ExitCode int }
+
+func (*GUIUpgradeNotStartedError) Error() string {
+	return "gateway GUI upgrade job exited before claim"
+}
+
+type guiNotStartedProof struct {
+	Invocation string `json:"invocation"`
+	ExitCode   int    `json:"exit_code"`
+}
+
+func (p guiNotStartedProof) validate(request GUIUpgradeRequest) error {
+	if p.Invocation != request.Invocation || p.ExitCode < 1 || p.ExitCode > 255 {
+		return ErrGUIUpgradeRecord
+	}
+	return nil
+}
+
 // GUIUpgradeSource is an immutable comparison with SDK-owned saved selection.
 // It grants no authority to change that selection or the Native root.
 type GUIUpgradeSource struct {
@@ -114,17 +134,20 @@ func guiInvocationID(value string) bool {
 	return err == nil && strings.ToLower(value) == value
 }
 
+type guiPublicUpgradeSupervisor struct {
+	OperationID   string `json:"operation_id"`
+	Phase         string `json:"phase"`
+	Pending       bool   `json:"pending"`
+	HandoffNeeded bool   `json:"handoff_needed"`
+}
+
 type guiPublicUpgradeProgress struct {
 	Phase  string `json:"phase"`
 	Native struct {
 		RootContextMatches   bool `json:"root_context_matches"`
 		CapabilitiesVerified bool `json:"capabilities_verified"`
 	} `json:"native"`
-	Supervisor struct {
-		OperationID string `json:"operation_id"`
-		Phase       string `json:"phase"`
-		Pending     bool   `json:"pending"`
-	} `json:"supervisor"`
+	Supervisor guiPublicUpgradeSupervisor `json:"supervisor"`
 }
 
 type guiPublicUpgrade struct {
@@ -247,7 +270,15 @@ func (m *Manager) reconcileGUIUpgrade(ctx context.Context, requested, previous G
 		return previous, false, err
 	}
 	if found {
+		if _, proof, proofErr := m.readGUINotStarted(previous); proofErr != nil || proof {
+			return previous, false, errors.Join(ErrGUIUpgradeRecord, proofErr)
+		}
 		return m.reconcileGUIResult(ctx, requested, previous, result)
+	}
+	if _, found, err = m.readGUINotStarted(previous); err != nil {
+		return previous, false, err
+	} else if found {
+		return m.reconcileGUINotStarted(ctx, requested, previous)
 	}
 	if requested.Executable != previous.Executable {
 		return previous, false, task.ErrRequestConflict
@@ -264,6 +295,29 @@ func (m *Manager) reconcileGUIUpgrade(ctx context.Context, requested, previous G
 	return m.publishGUIUpgrade(ctx, requested, previous.Invocation)
 }
 
+func (m *Manager) reconcileGUINotStarted(ctx context.Context, requested, previous GUIUpgradeRequest) (GUIUpgradeRequest, bool, error) {
+	cleaned, err := m.guiMarker(previous, "cleaned")
+	if err != nil || !cleaned {
+		return previous, false, err
+	}
+	if err = m.validateGUIReleasedNoClaim(previous); err != nil {
+		return previous, false, err
+	}
+	if err = requested.retainGUINoStartIntent(previous); err != nil {
+		return previous, false, err
+	}
+	requested.RuntimePATH, requested.PATHSource = previous.RuntimePATH, "prior_receipt"
+	return m.publishGUIUpgrade(ctx, requested, previous.Invocation)
+}
+
+func (r *GUIUpgradeRequest) retainGUINoStartIntent(previous GUIUpgradeRequest) error {
+	if r.SavedSource != previous.SavedSource || (previous.ExpectedOperation != "" || previous.NoNewNativeOperation) && r.Executable != previous.Executable {
+		return task.ErrRequestConflict
+	}
+	r.ExpectedOperation, r.NoNewNativeOperation = previous.ExpectedOperation, previous.NoNewNativeOperation
+	return nil
+}
+
 func (m *Manager) reconcileGUIResult(ctx context.Context, requested, previous GUIUpgradeRequest, result GUIUpgradeResult) (GUIUpgradeRequest, bool, error) {
 	cleaned, err := m.guiMarker(previous, "cleaned")
 	if err != nil || !cleaned {
@@ -272,14 +326,41 @@ func (m *Manager) reconcileGUIResult(ctx context.Context, requested, previous GU
 	if result.ExitCode == 0 && !result.Pending {
 		return m.reconcileCompletedGUIUpgrade(ctx, requested, previous)
 	}
-	if requested.Executable != previous.Executable {
-		return previous, false, task.ErrRequestConflict
-	}
-	if err = requested.retainGUIIntent(previous, result); err != nil {
+	if err = requested.retainGUIRetryIntent(previous, result); err != nil {
 		return previous, false, err
 	}
 	requested.RuntimePATH, requested.PATHSource = previous.RuntimePATH, "prior_receipt"
 	return m.publishGUIUpgrade(ctx, requested, previous.Invocation)
+}
+
+func (r *GUIUpgradeRequest) retainGUIRetryIntent(previous GUIUpgradeRequest, result GUIUpgradeResult) error {
+	fresh, err := result.initialVerificationFailure(previous)
+	if err != nil {
+		return err
+	}
+	if !fresh && r.Executable != previous.Executable {
+		return task.ErrRequestConflict
+	}
+	if !fresh {
+		return r.retainGUIIntent(previous, result)
+	}
+	if r.SavedSource != previous.SavedSource {
+		return task.ErrRequestConflict
+	}
+	r.ExpectedOperation, r.NoNewNativeOperation = "", false
+	return nil
+}
+
+func (r GUIUpgradeResult) initialVerificationFailure(previous GUIUpgradeRequest) (bool, error) {
+	if r.ExitCode == 0 || r.Pending || r.OperationID != "" || previous.ExpectedOperation != "" || previous.NoNewNativeOperation {
+		return false, nil
+	}
+	value, err := r.publicUpgrade()
+	if err != nil {
+		return false, errors.Join(ErrGUIUpgradeRecord, err)
+	}
+	progress := value.Upgrade
+	return progress != nil && progress.Phase == "verify_initial_installation" && progress.Supervisor == (guiPublicUpgradeSupervisor{}) && !progress.Native.RootContextMatches && !progress.Native.CapabilitiesVerified, nil
 }
 
 func (r *GUIUpgradeRequest) retainGUIIntent(previous GUIUpgradeRequest, result GUIUpgradeResult) error {
@@ -636,21 +717,50 @@ func (m *Manager) validateRetiredGUISeed(id string, active GUIUpgradeRequest, ac
 	if err != nil {
 		return err
 	}
+	if !activeFound || active.Root != request.Root || active.ExpectedRoot != request.ExpectedRoot {
+		return ErrGUIUpgradeRecord
+	}
+	if _, found, proofErr := m.readGUINotStarted(request); proofErr != nil {
+		return proofErr
+	} else if found {
+		return m.validateRetiredGUINoStart(request, active)
+	}
 	result, found, err := m.readGUIResult(request)
-	if err != nil || !found || !activeFound || active.Root != request.Root || active.ExpectedRoot != request.ExpectedRoot {
+	if err != nil || !found {
 		return errors.Join(ErrGUIUpgradeRecord, err)
 	}
+	return validateRetiredGUIResult(request, active, result)
+}
+
+func validateRetiredGUIResult(request, active GUIUpgradeRequest, result GUIUpgradeResult) error {
 	if result.ExitCode == 0 && !result.Pending {
 		if active.SavedSource.Executable != request.Executable {
 			return ErrGUIUpgradeRecord
 		}
 		return nil
 	}
-	if active.RuntimePATH != request.RuntimePATH || active.Executable != request.Executable {
+	if active.RuntimePATH != request.RuntimePATH {
 		return ErrGUIUpgradeRecord
 	}
 	expected := active
-	if err = expected.retainGUIIntent(request, result); err != nil {
+	if err := expected.retainGUIRetryIntent(request, result); err != nil {
+		return err
+	}
+	if expected.ExpectedOperation != active.ExpectedOperation || expected.NoNewNativeOperation != active.NoNewNativeOperation {
+		return ErrGUIUpgradeRecord
+	}
+	return nil
+}
+
+func (m *Manager) validateRetiredGUINoStart(previous, active GUIUpgradeRequest) error {
+	if err := m.validateGUIReleasedNoClaim(previous); err != nil {
+		return err
+	}
+	if active.RuntimePATH != previous.RuntimePATH {
+		return ErrGUIUpgradeRecord
+	}
+	expected := active
+	if err := expected.retainGUINoStartIntent(previous); err != nil {
 		return err
 	}
 	if expected.ExpectedOperation != active.ExpectedOperation || expected.NoNewNativeOperation != active.NoNewNativeOperation {
@@ -705,7 +815,7 @@ func guiOwnedName(name string) bool {
 		return true
 	}
 	switch name {
-	case "request.json", "attempted", "job.plist", "alive", "claim", "result.json", "joined", "cleaned":
+	case "request.json", "attempted", "job.plist", "alive", "claim", "result.json", "joined", "cleaned", "not_started":
 		return true
 	default:
 		return false
@@ -828,38 +938,168 @@ func (s guiJobState) exited() bool {
 }
 
 func (m *Manager) observeGUIUpgrade(ctx context.Context, request GUIUpgradeRequest) (GUIUpgradeResult, error) {
+	delay := 25 * time.Millisecond
 	for {
-		result, found, err := m.readGUIResult(request)
-		if err != nil {
+		result, err := m.observeGUIUpgradeStep(ctx, request)
+		if err == nil || !IsPending(err) {
 			return result, err
 		}
-		if found {
-			if err = m.finishGUIObservation(ctx, request, result); err == nil {
-				return result, nil
-			} else if !IsPending(err) {
-				return result, err
-			}
-		} else {
-			observed, readErr := m.invoke(ctx, "print", m.guiUpgradeTarget(request))
-			readErr = guiManagerObservationError(observed, readErr)
-			if readErr != nil || observed.ExitCode != 0 || parseGUIJobState(observed.Stdout).exited() {
-				// Result publication precedes natural exit. Another observer may
-				// also have joined/booted out after our first result read.
-				latest, published, resultErr := m.readGUIResult(request)
-				if readErr == nil && resultErr == nil && published {
-					continue
-				}
-				return latest, errors.Join(ErrGUIUpgradeUnknown, readErr, resultErr)
-			}
-		}
-		timer := time.NewTimer(25 * time.Millisecond)
+		timer := time.NewTimer(delay)
 		select {
 		case <-ctx.Done():
 			timer.Stop()
 			return result, errors.Join(ErrGUIUpgradeUnknown, ctx.Err())
 		case <-timer.C:
+			delay = min(2*delay, time.Second)
 		}
 	}
+}
+
+func (m *Manager) observeGUIUpgradeStep(ctx context.Context, request GUIUpgradeRequest) (GUIUpgradeResult, error) {
+	result, found, err := m.readGUIResult(request)
+	if err != nil {
+		return result, err
+	}
+	if found {
+		if _, proof, proofErr := m.readGUINotStarted(request); proofErr != nil || proof {
+			return result, errors.Join(ErrGUIUpgradeRecord, proofErr)
+		}
+		return result, m.finishGUIObservation(ctx, request, result)
+	}
+	if proof, found, proofErr := m.readGUINotStarted(request); proofErr != nil {
+		return result, proofErr
+	} else if found {
+		return result, m.finishGUINotStarted(ctx, request, proof)
+	}
+	return m.observeGUIWithoutResult(ctx, request)
+}
+
+func (m *Manager) observeGUIWithoutResult(ctx context.Context, request GUIUpgradeRequest) (GUIUpgradeResult, error) {
+	observed, readErr := m.invoke(ctx, "print", m.guiUpgradeTarget(request))
+	readErr = guiManagerObservationError(observed, readErr)
+	if readErr != nil || observed.ExitCode != 0 {
+		// A concurrent observer may have joined and removed the exact job.
+		latest, published, resultErr := m.readGUIResult(request)
+		if readErr == nil && resultErr == nil && published {
+			return latest, ErrPending
+		}
+		return latest, errors.Join(ErrGUIUpgradeUnknown, readErr, resultErr)
+	}
+	state := parseGUIJobState(observed.Stdout)
+	if !state.exited() {
+		return GUIUpgradeResult{}, ErrPending
+	}
+	proof := guiNotStartedProof{Invocation: request.Invocation, ExitCode: *state.exit}
+	if err := m.recordGUINotStarted(ctx, request, proof); err != nil {
+		return GUIUpgradeResult{}, err
+	}
+	return GUIUpgradeResult{}, m.finishGUINotStarted(ctx, request, proof)
+}
+
+func (m *Manager) readGUINotStarted(request GUIUpgradeRequest) (guiNotStartedProof, bool, error) {
+	proof, err := guiReadJSON[guiNotStartedProof](m.guiFile(request, "not_started"))
+	if errors.Is(err, os.ErrNotExist) {
+		return proof, false, nil
+	}
+	if err != nil {
+		return proof, false, err
+	}
+	return proof, true, proof.validate(request)
+}
+
+func (m *Manager) validateGUINoClaim(request GUIUpgradeRequest) error {
+	claimed, err := m.guiMarker(request, "claim")
+	if err != nil || claimed {
+		return errors.Join(ErrGUIUpgradeUnknown, err)
+	}
+	_, result, err := m.readGUIResult(request)
+	if err != nil || result {
+		return errors.Join(ErrGUIUpgradeRecord, err)
+	}
+	return nil
+}
+
+func (m *Manager) validateGUIReleasedNoClaim(request GUIUpgradeRequest) error {
+	if err := m.validateGUINoClaim(request); err != nil {
+		return errors.Join(ErrGUIUpgradeRecord, err)
+	}
+	released, err := guiAliveReleased(m.guiFile(request, "alive"))
+	if err != nil {
+		return errors.Join(ErrGUIUpgradeRecord, err)
+	}
+	if !released {
+		return ErrGUIUpgradeUnknown
+	}
+	return nil
+}
+
+func (m *Manager) recordGUINotStarted(ctx context.Context, request GUIUpgradeRequest, proof guiNotStartedProof) error {
+	if err := proof.validate(request); err != nil {
+		return err
+	}
+	return m.WithProfileLock(ctx, func() error {
+		if err := m.validateGUIActiveRequest(request); err != nil {
+			return err
+		}
+		if _, result, err := m.readGUIResult(request); err != nil || result {
+			return errors.Join(ErrPending, err)
+		}
+		if err := m.validateGUINoClaim(request); err != nil {
+			return err
+		}
+		if previous, found, err := m.readGUINotStarted(request); err != nil {
+			return err
+		} else if found {
+			if previous != proof {
+				return ErrGUIUpgradeRecord
+			}
+			return nil
+		}
+		return m.publishGUINotStarted(request, proof)
+	})
+}
+
+func (m *Manager) publishGUINotStarted(request GUIUpgradeRequest, proof guiNotStartedProof) (resultErr error) {
+	file, err := os.OpenFile(m.guiFile(request, "alive"), os.O_RDWR|os.O_CREATE|os.O_EXCL|unix.O_NOFOLLOW, 0o600)
+	if errors.Is(err, os.ErrExist) {
+		file, err = os.OpenFile(m.guiFile(request, "alive"), os.O_RDWR|unix.O_NOFOLLOW|unix.O_NONBLOCK, 0)
+	}
+	if err != nil {
+		return err
+	}
+	defer func() { resultErr = errors.Join(resultErr, file.Close()) }()
+	info, err := file.Stat()
+	if err != nil || privateUnit(info, os.Getuid()) != nil {
+		return errors.Join(ErrGUIUpgradeRecord, err)
+	}
+	if err = unix.Flock(int(file.Fd()), unix.LOCK_EX|unix.LOCK_NB); errors.Is(err, unix.EWOULDBLOCK) {
+		return ErrGUIUpgradeUnknown
+	} else if err != nil {
+		return err
+	}
+	defer func() { resultErr = errors.Join(resultErr, unix.Flock(int(file.Fd()), unix.LOCK_UN)) }()
+	if err = taskdir.BarrierFile(file); err != nil {
+		return err
+	}
+	if err = m.validateGUINoClaim(request); err != nil {
+		return err
+	}
+	return guiWriteJSON(m.guiFile(request, "not_started"), proof)
+}
+
+func (m *Manager) finishGUINotStarted(ctx context.Context, request GUIUpgradeRequest, proof guiNotStartedProof) error {
+	if err := m.validateGUINoClaim(request); err != nil {
+		return errors.Join(ErrGUIUpgradeRecord, err)
+	}
+	released, err := guiAliveReleased(m.guiFile(request, "alive"))
+	if err != nil || !released {
+		return errors.Join(ErrPending, err)
+	}
+	cleaned, err := m.guiMarker(request, "cleaned")
+	if err == nil && !cleaned {
+		err = m.cleanupGUIJob(ctx, request)
+	}
+	return errors.Join(&GUIUpgradeNotStartedError{ExitCode: proof.ExitCode}, err)
 }
 
 func (m *Manager) finishGUIObservation(ctx context.Context, request GUIUpgradeRequest, result GUIUpgradeResult) error {
@@ -997,6 +1237,15 @@ func (m *Manager) validateGUIClaim(ctx context.Context, request GUIUpgradeReques
 	if err := request.validate(); err != nil || request.Profile != m.config.ProfileDirectory || !request.Deadline.After(time.Now()) {
 		return errors.Join(ErrGUIUpgradeRecord, err)
 	}
+	// This supplementary lookup precedes the atomic profile-coordinated fence.
+	state, err := m.invoke(ctx, "print", m.guiUpgradeTarget(request))
+	if err != nil || state.ExitCode != 0 || parseGUIJobState(state.Stdout).pid != os.Getpid() {
+		return errors.Join(ErrGUIRequired, err)
+	}
+	return nil
+}
+
+func (m *Manager) validateGUIActiveRequest(request GUIUpgradeRequest) error {
 	active, found, err := m.activeGUIUpgrade()
 	if err != nil || !found || active != request {
 		return errors.Join(ErrGUIUpgradeRecord, err)
@@ -1005,12 +1254,6 @@ func (m *Manager) validateGUIClaim(ctx context.Context, request GUIUpgradeReques
 	if err != nil || !attempted {
 		return errors.Join(ErrGUIUpgradeRecord, err)
 	}
-	// An explicit GUI-domain lookup must identify this actual Native process.
-	// No serialized outside=true, inherited marker clearing or guessed ASID.
-	state, err := m.invoke(ctx, "print", m.guiUpgradeTarget(request))
-	if err != nil || state.ExitCode != 0 || parseGUIJobState(state.Stdout).pid != os.Getpid() {
-		return errors.Join(ErrGUIRequired, err)
-	}
 	return nil
 }
 
@@ -1018,6 +1261,28 @@ func (m *Manager) ClaimGUIUpgrade(ctx context.Context, request GUIUpgradeRequest
 	if err := m.validateGUIClaim(ctx, request); err != nil {
 		return nil, err
 	}
+	var claim *GUIUpgradeClaim
+	err := m.WithProfileLock(ctx, func() error {
+		if err := m.validateGUIActiveRequest(request); err != nil {
+			return err
+		}
+		if !request.Deadline.After(time.Now()) {
+			return ErrGUIUpgradeRecord
+		}
+		if _, found, err := m.readGUINotStarted(request); err != nil || found {
+			return errors.Join(ErrGUIUpgradeRecord, err)
+		}
+		var err error
+		claim, err = m.publishGUIClaim(request)
+		return err
+	})
+	if err != nil && claim != nil {
+		return nil, errors.Join(err, unix.Flock(int(claim.alive.Fd()), unix.LOCK_UN), claim.alive.Close())
+	}
+	return claim, err
+}
+
+func (m *Manager) publishGUIClaim(request GUIUpgradeRequest) (*GUIUpgradeClaim, error) {
 	alive, err := os.OpenFile(m.guiFile(request, "alive"), os.O_RDWR|os.O_CREATE|os.O_EXCL|unix.O_NOFOLLOW, 0o600)
 	if err != nil {
 		return nil, err

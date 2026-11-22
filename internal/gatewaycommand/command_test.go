@@ -32,6 +32,37 @@ type commandClient struct {
 	updateRevision uint64
 }
 
+func TestGatewayUpgradeReviewDispositionPresentation(t *testing.T) {
+	operation := "upgrade-v1:" + strings.Repeat("a", 32)
+	response := Response{SchemaVersion: 1, Command: "gateway", Action: "upgrade", Upgrade: &UpgradeObservation{Supervisor: NativeTransition{OperationID: operation, Phase: "migrating", Pending: true}}}
+	for _, test := range []struct {
+		name, failure, next string
+		cause               error
+		code                int
+	}{
+		{"review", "gateway_upgrade_review_required", "stop_and_report", ErrNativeUpgradeReviewRequired, 1},
+		{"pending", "gateway_upgrade_pending", "retry_gateway_upgrade_same_profile", ErrNativeUpgradePending, 3},
+		{"review with concrete fault", "gateway_operation_failed", "inspect_same_profile", errors.Join(ErrNativeUpgradeReviewRequired, os.ErrPermission), 1},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var output, diagnostic bytes.Buffer
+			code := present(response, test.cause, true, &output, &diagnostic)
+			var got Response
+			if err := json.Unmarshal(output.Bytes(), &got); err != nil {
+				t.Fatal(err)
+			}
+			if code != test.code || got.Failure != test.failure || got.NextAction != test.next || got.Upgrade == nil || got.Upgrade.Supervisor != response.Upgrade.Supervisor {
+				t.Fatalf("upgrade disposition or retained operation changed: code=%d response=%+v", code, got)
+			}
+			output.Reset()
+			code = present(response, test.cause, false, &output, &diagnostic)
+			if code != test.code || !strings.Contains(diagnostic.String(), test.failure+"; next_action="+test.next) {
+				t.Fatalf("human output lost disposition: code=%d diagnostic=%s", code, &diagnostic)
+			}
+		})
+	}
+}
+
 func (c *commandClient) Connect(ctx context.Context, o deviceclient.ConnectOptions) (deviceclient.ConnectionStatus, error) {
 	c.connectCalls++
 	c.options = o

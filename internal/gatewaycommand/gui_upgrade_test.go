@@ -2,6 +2,7 @@ package gatewaycommand
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -160,17 +161,25 @@ func (r *guiSDKRunner) child(ctx context.Context, request gatewayservice.GUIUpgr
 
 func guiSDKControl(t *testing.T, f *upgradeFixture) *guiSDKRunner {
 	t.Helper()
+	if f.gui != nil {
+		return f.gui
+	}
 	executable, err := verifiedexec.LocatePath("/usr/bin/true")
 	if err != nil {
 		t.Fatal(err)
 	}
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
 	r := &guiSDKRunner{fixture: f}
-	r.manager, err = gatewayservice.New(gatewayservice.Config{Platform: gatewayservice.MacOS, ProfileDirectory: f.profile, Executable: f.oldExecutable, Directory: filepath.Join(t.TempDir(), "units"), ManagerExecutable: executable, UID: os.Getuid(), Path: "/validated/runtime/path", Runner: r, RuntimeInactive: func(ctx context.Context) (bool, error) { return f.client.RuntimeInactive(ctx, f.profile) }})
+	r.manager, err = gatewayservice.New(gatewayservice.Config{Platform: gatewayservice.MacOS, ProfileDirectory: f.profile, Executable: f.oldExecutable, Directory: filepath.Join(base, "units"), ManagerExecutable: executable, UID: os.Getuid(), Path: "/validated/runtime/path", Runner: r, RuntimeInactive: func(ctx context.Context) (bool, error) { return f.client.RuntimeInactive(ctx, f.profile) }})
 	if err != nil {
 		t.Fatal(err)
 	}
 	f.dependencies.GUIUpgrade = r.manager
 	f.dependencies.NativeMaintenance = &upgradeMaintenanceReply{}
+	f.gui = r
 	t.Cleanup(func() {
 		r.wg.Wait()
 		if r.closeErr != nil {
@@ -178,6 +187,53 @@ func guiSDKControl(t *testing.T, f *upgradeFixture) *guiSDKRunner {
 		}
 	})
 	return r
+}
+
+func TestGUIUpgradeInitialVerificationFailureAllowsExplicitRetry(t *testing.T) {
+	for _, retarget := range []bool{false, true} {
+		t.Run(fmt.Sprint(retarget), func(t *testing.T) {
+			f := newUpgradeFixture(t)
+			f.native.verifyErr = ErrInstallationMigrationRequired
+			first, code := f.run(t, false)
+			if code != 1 || first.Upgrade == nil || f.native.inspections != 0 || f.native.ensures != 0 {
+				t.Fatalf("initial verification fixture advanced Native control: code=%d progress=%+v", code, first.Upgrade)
+			}
+			before, err := f.client.ProfileMigrationSource(boundedTestContext(t), f.profile)
+			if err != nil || before.DelegateExecutable != f.oldExecutable {
+				t.Fatalf("read-only verification changed saved selection: %v", err)
+			}
+			f.native.verifyErr = nil
+			if retarget {
+				retargetGUIUpgradeFixture(t, f)
+			}
+			assertGUIInitialRetryCompleted(t, f, first)
+			f.assertPreserved(t)
+		})
+	}
+}
+
+func assertGUIInitialRetryCompleted(t *testing.T, f *upgradeFixture, first Response) {
+	t.Helper()
+	second, code := f.run(t, false)
+	if code != 0 || second.Upgrade == nil || second.Upgrade.Phase != "complete" || f.gui.starts != 2 || f.native.ensures != 0 {
+		t.Fatalf("known pre-Ensure verification failure locked out explicit retry: code=%d failure=%s starts=%d ensures=%d first_phase=%s", code, second.Failure, f.gui.starts, f.native.ensures, first.Upgrade.Phase)
+	}
+	request := f.gui.requests[1]
+	if request.Executable != f.newExecutable || request.SavedSource.Executable != f.oldExecutable || request.PATHSource != "prior_receipt" || request.ExpectedOperation != "" || request.NoNewNativeOperation {
+		t.Fatal("fresh retry changed saved source, retained PATH or Native authority")
+	}
+}
+
+func retargetGUIUpgradeFixture(t *testing.T, f *upgradeFixture) {
+	t.Helper()
+	f.newExecutable = filepath.Join(filepath.Dir(filepath.Dir(f.newExecutable)), "corrected-keg", "delegate")
+	if err := os.Mkdir(filepath.Dir(f.newExecutable), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(f.newExecutable, []byte("#!/bin/sh\nexit 64\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	f.dependencies.Executable = f.newExecutable
 }
 
 func TestGUIUpgradeKnownPostCASServiceFailureRetriesRealProfile(t *testing.T) {
@@ -204,6 +260,56 @@ func TestGUIUpgradeKnownPostCASServiceFailureRetriesRealProfile(t *testing.T) {
 			}
 			f.assertPreserved(t)
 		})
+	}
+}
+
+func TestGUIUpgradeReviewRequiredSurvivesResultTransport(t *testing.T) {
+	f := newUpgradeFixture(t)
+	operation := "upgrade-v1:" + strings.Repeat("a", 32)
+	f.native.transition = NativeTransition{OperationID: operation, Phase: "migrating", Pending: true}
+	f.native.ensureErr = ErrNativeUpgradeReviewRequired
+	response, code := f.run(t, false)
+	if code != 1 || response.Failure != "gateway_upgrade_review_required" || response.NextAction != "stop_and_report" || response.Upgrade.Supervisor.OperationID != operation {
+		t.Fatalf("GUI result lost exact review refusal: code=%d response=%+v", code, response)
+	}
+	source, err := f.client.ProfileMigrationSource(boundedTestContext(t), f.profile)
+	if err != nil || source.DelegateExecutable != f.oldExecutable || len(f.services.calls) != 1 || f.services.calls[0].action != "uninstall" || f.native.ensures != 1 {
+		t.Fatalf("review refusal committed source or launched service: %v", err)
+	}
+	assertGUIReviewReceipt(t, f, operation)
+	f.assertPreserved(t)
+}
+
+func assertGUIReviewReceipt(t *testing.T, f *upgradeFixture, operation string) {
+	t.Helper()
+	request := f.gui.requests[0]
+	directory := filepath.Join(f.profile, ".gui-upgrade", request.Invocation)
+	for _, name := range []string{"joined", "cleaned"} {
+		if _, err := os.Stat(filepath.Join(directory, name)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	data, err := os.ReadFile(filepath.Join(directory, "result.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var result gatewayservice.GUIUpgradeResult
+	if err = json.Unmarshal(data, &result); err != nil || result.OperationID != operation || !result.Pending || result.ExitCode != 1 {
+		t.Fatalf("cleaned receipt lost retained exactA: %+v %v", result, err)
+	}
+}
+
+func TestGUIUpgradeNotStartedPublicErrorRequiresCleanOutcome(t *testing.T) {
+	for _, cause := range []error{nil, gatewayservice.ErrManager, gatewayservice.ErrGUIUpgradeRecord, context.Canceled, context.DeadlineExceeded} {
+		err := errors.Join(&gatewayservice.GUIUpgradeNotStartedError{ExitCode: 1}, cause)
+		failure, next, code, matched := guiUpgradePublicError(err)
+		if cause == nil {
+			if !matched || code != 3 || failure != "gateway_upgrade_not_started" || next != "retry_gateway_upgrade_same_profile" {
+				t.Fatalf("known not-started outcome lost supported retry: %s %s %d", failure, next, code)
+			}
+		} else if matched && code == 3 {
+			t.Fatalf("mixed not-started cause became retry advice: %v", cause)
+		}
 	}
 }
 

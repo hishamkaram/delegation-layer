@@ -802,6 +802,10 @@ func finishSupervisorMigration(response Response, state supervisorMigrationState
 func supervisorMigrationFailure(response Response, err error) commandResult {
 	control := response.SupervisorControl
 	control.ReasonCode = supervisorcore.FailureReason(err)
+	var upgradeFailure *pueue.PrivateUpgradeError
+	if errors.As(err, &upgradeFailure) && upgradeFailure != nil && upgradeStartRequiresReview(upgradeFailure.ReasonCode) {
+		control.ReasonCode = upgradeFailure.ReasonCode
+	}
 	control.MigrationReadiness = "unknown"
 	control.ActiveWork = "unknown"
 	var diagnostic *supervisorcore.MaintenanceError

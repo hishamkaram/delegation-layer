@@ -401,7 +401,8 @@ that root, and preserve the operation when recovery is exhausted.
 
 `--refresh-owner` alone replaces only the serving helper when needed; it does
 not authorize a prepared installation or claim daemon execution readiness.
-Upgrade-driven refresh refuses with `owner_refresh_successor_start_accepted`
+Upgrade-driven refresh and missing-helper replacement through ordinary ensure
+or manual migration refuse with `owner_refresh_successor_start_accepted`
 and `stop_and_report` when a successor Start was accepted without validated
 canonical completion, including an unknown birth. The current resident may own
 successor's only Wait. Keep its operation and installation; do not retire it or
@@ -517,8 +518,11 @@ files. Repeated admission reuses the refreshed evidence. If the serving owner's
 installed helper was also removed, ordinary admission and `ensure-owner` use the
 existing serving-release/replacement lifecycle from an outside invocation. The
 old owner retains its daemon Wait custody; this does not cancel active work.
-Busy, uncertain or concurrent handoffs can refuse safely. Inspect that same
-root before another explicit attempt; do not replay a created or uncertain task.
+An unfinished accepted upgrade target also fences this missing-helper
+replacement, including manual migration: keep its current custodian and follow
+`owner_refresh_successor_start_accepted` / `stop_and_report`. Busy, uncertain or
+concurrent handoffs can refuse safely. Inspect that same root before another
+explicit attempt; do not replay a created or uncertain task.
 A nested invocation cannot replace this owner: perform recovery from a prepared
 persistent user context outside task-owned scope.
 

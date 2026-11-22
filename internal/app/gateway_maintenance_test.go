@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hishamkaram/delegation-layer/internal/app/infrastructurehost"
 	"github.com/hishamkaram/delegation-layer/internal/gatewaycommand"
 	"github.com/hishamkaram/delegation-layer/internal/lifetime"
 	"github.com/hishamkaram/delegation-layer/internal/supervisor/infrastructure"
@@ -17,6 +18,37 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 )
+
+func TestGatewayMaintenancePreservesNativeReviewDisposition(t *testing.T) {
+	operation := "upgrade-v1:" + strings.Repeat("a", 32)
+	binding := task.SupervisorRef{ClientExecutable: "/private/pueue", DaemonExecutable: "/private/pueued", ConfigPath: "/private/state/.supervisor/pueue.yml", ConfigDigest: strings.Repeat("b", 64), ResolvedConfigSHA256: strings.Repeat("c", 64), Endpoint: "unix:/private/socket", ObservedVersion: "pueue 4.0.4", ExecutableIdentity: task.ExecutableIdentityInstalledPathV1}
+	for _, test := range []struct {
+		reason string
+		want   error
+	}{
+		{infrastructurehost.UpgradeOwnerRefreshSuccessorStartAccepted, gatewaycommand.ErrNativeUpgradeReviewRequired},
+		{"successor_birth_unknown", gatewaycommand.ErrNativeUpgradeReviewRequired},
+		{"drain_incomplete", gatewaycommand.ErrNativeUpgradePending},
+	} {
+		t.Run(test.reason, func(t *testing.T) {
+			outcome := infrastructure.UpgradeOutcome{
+				Condition: infrastructure.UpgradePending, ReasonCode: test.reason,
+				Preflight: infrastructure.UpgradePreflight{State: infrastructure.UpgradePreflightPassed},
+				Report:    infrastructure.UpgradeReport{OperationID: infrastructure.UpgradeOperationID(operation), Mode: infrastructure.UpgradeOperationRequired, Phase: infrastructure.UpgradeMigrating, Predecessor: binding},
+			}
+			result := finishSupervisorUpgrade(Arguments{}, newSupervisorCommandResponse("ensure-owner"), outcome, nil)
+			observed, err := gatewayMaintenanceResult(result)
+			if result.code != 3 || !errors.Is(err, test.want) || observed.OperationID != operation || !observed.Pending || observed.Phase != "migrating" {
+				t.Fatalf("Gateway lost canonical disposition or exact operation: result=%d observed=%+v err=%v want=%v", result.code, observed, err, test.want)
+			}
+			result.err = errors.Join(os.ErrPermission, context.Canceled)
+			faultObservation, fault := gatewayMaintenanceResult(result)
+			if faultObservation != observed || !errors.Is(fault, os.ErrPermission) || !errors.Is(fault, context.Canceled) || errors.Is(fault, gatewaycommand.ErrNativeUpgradePending) || errors.Is(fault, gatewaycommand.ErrNativeUpgradeReviewRequired) {
+				t.Fatalf("concrete maintenance fault was reclassified: observed=%+v err=%v", faultObservation, fault)
+			}
+		})
+	}
+}
 
 func TestGatewayMaintenanceGuardsExistingRootBeforeMutation(t *testing.T) {
 	store := supervisorfixture.NewInspectionStore(t)

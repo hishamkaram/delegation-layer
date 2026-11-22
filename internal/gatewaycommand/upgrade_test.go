@@ -60,6 +60,7 @@ type upgradeNative struct {
 	transition                          NativeTransition
 	inspections, ensures, verifications int
 	verifyErr                           error
+	ensureErr                           error
 	keepPending                         bool
 }
 
@@ -90,6 +91,9 @@ func (n *upgradeNative) Ensure(_ context.Context, root, expected string, previou
 	n.ensures++
 	if root != n.root || expected != n.rootToken || previous != n.transition {
 		return previous, task.ErrIdentityMismatch
+	}
+	if n.ensureErr != nil {
+		return previous, n.ensureErr
 	}
 	if n.keepPending {
 		return previous, ErrNativeUpgradePending

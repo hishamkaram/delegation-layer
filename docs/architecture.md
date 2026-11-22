@@ -420,9 +420,11 @@ global writer exclusion or an OS sandbox.
 The existing migration journal owns shutdown and successor launch progress.
 Its upgrade variant links to the drain, records accepted Start and the native
 birth captured before reaping, and requires predecessor Wait settlement before
-publication. A live custodian's actual Wait must complete. Native absence is a
-fallback only after proving no live custodian can hold that Wait; endpoint loss
-alone proves neither. Even an equal installed pair requires a fresh daemon generation.
+publication. A live custodian's actual Wait must complete. Upgrade refresh and shared
+missing-helper replacement recheck accepted target Start under the same
+bootstrap exclusion held through serving release; establishment follows unlock.
+Native absence is a fallback only after proving no live custodian can hold that
+Wait; endpoint loss alone proves neither. Even an equal installed pair requires a fresh daemon generation.
 Such same-pair events remain completion history without becoming installation
 lineage edges. Repeating a completed operation reads its original winner;
 an uncertain Start or birth cannot authorize another launch. This adds no task

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/hishamkaram/delegation-layer/internal/pueue"
 	"github.com/hishamkaram/delegation-layer/internal/supervisor/infrastructure"
 	"github.com/hishamkaram/delegation-layer/internal/supervisor/installation"
 )
@@ -102,7 +103,32 @@ func (c infrastructurePreparationContact) ReleaseServing(ctx context.Context, ow
 	if err := c.preflightReplacement(ctx); err != nil {
 		return infrastructure.OwnerStopResult{}, err
 	}
-	return infrastructure.StopOwnerServingAt(ctx, c.resources.reader, owner)
+	pin, err := c.resources.target.PinRootContext(ctx)
+	if err != nil {
+		return infrastructure.OwnerStopResult{}, err
+	}
+	var released infrastructure.OwnerStopResult
+	// Missing-helper replacement is already a decided mutation. Legacy roots
+	// may need the canonical EX provisioned; observation alone never does this.
+	err = pueue.WithBootstrapLockContext(ctx, pin.Root(), func(locked context.Context) error {
+		current, pinErr := c.resources.target.PinRootContext(locked)
+		if pinErr != nil {
+			return pinErr
+		}
+		if !current.Equal(pin) {
+			return infrastructure.ErrIdentity
+		}
+		if pinErr = requireInfrastructureRoutingPin(locked, c.resources.reader, pin); pinErr != nil {
+			return pinErr
+		}
+		if _, eligibilityErr := observeUpgradeOwnerRefreshEligibilityWithLock(locked, pin, ""); eligibilityErr != nil {
+			return eligibilityErr
+		}
+		var stopErr error
+		released, stopErr = infrastructure.StopOwnerServingAt(locked, c.resources.reader, owner)
+		return stopErr
+	})
+	return released, err
 }
 
 func (c infrastructurePreparationContact) preflightReplacement(ctx context.Context) error {

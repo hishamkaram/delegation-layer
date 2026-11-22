@@ -192,7 +192,7 @@ func coldUpgradeCLIStep(t *testing.T, ctx context.Context, f *runtimeRestartCLIN
 		response, code, err := f.command(ctx, arguments...)
 		control := response.SupervisorControl
 		if err != nil || response.RootID != f.rootID || control == nil || control.Upgrade == nil {
-			logColdUpgradeFailure(t, control)
+			logColdUpgradeFailure(t, f, response, arguments)
 			t.Fatalf("public cold upgrade response unavailable: exit=%d err=%v", code, err)
 		}
 		view := *control.Upgrade
@@ -206,6 +206,7 @@ func coldUpgradeCLIStep(t *testing.T, ctx context.Context, f *runtimeRestartCLIN
 			return view
 		}
 		if code != 3 || control.NextAction != "repeat_supervisor_ensure_owner" || !coldUpgradeRepeatableReason(control.ReasonCode) {
+			logColdUpgradeFailure(t, f, response, arguments)
 			t.Fatalf("public cold upgrade blocked: exit=%d phase=%s reason=%s next=%s", code, view.Phase, control.ReasonCode, control.NextAction)
 		}
 	}
@@ -213,17 +214,62 @@ func coldUpgradeCLIStep(t *testing.T, ctx context.Context, f *runtimeRestartCLIN
 	return SupervisorUpgradeResponse{}
 }
 
-func logColdUpgradeFailure(t *testing.T, control *SupervisorControlResponse) {
+func logColdUpgradeFailure(t *testing.T, f *runtimeRestartCLINative, response Response, arguments []string) {
 	t.Helper()
-	if control == nil {
+	phase, found, observeErr := pueue.ObservePrivateMigrationPhase(f.root)
+	facts := coldUpgradeFailureFacts(response, arguments, phase, found, observeErr)
+	data, err := json.Marshal(facts)
+	if err != nil {
+		t.Log("public cold upgrade failure metadata could not be encoded")
 		return
 	}
-	var operation, upgradePhase string
-	if control.Upgrade != nil {
-		operation = control.Upgrade.OperationID
-		upgradePhase = control.Upgrade.Phase
+	t.Logf("public cold upgrade failure facts: %s", data)
+}
+
+type coldUpgradeDiagnostic struct {
+	Step                string                      `json:"step"`
+	ControlPresent      bool                        `json:"control_present"`
+	State               string                      `json:"state"`
+	MigrationPhase      string                      `json:"migration_phase"`
+	UpgradePhase        string                      `json:"upgrade_phase"`
+	ReasonCode          string                      `json:"reason_code"`
+	NextAction          string                      `json:"next_action"`
+	OperationID         string                      `json:"operation_id"`
+	ControlFact         *ControlFactResponse        `json:"control_fact,omitempty"`
+	OwnerMigrationState string                      `json:"owner_migration_state"`
+	OwnerMigrationPhase pueue.PrivateMigrationPhase `json:"owner_migration_phase,omitempty"`
+}
+
+// The original response and migration owner supply facts. This test-only copy
+// never includes raw errors, argv, restart tokens or a new recovery decision.
+func coldUpgradeFailureFacts(response Response, arguments []string, phase pueue.PrivateMigrationPhase, found bool, observeErr error) coldUpgradeDiagnostic {
+	facts := coldUpgradeDiagnostic{Step: "ensure_owner", OwnerMigrationState: "absent"}
+	for _, argument := range arguments {
+		switch argument {
+		case "--prepare-upgrade":
+			facts.Step = "prepare_upgrade"
+		case "--complete-upgrade":
+			facts.Step = "complete_upgrade"
+		}
 	}
-	t.Logf("public cold upgrade failure facts: state=%q migration_phase=%q upgrade_phase=%q reason=%q next=%q operation=%q", control.State, control.MigrationPhase, upgradePhase, control.ReasonCode, control.NextAction, operation)
+	if observeErr != nil {
+		facts.OwnerMigrationState = "unreadable"
+	} else if found {
+		facts.OwnerMigrationState, facts.OwnerMigrationPhase = "observed", phase
+	}
+	if response.ControlFact != nil {
+		copy := *response.ControlFact
+		facts.ControlFact = &copy
+	}
+	if control := response.SupervisorControl; control != nil {
+		facts.ControlPresent = true
+		facts.State, facts.MigrationPhase = control.State, control.MigrationPhase
+		facts.ReasonCode, facts.NextAction = control.ReasonCode, control.NextAction
+		if control.Upgrade != nil {
+			facts.OperationID, facts.UpgradePhase = control.Upgrade.OperationID, control.Upgrade.Phase
+		}
+	}
+	return facts
 }
 
 func coldUpgradeRepeatableReason(reason string) bool {

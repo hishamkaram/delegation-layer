@@ -99,11 +99,18 @@ func (m gatewayNativeMaintenance) Ensure(ctx context.Context, request gatewaycom
 		arguments.SupervisorCompleteUpgrade = request.OperationID
 	}
 	result := supervisorEnsureOwnerContext(ctx, arguments, m.dependencies, request.ExpectedRoot)
+	return gatewayMaintenanceResult(result)
+}
+
+func gatewayMaintenanceResult(result commandResult) (gatewaycommand.NativeTransition, error) {
 	observed := gatewayMaintenanceObservation(result.response)
 	if result.err != nil {
 		return observed, result.err
 	}
 	if result.code == 3 {
+		if control := result.response.SupervisorControl; control != nil && control.NextAction == "stop_and_report" {
+			return observed, gatewaycommand.ErrNativeUpgradeReviewRequired
+		}
 		return observed, gatewaycommand.ErrNativeUpgradePending
 	}
 	if result.code != 0 {

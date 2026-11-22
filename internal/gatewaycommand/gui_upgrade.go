@@ -177,6 +177,13 @@ func (c invocation) executeGUIUpgrade(ctx context.Context, request gatewayservic
 }
 
 func guiUpgradePublicError(err error) (string, string, int, bool) {
+	var notStarted *gatewayservice.GUIUpgradeNotStartedError
+	if errors.As(err, &notStarted) && notStarted.ExitCode > 0 && notStarted.ExitCode <= 255 && task.AllErrorCauses(err, func(cause error) bool {
+		var observed *gatewayservice.GUIUpgradeNotStartedError
+		return errors.As(cause, &observed) && observed.ExitCode > 0 && observed.ExitCode <= 255
+	}) {
+		return "gateway_upgrade_not_started", "retry_gateway_upgrade_same_profile", 3, true
+	}
 	if guiUpgradeUnknownOnly(err) {
 		return "gateway_upgrade_uncertain", "inspect_same_profile", 3, true
 	}

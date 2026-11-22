@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"slices"
 
+	"github.com/hishamkaram/delegation-layer-gateway/deviceclient"
 	"github.com/hishamkaram/delegation-layer/internal/gatewayservice"
 	"github.com/hishamkaram/delegation-layer/internal/provider"
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
@@ -17,6 +18,30 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 	"github.com/hishamkaram/delegation-layer/internal/workspacefiles"
 )
+
+// Native alone decides when an upgrade requires review rather than retry.
+var ErrNativeUpgradeReviewRequired = errors.New("native installation upgrade requires review")
+
+func nativeUpgradeReviewOnly(err error) bool {
+	return errors.Is(err, ErrNativeUpgradeReviewRequired) && task.AllErrorCauses(err, func(cause error) bool {
+		return errors.Is(cause, ErrNativeUpgradeReviewRequired)
+	})
+}
+
+func upgradePublicError(err error) (string, string, int, bool) {
+	switch {
+	case errors.Is(err, deviceclient.ErrMigrationRequired), errors.Is(err, ErrInstallationMigrationRequired):
+		return "migration_required", "run_gateway_upgrade_preview", 1, true
+	case errors.Is(err, deviceclient.ErrMigrationAcceptanceRequired):
+		return "migration_acceptance_required", "run_gateway_upgrade_with_acceptance", 1, true
+	case nativeUpgradeReviewOnly(err):
+		return "gateway_upgrade_review_required", "stop_and_report", 1, true
+	case nativeUpgradePendingOnly(err):
+		return "gateway_upgrade_pending", "retry_gateway_upgrade_same_profile", 3, true
+	default:
+		return "", "", 0, false
+	}
+}
 
 // NativeInstallation consumes existing Native public contracts. It never owns
 // a supervisor operation, scheduler state, task admission or provider policy.

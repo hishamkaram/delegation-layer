@@ -11,10 +11,12 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/verifiedexec"
+	"golang.org/x/sys/unix"
 )
 
 func TestGUIUpgradeRuntimePATHUsesValidatedInstalledConfiguration(t *testing.T) {
@@ -47,16 +49,24 @@ type guiTestJob struct {
 }
 
 type guiTestRunner struct {
-	mu           sync.Mutex
-	manager      *Manager
-	base         Runner
-	jobs         map[string]guiTestJob
-	starts       int
-	wg           sync.WaitGroup
-	child        func(context.Context, GUIUpgradeRequest) (GUIUpgradeResult, error)
-	childErr     error
-	printFailure int
+	mu            sync.Mutex
+	manager       *Manager
+	base          Runner
+	jobs          map[string]guiTestJob
+	starts        int
+	wg            sync.WaitGroup
+	child         func(context.Context, GUIUpgradeRequest) (GUIUpgradeResult, error)
+	childErr      error
+	printFailure  int
+	prints        int
+	claimPID      int
+	claimGate     func()
+	claimRefusal  bool
+	beforeBootout func() error
+	afterBootout  func() error
 }
+
+type guiClaimGateKey struct{}
 
 func (r *guiTestRunner) Probe(ctx context.Context, executable string, args []string) (int, error) {
 	if len(args) == 2 && strings.Contains(args[1], ".upgrade.") {
@@ -90,14 +100,35 @@ func (r *guiTestRunner) Run(ctx context.Context, executable string, args []strin
 		return Result{}, nil
 	}
 	if len(args) == 2 && strings.Contains(args[1], ".upgrade.") {
-		return r.observe(args), ctx.Err()
+		return r.runGUIObservation(ctx, args)
 	}
 	return r.base.Run(ctx, executable, args)
+}
+
+func (r *guiTestRunner) runGUIObservation(ctx context.Context, args []string) (Result, error) {
+	if args[0] == "bootout" && r.beforeBootout != nil {
+		if err := r.beforeBootout(); err != nil {
+			return Result{}, err
+		}
+	}
+	result := r.observe(args)
+	if args[0] == "bootout" && r.afterBootout != nil {
+		if err := r.afterBootout(); err != nil {
+			return result, err
+		}
+	}
+	if ctx.Value(guiClaimGateKey{}) != nil && r.claimGate != nil {
+		r.claimGate()
+	}
+	return result, ctx.Err()
 }
 
 func (r *guiTestRunner) observe(args []string) Result {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if args[0] == "print" {
+		r.prints++
+	}
 	if args[0] == "print" && r.printFailure != 0 {
 		return Result{ExitCode: r.printFailure}
 	}
@@ -110,9 +141,422 @@ func (r *guiTestRunner) observe(args []string) Result {
 		return Result{}
 	}
 	if job.running {
-		return Result{Stdout: fmt.Appendf(nil, "state = running\npid = %d\n", os.Getpid())}
+		pid := os.Getpid()
+		if r.claimPID != 0 {
+			pid = r.claimPID
+		}
+		return Result{Stdout: fmt.Appendf(nil, "state = running\npid = %d\n", pid)}
 	}
 	return Result{Stdout: fmt.Appendf(nil, "state = not running\nlast exit code = %d\n", job.exit)}
+}
+
+func TestGUIUpgradeObservationBoundsManagerPolling(t *testing.T) {
+	f, runner, request := newGUIUpgradeTest(t)
+	var selected GUIUpgradeRequest
+	if err := f.manager.WithProfileLock(f.ctx, func() error {
+		var err error
+		selected, _, err = f.manager.prepareGUIUpgrade(f.ctx, request)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	runner.jobs[f.manager.guiUpgradeTarget(selected)] = guiTestJob{running: true}
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(t.Context(), time.Minute)
+		defer cancel()
+		returned := make(chan error, 1)
+		go func() { _, err := f.manager.observeGUIUpgrade(ctx, selected); returned <- err }()
+		synctest.Wait()
+		time.Sleep(time.Minute)
+		if err := <-returned; !errors.Is(err, context.DeadlineExceeded) || !errors.Is(err, ErrGUIUpgradeUnknown) {
+			t.Fatalf("bounded observer lost original deadline: %v", err)
+		}
+		runner.mu.Lock()
+		prints := runner.prints
+		runner.mu.Unlock()
+		if prints < 2 || prints > 70 {
+			t.Fatalf("one minute of waiting launched %d manager observations; want 2..70", prints)
+		}
+	})
+}
+
+func TestGUIUpgradePreclaimRefusalRequiresExplicitNewInvocation(t *testing.T) {
+	for _, retarget := range []bool{false, true} {
+		t.Run(fmt.Sprint(retarget), func(t *testing.T) { testGUIPreclaimRetry(t, retarget) })
+	}
+}
+
+func testGUIPreclaimRetry(t *testing.T, retarget bool) {
+	t.Helper()
+	f, runner, request := newGUIUpgradeTest(t)
+	runner.claimPID, runner.claimRefusal = -1, true
+	result, err := f.manager.RunGUIUpgrade(f.ctx, request)
+	if err == nil || errors.Is(err, ErrGUIUpgradeUnknown) || len(result.Response) != 0 || runner.starts != 1 {
+		t.Fatalf("proven preclaim refusal stayed unknown or relaunched: starts=%d err=%v", runner.starts, err)
+	}
+	first, _, readErr := f.manager.activeGUIUpgrade()
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	runner.claimPID, runner.claimRefusal = 0, false
+	if retarget {
+		request.Executable = newGUIRetargetExecutable(t)
+	}
+	result, err = f.manager.RunGUIUpgrade(f.ctx, request)
+	if err != nil || result.ExitCode != 0 || runner.starts != 2 {
+		t.Fatalf("explicit retry could not replace proven no-start invocation: starts=%d err=%v", runner.starts, err)
+	}
+	next, _, readErr := f.manager.activeGUIUpgrade()
+	if readErr != nil || next.Invocation == first.Invocation || next.SavedSource != first.SavedSource || next.RuntimePATH != first.RuntimePATH {
+		t.Fatalf("no-start retry reused old invocation or lost source/PATH: %v", readErr)
+	}
+}
+
+func TestGUIUpgradeNoStartRetryRetainsIntent(t *testing.T) {
+	for _, kind := range []string{"exact operation", "reduced authority", "source"} {
+		t.Run(kind, func(t *testing.T) {
+			f, runner, request := newGUIUpgradeTest(t)
+			switch kind {
+			case "exact operation":
+				request.ExpectedOperation = "upgrade-v1:" + strings.Repeat("a", 32)
+			case "reduced authority":
+				request.NoNewNativeOperation = true
+			}
+			runner.claimPID, runner.claimRefusal = -1, true
+			_, err := f.manager.RunGUIUpgrade(f.ctx, request)
+			var notStarted *GUIUpgradeNotStartedError
+			if !errors.As(err, &notStarted) {
+				t.Fatal(err)
+			}
+			if kind == "source" {
+				request.SavedSource.Executable += "-other"
+			} else {
+				request.Executable = newGUIRetargetExecutable(t)
+			}
+			if _, err = f.manager.RunGUIUpgrade(f.ctx, request); !errors.Is(err, task.ErrRequestConflict) || runner.starts != 1 {
+				t.Fatalf("known no-start relaxed %s: starts=%d err=%v", kind, runner.starts, err)
+			}
+		})
+	}
+}
+
+func TestGUIUpgradeNoStartObservationFencesLateClaim(t *testing.T) {
+	f, runner, request := newGUIUpgradeTest(t)
+	var selected GUIUpgradeRequest
+	if err := f.manager.WithProfileLock(f.ctx, func() error {
+		var err error
+		selected, _, err = f.manager.prepareGUIUpgrade(f.ctx, request)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	target := f.manager.guiUpgradeTarget(selected)
+	runner.jobs[target] = guiTestJob{running: true}
+	checked, release := make(chan struct{}), make(chan struct{})
+	var releaseOnce sync.Once
+	runner.claimGate = func() { close(checked); <-release }
+	returned := make(chan error, 1)
+	var child sync.WaitGroup
+	child.Go(func() {
+		claim, err := f.manager.ClaimGUIUpgrade(context.WithValue(f.ctx, guiClaimGateKey{}, true), selected)
+		if err == nil {
+			err = claim.Finish(guiTestReply(selected, 0, "", "", false))
+		}
+		returned <- err
+	})
+	t.Cleanup(func() { releaseOnce.Do(func() { close(release) }); child.Wait() })
+	select {
+	case <-checked:
+	case <-f.ctx.Done():
+		t.Fatal("claim did not reach supplementary PID observation")
+	}
+	runner.mu.Lock()
+	runner.jobs[target] = guiTestJob{exit: 1}
+	runner.mu.Unlock()
+	_, observationErr := f.manager.RunGUIUpgrade(f.ctx, request)
+	releaseOnce.Do(func() { close(release) })
+	if claimErr := <-returned; claimErr == nil {
+		t.Fatalf("late child acquired effect authority after no-start observation: observer=%v", observationErr)
+	}
+	if observationErr == nil || errors.Is(observationErr, ErrGUIUpgradeUnknown) {
+		t.Fatalf("positive no-start observation remained unknown: %v", observationErr)
+	}
+}
+
+func TestGUIUpgradeNoStartCleanupCrashResumesSameSeed(t *testing.T) {
+	for _, afterBootout := range []bool{false, true} {
+		t.Run(fmt.Sprint(afterBootout), func(t *testing.T) { testGUINoStartCleanupCrash(t, afterBootout) })
+	}
+}
+
+func stageGUINoStartJob(t *testing.T) (*serviceFixture, *guiTestRunner, GUIUpgradeRequest) {
+	t.Helper()
+	f, runner, request := newGUIUpgradeTest(t)
+	request.ExpectedOperation = "upgrade-v1:" + strings.Repeat("a", 32)
+	if err := f.manager.WithProfileLock(f.ctx, func() error {
+		var err error
+		request, _, err = f.manager.prepareGUIUpgrade(f.ctx, request)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// The OS edge supplies a previously launched exact-job exit. No real
+	// process or Native operation is created by this private-record fixture.
+	runner.jobs[f.manager.guiUpgradeTarget(request)] = guiTestJob{exit: 1}
+	return f, runner, request
+}
+
+func testGUINoStartCleanupCrash(t *testing.T, afterBootout bool) {
+	t.Helper()
+	f, runner, request := newGUIUpgradeTest(t)
+	request.ExpectedOperation = "upgrade-v1:" + strings.Repeat("a", 32)
+	runner.claimPID, runner.claimRefusal = -1, true
+	proofSeen, crash := injectGUINoStartCleanupCrash(f.manager, runner, afterBootout)
+	_, err := f.manager.RunGUIUpgrade(f.ctx, request)
+	if !errors.Is(err, crash) || !*proofSeen || runner.starts != 1 {
+		t.Fatalf("cleanup preceded durable no-start proof or lost its fault: starts=%d proof=%t err=%v", runner.starts, *proofSeen, err)
+	}
+	first, _, err := f.manager.activeGUIUpgrade()
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner.beforeBootout, runner.afterBootout = nil, nil
+	_, err = f.manager.RunGUIUpgrade(f.ctx, request)
+	var notStarted *GUIUpgradeNotStartedError
+	if !errors.As(err, &notStarted) || notStarted.ExitCode != 1 || runner.starts != 1 {
+		t.Fatalf("cleanup crash lost positive proof or rebootstrapped: starts=%d err=%v", runner.starts, err)
+	}
+	if cleaned, readErr := f.manager.guiMarker(first, "cleaned"); readErr != nil || !cleaned {
+		t.Fatalf("cleanup did not resume from durable proof: %v", readErr)
+	}
+	runner.claimPID, runner.claimRefusal = 0, false
+	runner.child = func(_ context.Context, r GUIUpgradeRequest) (GUIUpgradeResult, error) {
+		return guiTestReply(r, 0, r.ExpectedOperation, "completed", false), nil
+	}
+	result, err := f.manager.RunGUIUpgrade(f.ctx, request)
+	if err != nil || result.OperationID != request.ExpectedOperation || runner.starts != 2 {
+		t.Fatalf("explicit sameA retry changed operation: starts=%d err=%v", runner.starts, err)
+	}
+	assertGUINoStartSeedPreserved(t, f.manager, first)
+}
+
+func injectGUINoStartCleanupCrash(manager *Manager, runner *guiTestRunner, afterBootout bool) (*bool, error) {
+	proofSeen := new(bool)
+	crash := errors.New("owned cleanup interruption")
+	runner.beforeBootout = func() error {
+		active, _, err := manager.activeGUIUpgrade()
+		if err != nil {
+			return err
+		}
+		_, *proofSeen, err = manager.readGUINotStarted(active)
+		if !afterBootout {
+			err = errors.Join(err, crash)
+		}
+		return err
+	}
+	if afterBootout {
+		runner.afterBootout = func() error { return crash }
+	}
+	return proofSeen, crash
+}
+
+func assertGUINoStartSeedPreserved(t *testing.T, manager *Manager, request GUIUpgradeRequest) {
+	t.Helper()
+	next, _, err := manager.activeGUIUpgrade()
+	if err != nil || next.Invocation == request.Invocation || next.SavedSource != request.SavedSource || next.ExpectedOperation != request.ExpectedOperation || next.RuntimePATH != request.RuntimePATH {
+		t.Fatalf("cleanup recovery lost immutable seed: %v", err)
+	}
+}
+
+func TestGUIUpgradeNoStartRolloverRecoversPublishedSeed(t *testing.T) {
+	f, runner, request := stageGUINoStartJob(t)
+	if err := f.manager.recordGUINotStarted(f.ctx, request, guiNotStartedProof{Invocation: request.Invocation, ExitCode: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.manager.cleanupGUIJob(f.ctx, request); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.manager.WithProfileLock(f.ctx, func() error {
+		stageGUIReconciliationCrash(t, f.manager, request, request.ExpectedOperation, true)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	runner.child = func(_ context.Context, r GUIUpgradeRequest) (GUIUpgradeResult, error) {
+		return guiTestReply(r, 0, r.ExpectedOperation, "completed", false), nil
+	}
+	result, err := f.manager.RunGUIUpgrade(f.ctx, request)
+	if err != nil || result.OperationID != request.ExpectedOperation || runner.starts != 1 {
+		t.Fatalf("published no-start seed could not resume exactA: %v", err)
+	}
+}
+
+func TestGUIUpgradeNoStartEvidenceRemainsConservative(t *testing.T) {
+	for _, kind := range []string{"absent job", "zero exit", "claimed", "held alive", "bad alive", "bad claim", "bad proof", "proof and claim", "proof and result", "proof and held alive", "manager fault"} {
+		t.Run(kind, func(t *testing.T) {
+			f, runner, request := stageGUINoStartJob(t)
+			wanted := setGUINoStartFault(t, f.manager, runner, request, kind)
+			_, err := f.manager.RunGUIUpgrade(f.ctx, request)
+			var notStarted *GUIUpgradeNotStartedError
+			if !errors.Is(err, wanted) || errors.As(err, &notStarted) || runner.starts != 0 {
+				t.Fatalf("invalid %s became positive no-start: starts=%d err=%v", kind, runner.starts, err)
+			}
+		})
+	}
+}
+
+func setGUINoStartFault(t *testing.T, manager *Manager, runner *guiTestRunner, request GUIUpgradeRequest, kind string) error {
+	t.Helper()
+	var err error
+	wanted := ErrGUIUpgradeRecord
+	switch kind {
+	case "absent job":
+		delete(runner.jobs, manager.guiUpgradeTarget(request))
+		wanted = ErrGUIUpgradeUnknown
+	case "zero exit":
+		runner.jobs[manager.guiUpgradeTarget(request)] = guiTestJob{exit: 0}
+	case "claimed":
+		err = manager.writeGUIMarker(request, "claim")
+		wanted = ErrGUIUpgradeUnknown
+	case "held alive":
+		holdGUINoStartAlive(t, manager.guiFile(request, "alive"))
+		wanted = ErrGUIUpgradeUnknown
+	case "bad alive":
+		err = os.WriteFile(manager.guiFile(request, "alive"), nil, 0o644)
+	case "bad claim":
+		err = os.WriteFile(manager.guiFile(request, "claim"), []byte("{"), 0o600)
+	case "bad proof":
+		err = guiWriteJSON(manager.guiFile(request, "not_started"), guiNotStartedProof{Invocation: request.Invocation})
+	case "proof and claim":
+		err = errors.Join(guiWriteJSON(manager.guiFile(request, "not_started"), guiNotStartedProof{Invocation: request.Invocation, ExitCode: 1}), manager.writeGUIMarker(request, "claim"))
+	case "proof and result":
+		err = errors.Join(guiWriteJSON(manager.guiFile(request, "not_started"), guiNotStartedProof{Invocation: request.Invocation, ExitCode: 1}), guiWriteJSON(manager.guiFile(request, "result.json"), guiTestReply(request, 0, "", "", false)))
+	case "proof and held alive":
+		err = errors.Join(guiWriteJSON(manager.guiFile(request, "not_started"), guiNotStartedProof{Invocation: request.Invocation, ExitCode: 1}), manager.writeGUIMarker(request, "cleaned"))
+		holdGUINoStartAlive(t, manager.guiFile(request, "alive"))
+		wanted = ErrGUIUpgradeUnknown
+	case "manager fault":
+		runner.printFailure = 7
+		wanted = ErrManager
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	return wanted
+}
+
+func holdGUINoStartAlive(t *testing.T, path string) {
+	t.Helper()
+	file, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if closeErr := file.Close(); closeErr != nil {
+			t.Error(closeErr)
+		}
+	})
+	if err = unix.Flock(int(file.Fd()), unix.LOCK_EX|unix.LOCK_NB); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestGUIUpgradeInitialVerificationRetryPreservesGuards(t *testing.T) {
+	for _, kind := range []string{"legacy phase", "post phase", "exact operation", "reduced authority", "changed source", "changed root", "handoff observation"} {
+		t.Run(kind, func(t *testing.T) { testGUIInitialRetryGuard(t, kind) })
+	}
+}
+
+func testGUIInitialRetryGuard(t *testing.T, kind string) {
+	t.Helper()
+	f, runner, request := newGUIUpgradeTest(t)
+	phase := "verify_initial_installation"
+	switch kind {
+	case "legacy phase":
+		phase = "verify_selected_installation"
+	case "post phase":
+		phase = "verify_transitioned_installation"
+	case "exact operation":
+		request.ExpectedOperation = "upgrade-v1:" + strings.Repeat("a", 32)
+	case "reduced authority":
+		request.NoNewNativeOperation = true
+	}
+	runner.child = func(_ context.Context, r GUIUpgradeRequest) (GUIUpgradeResult, error) {
+		return guiVerificationFailure(r, phase, kind == "handoff observation")
+	}
+	if _, err := f.manager.RunGUIUpgrade(f.ctx, request); err != nil {
+		t.Fatal(err)
+	}
+	switch kind {
+	case "changed source":
+		request.SavedSource.Executable += "-other"
+	case "changed root":
+		request.Root += "-other"
+	}
+	if kind == "exact operation" || kind == "reduced authority" {
+		request.Executable = newGUIRetargetExecutable(t)
+	}
+	if _, err := f.manager.RunGUIUpgrade(f.ctx, request); err == nil || runner.starts != 1 {
+		t.Fatalf("initial verification recovery relaxed %s: starts=%d err=%v", kind, runner.starts, err)
+	}
+}
+
+func guiVerificationFailure(request GUIUpgradeRequest, phase string, handoff bool) (GUIUpgradeResult, error) {
+	result := guiTestReply(request, 1, "", "", false)
+	value, err := result.publicUpgrade()
+	if err != nil {
+		return result, err
+	}
+	value.Upgrade.Phase = phase
+	value.Upgrade.Native.RootContextMatches, value.Upgrade.Native.CapabilitiesVerified = false, false
+	value.Upgrade.Supervisor.HandoffNeeded = handoff
+	result.Response, err = json.Marshal(value)
+	return result, err
+}
+
+func newGUIRetargetExecutable(t *testing.T) string {
+	t.Helper()
+	directory, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	executable := filepath.Join(directory, "corrected-delegate")
+	if err := os.WriteFile(executable, []byte("#!/bin/sh\nexit 64\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	return executable
+}
+
+func TestGUIUpgradeInitialVerificationRetargetCrashRecovery(t *testing.T) {
+	f, runner, request := newGUIUpgradeTest(t)
+	runner.child = func(_ context.Context, r GUIUpgradeRequest) (GUIUpgradeResult, error) {
+		return guiVerificationFailure(r, "verify_initial_installation", false)
+	}
+	if _, err := f.manager.RunGUIUpgrade(f.ctx, request); err != nil {
+		t.Fatal(err)
+	}
+	old, _, err := f.manager.activeGUIUpgrade()
+	if err != nil {
+		t.Fatal(err)
+	}
+	next := old
+	next.Executable = newGUIRetargetExecutable(t)
+	if err = f.manager.WithProfileLock(f.ctx, func() error {
+		next = stageGUIReconciliationCrash(t, f.manager, next, "", true)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	request.Executable = next.Executable
+	runner.child = nil
+	result, err := f.manager.RunGUIUpgrade(f.ctx, request)
+	if err != nil || result.ExitCode != 0 || runner.starts != 2 {
+		t.Fatalf("fresh retarget publication crash lost recovery: starts=%d err=%v", runner.starts, err)
+	}
+	active, found, err := f.manager.activeGUIUpgrade()
+	if err != nil || !found || active.SavedSource != old.SavedSource || active.RuntimePATH != old.RuntimePATH || active.ExpectedOperation != "" || active.NoNewNativeOperation {
+		t.Fatalf("fresh retarget crash changed source, PATH or authority: %v", err)
+	}
 }
 
 func TestGUIUpgradeAliveRecordFaultIsNotPolledIntoDeadline(t *testing.T) {
@@ -152,7 +596,9 @@ func (r *guiTestRunner) runChild(ctx context.Context, request GUIUpgradeRequest)
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.childErr = errors.Join(r.childErr, err)
+	if !r.claimRefusal || !errors.Is(err, ErrGUIRequired) {
+		r.childErr = errors.Join(r.childErr, err)
+	}
 	code := result.ExitCode
 	if err != nil {
 		code = 1

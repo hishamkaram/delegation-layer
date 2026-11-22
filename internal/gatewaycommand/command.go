@@ -254,14 +254,11 @@ func publicError(err error) (failure, next string, exitCode int) {
 	if guiFailure, guiNext, code, matched := guiUpgradePublicError(err); matched {
 		return guiFailure, guiNext, code
 	}
+	if upgradeFailure, upgradeNext, code, matched := upgradePublicError(err); matched {
+		return upgradeFailure, upgradeNext, code
+	}
 	serviceFailure, serviceNext, serviceCode, serviceMatched := servicePublicError(err)
 	switch {
-	case errors.Is(err, deviceclient.ErrMigrationRequired), errors.Is(err, ErrInstallationMigrationRequired):
-		return "migration_required", "run_gateway_upgrade_preview", 1
-	case errors.Is(err, deviceclient.ErrMigrationAcceptanceRequired):
-		return "migration_acceptance_required", "run_gateway_upgrade_with_acceptance", 1
-	case nativeUpgradePendingOnly(err):
-		return "gateway_upgrade_pending", "retry_gateway_upgrade_same_profile", 3
 	case errors.Is(err, ErrOfflineCutoverRequired):
 		return "root_cutover_required", "run_explicit_offline_cutover", 1
 	case errors.Is(err, ErrRootExists):

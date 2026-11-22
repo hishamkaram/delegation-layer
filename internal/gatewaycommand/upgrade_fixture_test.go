@@ -151,6 +151,7 @@ type upgradeFixture struct {
 	client        *upgradeClient
 	native        *upgradeNative
 	services      *upgradeServices
+	gui           *guiSDKRunner
 	history       map[string][]byte
 	identity      map[string][]byte
 }
@@ -206,6 +207,7 @@ func newUpgradeFixture(t *testing.T) *upgradeFixture {
 	f.client, f.native, f.services = &upgradeClient{}, &upgradeNative{root: f.root, rootToken: f.rootToken}, &upgradeServices{}
 	f.dependencies = commandDependencies(t, f.client)
 	f.dependencies.Executable, f.dependencies.Services, f.dependencies.NativeInstallation = f.newExecutable, f.services, f.native
+	guiSDKControl(t, f)
 	return f
 }
 

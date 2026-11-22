@@ -61,8 +61,14 @@ Registration still does not prove provider authentication or execution readiness
 Accepted upgrade maintenance also uses that GUI domain automatically, preserving
 the existing validated service PATH across pending retries. It copies no other
 SSH environment or credentials. `gateway_upgrade_uncertain` requires inspection
-of the same profile; do not launch replacement maintenance. An invalid private
-record reports `gateway_upgrade_record_invalid` with `stop_and_report`.
+of the same profile; do not launch replacement maintenance. In contrast,
+`gateway_upgrade_not_started` confirms a pre-claim refusal and recorded exact-job
+cleanup; follow its next action to run the same command explicitly again.
+`gateway_upgrade_review_required` carries Native's `stop_and_report`; preserve
+the exact operation and inspect its Native blocker instead of retrying. A known
+initial installation-verification failure permits correcting the installation
+and retrying, while ambiguous historical receipts remain uncertain. An invalid
+private record reports `gateway_upgrade_record_invalid` with `stop_and_report`.
 
 Approve an existing ancestor once. New project selection and browsing use a
 scope ID and relative path; manual project/temp aliases are not needed. Whole

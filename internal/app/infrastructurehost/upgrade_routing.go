@@ -124,19 +124,28 @@ func releaseUpgradeOwnerRefreshServing(ctx context.Context, reader *taskdir.Read
 				return err
 			}
 		}
-		var accepted bool
 		var err error
-		observed, accepted, err = pueue.ObservePrivateUpgradeAcceptedStartWithLock(locked, pin, pueue.UpgradeOperationID(operation))
+		observed, err = observeUpgradeOwnerRefreshEligibilityWithLock(locked, pin, operation)
 		if err != nil {
 			return err
-		}
-		if accepted {
-			return &pueue.PrivateUpgradeError{ReasonCode: UpgradeOwnerRefreshSuccessorStartAccepted, Err: pueue.ErrPrivateUpgradePending}
 		}
 		terminal = false
 		return releaseUpgradeServing(locked, reader, owner)
 	})
 	return observed, terminal, resultErr
+}
+
+// Canonical control owns accepted Start, including unknown birth. Apphost owns
+// retirement policy; both refresh callers already hold the actual bootstrap EX.
+func observeUpgradeOwnerRefreshEligibilityWithLock(ctx context.Context, pin taskdir.RootPin, operation infrastructure.UpgradeOperationID) (pueue.PrivateUpgradeObservation, error) {
+	observed, accepted, err := pueue.ObservePrivateUpgradeAcceptedStartWithLock(ctx, pin, pueue.UpgradeOperationID(operation))
+	if err != nil {
+		return observed, err
+	}
+	if accepted {
+		return observed, &pueue.PrivateUpgradeError{ReasonCode: UpgradeOwnerRefreshSuccessorStartAccepted, Err: pueue.ErrPrivateUpgradePending}
+	}
+	return observed, nil
 }
 
 // Only an authenticated typed response and its identical pending marker may

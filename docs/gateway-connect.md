@@ -134,9 +134,18 @@ saved source paths, credentials or journals to bypass a refusal. See
 
 Reconciliation retains the exact Native operation; it never substitutes a later
 operation or relaunches an uncertain invocation. `gateway_upgrade_uncertain`
-requires inspection of the same profile. An invalid private maintenance record
-reports `gateway_upgrade_record_invalid` and `stop_and_report`; do not delete
-records as repair. Same-path executable replacement still uses Native's
+requires inspection of the same profile. `gateway_upgrade_not_started` means
+the maintenance job exited before claiming the upgrade; after its recorded
+cleanup, the reported next action permits a new invocation of the same command.
+It preserves the saved source, PATH and any exact Native operation. A known
+installation-verification failure before Native maintenance also permits an
+explicit retry after correcting the installation. Ambiguous historical receipts
+remain uncertain; they are never reclassified as proof that nothing changed.
+`gateway_upgrade_review_required` preserves Native's `stop_and_report`, even
+when Native returned a pending exit code. Keep the reported operation and
+inspect its Native blocker; do not retry maintenance. An invalid private
+maintenance record reports `gateway_upgrade_record_invalid` and
+`stop_and_report`; do not delete records as repair. Same-path executable replacement still uses Native's
 [installation upgrade procedure](cli-reference.md#installation-upgrades).
 Gateway does not infer replacement from path equality or force a daemon reload.
 

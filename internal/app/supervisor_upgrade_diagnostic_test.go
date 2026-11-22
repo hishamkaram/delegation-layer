@@ -51,6 +51,24 @@ func TestSupervisorUpgradeAcceptedTargetRefreshRequiresReview(t *testing.T) {
 	}
 }
 
+func TestSupervisorMigrationPreservesAcceptedStartReviewReason(t *testing.T) {
+	for _, reason := range []string{infrastructurehost.UpgradeOwnerRefreshSuccessorStartAccepted, "successor_birth_unknown"} {
+		t.Run(reason, func(t *testing.T) {
+			cause := &pueue.PrivateUpgradeError{ReasonCode: reason, Err: pueue.ErrPrivateUpgradePending}
+			result := supervisorMigrationFailure(newSupervisorCommandResponse("migrate"), errors.Join(cause, os.ErrPermission))
+			control := result.response.SupervisorControl
+			if result.code != 1 || control.ReasonCode != reason || control.NextAction != "stop_and_report" || !errors.Is(result.err, pueue.ErrPrivateUpgradePending) || !errors.Is(result.err, os.ErrPermission) {
+				t.Fatalf("migration lost review disposition or a concrete fault: code=%d control=%+v err=%v", result.code, control, result.err)
+			}
+		})
+	}
+	privateReason := "private-unrecognized-reason-canary"
+	result := supervisorMigrationFailure(newSupervisorCommandResponse("migrate"), &pueue.PrivateUpgradeError{ReasonCode: privateReason, Err: pueue.ErrPrivateUpgradePending})
+	if result.response.SupervisorControl.ReasonCode == privateReason || result.response.SupervisorControl.NextAction != "stop_and_report" {
+		t.Fatal("unrecognized private metadata became public upgrade guidance")
+	}
+}
+
 func TestSupervisorUpgradeStatusUnavailablePredecessorPreservesDrain(t *testing.T) {
 	for _, endpoint := range []string{"absent", "refused"} {
 		t.Run(endpoint, func(t *testing.T) {
