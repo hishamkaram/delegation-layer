@@ -18,13 +18,19 @@ import (
 // Positive process identity and retained Wait are DATA/protocol inputs; no
 // native predecessor closure, daemon birth or completed Wait is fabricated.
 func TestUpgradeMigrationRetryUsesInstalledRecoveryTransport(t *testing.T) {
-	for _, requested := range []bool{false, true} {
-		phase := "acknowledged shutdown"
-		if requested {
-			phase = "requested before command Start"
-		}
-		t.Run(phase, func(t *testing.T) { testUpgradeMigrationRetryTransport(t, requested) })
+	for _, scenario := range []upgradeRetryTransportScenario{
+		{name: "acknowledged shutdown"},
+		{name: "requested before command Start", requested: true, wantShutdowns: 1},
+		{name: "legacy dispatched without acknowledgement", legacyDispatched: true, wantStatuses: 1, wantShutdowns: 1},
+	} {
+		t.Run(scenario.name, func(t *testing.T) { testUpgradeMigrationRetryTransport(t, scenario) })
 	}
+}
+
+type upgradeRetryTransportScenario struct {
+	name                        string
+	requested, legacyDispatched bool
+	wantStatuses, wantShutdowns int32
 }
 
 func prepareUpgradeRetryTransportFixture(t *testing.T, requested bool) (*upgradeAliasReplayFixture, privateMigrationRecord) {
@@ -71,9 +77,12 @@ func prepareUpgradeRetryTransportFixture(t *testing.T, requested bool) (*upgrade
 	return f, record
 }
 
-func testUpgradeMigrationRetryTransport(t *testing.T, requested bool) {
+func testUpgradeMigrationRetryTransport(t *testing.T, scenario upgradeRetryTransportScenario) {
 	t.Helper()
-	f, record := prepareUpgradeRetryTransportFixture(t, requested)
+	f, record := prepareUpgradeRetryTransportFixture(t, scenario.requested)
+	if scenario.legacyDispatched {
+		record = seedLegacyDispatchedAliasFixture(t, f, record)
+	}
 	// A clean shutdown response may precede closure while the endpoint is ready.
 	writePrivateSuccessorTestBytes(t, filepath.Join(f.stored.base, "ready"), nil)
 	var statuses, shutdowns atomic.Int32
@@ -100,14 +109,34 @@ func testUpgradeMigrationRetryTransport(t *testing.T, requested bool) {
 		logUpgradeRetryTransportCause(t, retryErr, f.stored.client.Binding().ClientExecutable)
 		t.Errorf("live predecessor retry did not retain safe pending through installed transport: phase=%s err=%v", observed.Phase, retryErr)
 	}
-	wantShutdowns := int32(0)
-	if requested {
-		wantShutdowns = 1
-	}
-	if statuses.Load() != 0 || shutdowns.Load() != wantShutdowns {
-		t.Errorf("retry changed required protocol work: status=%d want=0 shutdown=%d want=%d", statuses.Load(), shutdowns.Load(), wantShutdowns)
+	if statuses.Load() != scenario.wantStatuses || shutdowns.Load() != scenario.wantShutdowns {
+		t.Errorf("retry changed required protocol work: status=%d want=%d shutdown=%d want=%d", statuses.Load(), scenario.wantStatuses, shutdowns.Load(), scenario.wantShutdowns)
 	}
 	assertUpgradeRetryTransportFences(t, f, record, before)
+}
+
+func seedLegacyDispatchedAliasFixture(t *testing.T, f *upgradeAliasReplayFixture, prepared privateMigrationRecord) privateMigrationRecord {
+	t.Helper()
+	if !prepared.LegacyShutdownRequested || !prepared.LegacyShutdownDispatched || !prepared.LegacyShutdownAcknowledged || prepared.LegacyStopped {
+		t.Fatal("historical producer fixture lacks a clean dispatched predecessor input")
+	}
+	legacy := prepared
+	legacy.LegacyShutdownAcknowledged = false
+	data, err := marshalPrivateMigrationRecord(legacy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(data, []byte(`"legacy_shutdown_acknowledged"`)) {
+		t.Fatal("historical producer bytes contain the new acknowledgement field")
+	}
+	// Establish old-producer input before reconciliation. This fixture byte seed
+	// is not a current writer transition: the production writer forbids ACK loss.
+	writePrivateSuccessorTestBytes(t, privateMigrationRecordPath(f.stored.base), data)
+	loaded, found, err := loadPrivateMigrationRecord(f.stored.base)
+	if err != nil || !found || loaded != legacy {
+		t.Fatalf("historical dispatched bytes did not retain the exact alias migration: found=%t err=%v", found, err)
+	}
+	return loaded
 }
 
 func assertUpgradeRetryTransportPrepared(t *testing.T, f *upgradeAliasReplayFixture, requested bool, observed PrivateUpgradeObservation, firstErr error) privateMigrationRecord {
@@ -156,6 +185,9 @@ func assertUpgradeRetryTransportFences(t *testing.T, f *upgradeAliasReplayFixtur
 	after, found, err := loadPrivateMigrationRecord(f.stored.base)
 	if err != nil || !found {
 		t.Fatalf("retry lost its canonical migration: found=%t err=%v", found, err)
+	}
+	if !after.LegacyShutdownAcknowledged {
+		t.Error("retry did not retain its clean shutdown acknowledgement")
 	}
 	assertUpgradeRetryTransportJournalUnclosed(t, before, after)
 	if f.starts.Load() != 0 {
