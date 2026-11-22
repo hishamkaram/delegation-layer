@@ -180,7 +180,30 @@ func (r GUIUpgradeResult) validate(request GUIUpgradeRequest) error {
 	if !r.matchesGUITransition(value.Upgrade) {
 		return ErrGUIUpgradeRecord
 	}
+	if _, err := r.normalMaintenancePending(request, value); err != nil {
+		return err
+	}
 	return r.validateGUIResultIntent(request, value.Failure)
+}
+
+// This is retained normal maintenance authority, not proof of no effects and
+// not an exact operation. Only the next explicit invocation may resume it.
+func (r GUIUpgradeResult) normalMaintenancePending(previous GUIUpgradeRequest, value guiPublicUpgrade) (bool, error) {
+	progress := value.Upgrade
+	if progress == nil || progress.Phase != "supervisor_maintenance_pending" {
+		return false, nil
+	}
+	if previous.ExpectedOperation != "" || previous.NoNewNativeOperation {
+		return false, ErrGUIUpgradeRecord
+	}
+	if !r.emptyMaintenancePending(value.Failure) || progress.Supervisor != (guiPublicUpgradeSupervisor{}) || progress.Native.RootContextMatches || progress.Native.CapabilitiesVerified {
+		return false, ErrGUIUpgradeRecord
+	}
+	return true, nil
+}
+
+func (r GUIUpgradeResult) emptyMaintenancePending(failure string) bool {
+	return r.ExitCode == 3 && failure == "gateway_upgrade_pending" && r.OperationID == "" && r.Phase == "" && !r.Pending
 }
 
 func (r GUIUpgradeResult) validateEnvelope(request GUIUpgradeRequest) error {
@@ -335,6 +358,20 @@ func (m *Manager) reconcileGUIResult(ctx context.Context, requested, previous GU
 }
 
 func (r *GUIUpgradeRequest) retainGUIRetryIntent(previous GUIUpgradeRequest, result GUIUpgradeResult) error {
+	value, err := result.publicUpgrade()
+	if err != nil {
+		return errors.Join(ErrGUIUpgradeRecord, err)
+	}
+	if pending, pendingErr := result.normalMaintenancePending(previous, value); pending || pendingErr != nil {
+		if pendingErr != nil {
+			return pendingErr
+		}
+		if r.SavedSource != previous.SavedSource || r.Executable != previous.Executable {
+			return task.ErrRequestConflict
+		}
+		r.ExpectedOperation, r.NoNewNativeOperation = "", false
+		return nil
+	}
 	fresh, err := result.initialVerificationFailure(previous)
 	if err != nil {
 		return err
@@ -406,6 +443,13 @@ func (r *GUIUpgradeRequest) retainGUIWorkflow(result GUIUpgradeResult) error {
 		return errors.Join(ErrGUIUpgradeRecord, err)
 	}
 	if value.Upgrade == nil {
+		return nil
+	}
+	if value.Upgrade.Phase == "verify_current_installation" && value.Upgrade.Supervisor == (guiPublicUpgradeSupervisor{}) && !value.Upgrade.Native.RootContextMatches && !value.Upgrade.Native.CapabilitiesVerified {
+		// Final observation followed omitted maintenance or a positively
+		// successful no-operation Ensure. Retry retains all pins and reduces
+		// authority: no new Native operation.
+		r.NoNewNativeOperation = true
 		return nil
 	}
 	if value.Upgrade.Native.RootContextMatches && value.Upgrade.Native.CapabilitiesVerified {

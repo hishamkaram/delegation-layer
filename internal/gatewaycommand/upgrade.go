@@ -184,31 +184,43 @@ func (c invocation) prepareUpgradeNative(ctx context.Context, local deviceclient
 	if err = transition.validate(); err != nil {
 		return err
 	}
-	if transition.Pending || transition.HandoffNeeded {
+	if !c.noNewNativeOperation {
 		progress.Phase = "supervisor_transition"
 		selectedTransition := transition
 		transition, err = native.Ensure(ctx, local.DelegateRoot, local.DelegateRootContext, transition)
 		progress.Supervisor = transition
 		if err != nil {
+			if unboundNativeMaintenancePending(selectedTransition, transition, progress.Native, err) {
+				progress.Phase = "supervisor_maintenance_pending"
+			}
 			return err
 		}
 		if err = transition.validate(); err != nil {
 			return err
 		}
-		if selectedTransition.Pending && transition.OperationID != selectedTransition.OperationID {
+		if selectedTransition.OperationID != "" && transition.OperationID != selectedTransition.OperationID {
 			return task.ErrRequestConflict
 		}
 		if transition.Pending {
 			return ErrNativeUpgradePending
 		}
-		progress.Phase = "verify_transitioned_installation"
-		if err = native.Verify(ctx, local.DelegateRoot, local.DelegateRootContext); err != nil {
-			return err
-		}
+	}
+	progress.Phase = "verify_transitioned_installation"
+	if transition == (NativeTransition{}) {
+		// Omitted maintenance or a positively validated empty owner response
+		// grants only the same restrictive no-new-operation retry.
+		progress.Phase = "verify_current_installation"
+	}
+	if err = native.VerifyReady(ctx, local.DelegateRoot, local.DelegateRootContext); err != nil {
+		return err
 	}
 	progress.Native.RootContextMatches, progress.Native.CapabilitiesVerified = true, true
 	progress.Native.Verification = "guarded_public_commands"
 	return nil
+}
+
+func unboundNativeMaintenancePending(selected, returned NativeTransition, verification NativeInstallationObservation, cause error) bool {
+	return selected == (NativeTransition{}) && returned == (NativeTransition{}) && !verification.RootContextMatches && !verification.CapabilitiesVerified && nativeUpgradePendingOnly(cause)
 }
 
 func (c invocation) commitUpgradeSelection(ctx context.Context, local deviceclient.LocalContextInfo, executable string, before deviceclient.ConnectionStatus, progress *UpgradeObservation, response *Response) error {

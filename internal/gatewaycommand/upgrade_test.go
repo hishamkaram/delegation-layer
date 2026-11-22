@@ -60,7 +60,9 @@ type upgradeNative struct {
 	transition                          NativeTransition
 	inspections, ensures, verifications int
 	verifyErr                           error
+	readyErr                            error
 	ensureErr                           error
+	returned                            *NativeTransition
 	keepPending                         bool
 }
 
@@ -79,6 +81,13 @@ func (n *upgradeNative) Verify(ctx context.Context, root, expected string) error
 	return nil
 }
 
+func (n *upgradeNative) VerifyReady(ctx context.Context, root, expected string) error {
+	if n.readyErr != nil {
+		return n.readyErr
+	}
+	return n.Verify(ctx, root, expected)
+}
+
 func (n *upgradeNative) Inspect(_ context.Context, root, expected string) (NativeTransition, error) {
 	n.inspections++
 	if root != n.root || expected != n.rootToken {
@@ -93,6 +102,9 @@ func (n *upgradeNative) Ensure(_ context.Context, root, expected string, previou
 		return previous, task.ErrIdentityMismatch
 	}
 	if n.ensureErr != nil {
+		if n.returned != nil {
+			return *n.returned, n.ensureErr
+		}
 		return previous, n.ensureErr
 	}
 	if n.keepPending {
@@ -203,8 +215,8 @@ func TestGatewayUpgradeUsesNewInstalledExecutableAndPreservesOriginalState(t *te
 	f.services.installed = f.oldExecutable
 	response, code := f.run(t, false)
 	requireCompletedGatewayUpgrade(t, response, code)
-	if f.native.ensures != 0 || f.native.verifications != 1 {
-		t.Fatal("new connector executable invented a supervisor operation or repeated unchanged preflight")
+	if f.native.ensures != 1 || f.native.verifications != 2 {
+		t.Fatal("new connector executable invented a supervisor operation or omitted initial/final verification")
 	}
 	expectedCalls := []upgradeServiceCall{{f.oldExecutable, "uninstall"}, {f.newExecutable, "install"}, {f.newExecutable, "start"}}
 	if !reflect.DeepEqual(f.services.calls, expectedCalls) {

@@ -582,7 +582,10 @@ without daemon replacement authority.
 
 Exact completion may advance only its own retained drain when Native's proofs
 permit. A completed OP replays its history without refreshing a later operation's
-owner. Mixed cancellation/cleanup faults are not clean pending progress.
+owner or repairing current state. Ordinary ensure and Gateway's explicit
+installation maintenance request current readiness separately through Native.
+A later same-path generation remains a different operation. Mixed
+cancellation/cleanup faults are not clean pending progress.
 Native retains clean predecessor shutdown acknowledgement separately from
 closure. Reconciliation observes closure instead of resending an acknowledged
 request. Older strict readers refuse populated acknowledgement records,

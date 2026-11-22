@@ -359,7 +359,11 @@ Replace `OP` with the exact returned identity. A proactive operation needs this
 explicit completion even when the installer leaves the same paths/version in
 place. Completion creates a fresh daemon generation. An unrelated ordinary
 `ensure-owner` cannot authorize it. Repeating an already completed OP returns
-its retained completion without another launch or readiness claim.
+its retained completion without another daemon launch or repair. Completion
+history stays immutable; a historical replay alone is not evidence that the
+current generation is ready. Gateway's explicit upgrade separately requests
+current readiness from Native. Ordinary `ensure-owner` retains its existing
+startup and inspection-routing preparation.
 
 Exact completion can advance that operation's own retained drain when Native's
 queue and canonical maintenance proofs permit it. Active work stays pending;
@@ -613,8 +617,12 @@ A completed `migration_phase` remains historical evidence even when current
 readiness requires repair. Completed journal entries remain historical evidence.
 If an installation handoff has finished but inspection routing still points to
 its predecessor, status reports `legacy_present` and
-`next_action: "run_supervisor_migrate"`. Run `delegate supervisor migrate --json`
-with the same root to complete that routing. Continuation and some provider
+`next_action: "run_supervisor_migrate"`. Gateway's current-readiness step and
+ordinary `ensure-owner` complete the supported current-generation routing.
+Historical completion replay does not repair it. Follow the returned guidance;
+an interrupted or older flow can still require
+`delegate supervisor migrate --json` with the same root.
+Continuation and some provider
 inspections can require this step. Admission may also finish an already prepared
 edge; status still advises explicit completion until the edge is recorded as
 complete. Follow a more specific maintenance blocker first.
@@ -632,8 +640,12 @@ become unavailable after graceful shutdown. If it was the same private endpoint
 used by the current bundled supervisor, Delegate starts that bundled daemon and
 waits for readiness before recording the completed migration. Inspection routing
 completes through its own journal; normal admission uses the recorded successor.
-A completed private handoff does not by itself prepare an inspection edge.
-Explicit migration can prepare that edge after checking the current queue and
+A completed private record alone does not prove that its inspection edge is ready.
+The installation-upgrade owner completes its current generation's edge without
+starting another daemon during that derived step. Gateway's separate readiness
+intent can first use Native's ordinary startup owner if the exact published
+installation has stopped. Explicit migration can also prepare that edge after
+checking the current queue and
 root-wide closure evidence. If the exact published current daemon has stopped,
 this path can restart it normally before those checks; it does not repeat the
 completed private handoff. A crash between these steps is resumed from the

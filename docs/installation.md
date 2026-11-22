@@ -258,7 +258,9 @@ policy through the SDK migration owner and uses the existing Native supervisor
 and OS service owners for the installed-source handoff. It can finish the exact
 retained, prepared Native handoff using
 the current installed pair; a separate manual `ensure-owner` prerequisite is
-not part of this Gateway workflow. It preserves device registration,
+not part of this Gateway workflow. Native also completes the current inspection
+routing, and the upgrade verifies admission readiness before committing the
+profile or restarting the connector. It preserves device registration,
 credentials/generation, original root, disabled approvals and
 revisions, pins and history. Preview performs no Native/service command and
 cannot prove prerequisites. Pending/blocked responses require their reported

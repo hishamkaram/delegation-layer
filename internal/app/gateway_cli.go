@@ -8,7 +8,10 @@ import (
 
 	"github.com/hishamkaram/delegation-layer/internal/gatewaycommand"
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
+	"github.com/hishamkaram/delegation-layer/internal/supervisor"
+	"github.com/hishamkaram/delegation-layer/internal/supervisor/infrastructure"
 	"github.com/hishamkaram/delegation-layer/internal/task"
+	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 )
 
 func gatewaySpec() commandSpec {
@@ -84,22 +87,73 @@ func (m gatewayNativeMaintenance) ValidateUpgrade(ctx context.Context) error {
 	return m.dependencies.invocationSource.ValidateUpgrade(ctx)
 }
 
-func (m gatewayNativeMaintenance) Ensure(ctx context.Context, request gatewaycommand.NativeMaintenanceRequest) (gatewaycommand.NativeTransition, error) {
+func (m gatewayNativeMaintenance) Ensure(parent context.Context, request gatewaycommand.NativeMaintenanceRequest) (observed gatewaycommand.NativeTransition, resultErr error) {
+	if err := m.ValidateUpgrade(parent); err != nil {
+		return observed, err
+	}
+	ctx, cancel := supervisor.ControlContextWithParent(parent, supervisorControlOptions(m.dependencies))
+	defer cancel()
 	if err := m.ValidateUpgrade(ctx); err != nil {
 		return gatewaycommand.NativeTransition{}, err
 	}
-	if request.Root == "" || request.ExpectedRoot == "" {
-		return gatewaycommand.NativeTransition{}, task.ErrIdentityMismatch
+	control, refresh, err := gatewayMaintenanceControl(request)
+	if err != nil {
+		return observed, err
 	}
-	arguments := Arguments{Root: request.Root}
+	store, err := taskdir.OpenExistingStoreMetadataContext(ctx, request.Root, m.dependencies.storeDependencies().registry())
+	if err != nil {
+		return observed, err
+	}
+	defer func() { resultErr = errors.Join(resultErr, store.Close()) }()
+	pin, err := store.PinRootContext(ctx)
+	if err != nil {
+		return observed, err
+	}
+	if err = checkGatewayMaintenanceRoot(ctx, store, pin, request.ExpectedRoot); err != nil {
+		return observed, err
+	}
+	if request.Intent == gatewaycommand.NativeMaintenanceInstallation && request.OperationID == "" {
+		absent, absenceErr := pueue.PrivateSupervisorDirectoryAbsent(ctx, pin)
+		if absenceErr != nil || absent {
+			return observed, errors.Join(absenceErr, checkGatewayMaintenanceRoot(ctx, store, pin, request.ExpectedRoot))
+		}
+	}
+	result := supervisorEnsureRequestOpened(ctx, Arguments{Root: request.Root}, m.dependencies, store, control, refresh)
+	return gatewayMaintenanceResult(result)
+}
+
+func gatewayMaintenanceControl(request gatewaycommand.NativeMaintenanceRequest) (infrastructure.UpgradeRequest, bool, error) {
+	if request.Root == "" || request.ExpectedRoot == "" {
+		return infrastructure.UpgradeRequest{}, false, task.ErrIdentityMismatch
+	}
+	control := infrastructure.UpgradeRequest{Action: infrastructure.UpgradeEnsure}
+	refresh := request.OperationID == ""
 	if request.OperationID != "" {
 		if _, err := pueue.ParseUpgradeOperationID(request.OperationID); err != nil {
-			return gatewaycommand.NativeTransition{}, err
+			return infrastructure.UpgradeRequest{}, false, err
 		}
-		arguments.SupervisorCompleteUpgrade = request.OperationID
+		control.Action, control.OperationID = infrastructure.UpgradeComplete, infrastructure.UpgradeOperationID(request.OperationID)
 	}
-	result := supervisorEnsureOwnerContext(ctx, arguments, m.dependencies, request.ExpectedRoot)
-	return gatewayMaintenanceResult(result)
+	switch request.Intent {
+	case gatewaycommand.NativeMaintenanceInstallation:
+	case gatewaycommand.NativeMaintenanceReadyCurrent:
+		if request.OperationID == "" {
+			return infrastructure.UpgradeRequest{}, false, pueue.ErrPrivateUpgradeOperation
+		}
+		control.Action, refresh = infrastructure.UpgradeReadyCurrent, false
+	default:
+		return infrastructure.UpgradeRequest{}, false, task.ErrInvalidPermit
+	}
+	return control, refresh, nil
+}
+
+func checkGatewayMaintenanceRoot(ctx context.Context, store *taskdir.Store, pin taskdir.RootPin, expected string) error {
+	current, err := store.PinRootContext(ctx)
+	token, tokenErr := store.RootTokenContext(ctx)
+	if err != nil || tokenErr != nil || !current.Equal(pin) || token != expected {
+		return errors.Join(task.ErrIdentityMismatch, err, tokenErr)
+	}
+	return ctx.Err()
 }
 
 func gatewayMaintenanceResult(result commandResult) (gatewaycommand.NativeTransition, error) {

@@ -57,6 +57,8 @@ func (guiUpgradeReadyNative) Ensure(context.Context, string, string, gatewaycomm
 
 func (guiUpgradeReadyNative) Verify(context.Context, string, string) error { return nil }
 
+func (guiUpgradeReadyNative) VerifyReady(context.Context, string, string) error { return nil }
+
 func TestGatewayGUIUpgradePrivateEntryGrammar(t *testing.T) {
 	locator := filepath.Join(t.TempDir(), "request.json")
 	valid := []string{"gateway", "upgrade", "--accept-execution-policy-removal", "--gui-upgrade-request", locator}

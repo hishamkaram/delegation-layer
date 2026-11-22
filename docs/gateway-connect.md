@@ -106,7 +106,8 @@ both commands when using overrides. Quiesce the scheduler and other producers
 as described in [installation upgrades](cli-reference.md#installation-upgrades).
 
 Acceptance stops and uninstalls the owned connector service, uses Native's
-existing supervisor upgrade owner, verifies the original root and required
+existing supervisor upgrade owner to complete the current inspection routing,
+then verifies admission readiness, the original root and required
 public contracts, removes obsolete execution-policy fields, and compares the
 saved source before selecting the current installed binary. It then reinstalls
 and starts the service. This explicit upgrade also authorizes completion of a
@@ -115,6 +116,12 @@ status do not. Registration, credentials and their generation, original
 root, approvals including disabled entries/revisions, frozen pins and task
 history are preserved. No replacement root, copied executable, tmux session or
 repeat login is part of this migration.
+
+If Native's private supervisor has not been initialized, the upgrade preserves
+startup on first dispatch; it does not start a daemon just to verify the
+installation. Existing partial or conflicting state is reported explicitly.
+Current-readiness maintenance is internal to this command and needs no extra
+CLI flag or registration step.
 
 On macOS, accepted maintenance runs automatically in the same user's existing
 GUI session, including when invoked through SSH. Preview stays passive. The
@@ -132,8 +139,14 @@ the same supported command only as its reported next action allows. Do not edit
 saved source paths, credentials or journals to bypass a refusal. See
 [Gateway upgrade troubleshooting](troubleshooting.md#gateway-upgrade-and-scope-errors).
 
-Reconciliation retains the exact Native operation; it never substitutes a later
-operation or relaunches an uncertain invocation. `gateway_upgrade_uncertain`
+Once an invocation reports a Native operation, reconciliation retains that exact
+operation; it never substitutes a later one or relaunches an uncertain invocation.
+A clean `gateway_upgrade_pending` with phase `supervisor_maintenance_pending`
+has no attributed Native operation. After the reported blocker clears, repeat
+the accepted command explicitly with the same installation, root and profile.
+That new invocation can complete a compatible prepared handoff it observes;
+the earlier response remains unbound. There is no automatic retry.
+`gateway_upgrade_uncertain`
 requires inspection of the same profile. `gateway_upgrade_not_started` means
 the maintenance job exited before claiming the upgrade; after its recorded
 cleanup, the reported next action permits a new invocation of the same command.

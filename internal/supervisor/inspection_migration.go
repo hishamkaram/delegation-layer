@@ -104,11 +104,17 @@ func prepareFreshInspectionMigration(ctx context.Context, store *taskdir.Store, 
 	if err = client.StartPrivate(ctx, store.Root); err != nil {
 		return err
 	}
+	return inspectPublishedMigrationQueue(ctx, store, client)
+}
+
+// The automatic upgrade coordinator shares only observation and quiescence;
+// explicit migration alone retains StartPrivate above.
+func inspectPublishedMigrationQueue(ctx context.Context, store *taskdir.Store, client *pueue.Client) error {
 	snapshot, err := client.Snapshot(ctx)
 	if err != nil {
 		return fmt.Errorf("%w: observe published supervisor queue: %w", inspection.ErrGroupMigrationRequired, err)
 	}
-	return CheckMaintenanceQuiescence(ctx, store, published, snapshot.Jobs)
+	return CheckMaintenanceQuiescence(ctx, store, client.Binding(), snapshot.Jobs)
 }
 
 func reconcileInspectionMigrationEntryWithLock(ctx context.Context, store *taskdir.Store, supervisor *pueue.Client) (bool, error) {

@@ -242,6 +242,11 @@ admitted work keeps its original lifetime/evidence. Preparation before a planned
 installer and exact completion afterward also support same-path updates; follow
 the [upgrade contract](command-reference.md#supervisor-owner-control), including
 quiescing nonparticipating writers. Observation itself never repairs it.
+A newly completed installation handoff also prepares its inspection routing.
+A completed private record alone is historical evidence; use the returned
+state and next action. Gateway requests current readiness separately through
+Native's ordinary startup and routing owners. Historical replay cannot repair
+current state or change a newer generation, even at the same paths.
 Finish that handoff before another installation replacement. A fault involving
 an accepted target is not permission to choose another target or clear its
 records; preserve the OP and report the failure under the same upgrade contract.

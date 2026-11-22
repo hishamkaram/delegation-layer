@@ -65,9 +65,6 @@ func supervisorEnsureOwnerContext(parent context.Context, a Arguments, deps Depe
 }
 
 func supervisorEnsureOpened(ctx context.Context, a Arguments, deps Dependencies, store *taskdir.Store) commandResult {
-	response := newSupervisorCommandResponse("ensure-owner")
-	response.RootID = store.RootID
-	options := supervisorControlOptions(deps)
 	request := infrastructure.UpgradeRequest{Action: infrastructure.UpgradeEnsure}
 	if a.SupervisorRefreshOwner && !a.SupervisorPrepareUpgrade && a.SupervisorCompleteUpgrade == "" {
 		request.Action = infrastructure.UpgradeStatus
@@ -78,13 +75,24 @@ func supervisorEnsureOpened(ctx context.Context, a Arguments, deps Dependencies,
 	if a.SupervisorCompleteUpgrade != "" {
 		request.Action = infrastructure.UpgradeComplete
 		request.OperationID = infrastructure.UpgradeOperationID(a.SupervisorCompleteUpgrade)
+	}
+	return supervisorEnsureRequestOpened(ctx, a, deps, store, request, a.SupervisorRefreshOwner)
+}
+
+// The Gateway bridge selects an explicit owner intent after validating the
+// same opened root. Public refresh-only arguments retain their Status meaning.
+func supervisorEnsureRequestOpened(ctx context.Context, a Arguments, deps Dependencies, store *taskdir.Store, request infrastructure.UpgradeRequest, refresh bool) commandResult {
+	response := newSupervisorCommandResponse("ensure-owner")
+	response.RootID = store.RootID
+	options := supervisorControlOptions(deps)
+	if request.Action == infrastructure.UpgradeComplete {
 		observed, done, observeErr := observeSupervisorUpgradeCompletion(ctx, store, request.OperationID)
 		if done || observeErr != nil {
 			return finishSupervisorUpgrade(a, response, observed, observeErr)
 		}
 	}
 	control := supervisor.ControlRuntime{Options: options, Lookup: deps.supervisorLookup(), Routing: deps.infrastructureRouting()}
-	outcome, err := control.UpgradeOwn(ctx, store, request, a.SupervisorRefreshOwner)
+	outcome, err := control.UpgradeOwn(ctx, store, request, refresh)
 	result := finishSupervisorUpgrade(a, response, outcome, err)
 	if outcome.Report.Phase == infrastructure.UpgradeDraining {
 		diagnostic := supervisorMaintenanceDiagnostic(ctx, store, deps, options)

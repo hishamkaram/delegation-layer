@@ -242,6 +242,9 @@ func validateUpgradeOutcomeSubject(request UpgradeRequest, outcome UpgradeOutcom
 	if request.OperationID != "" && outcome.Report != (UpgradeReport{}) && request.OperationID != outcome.Report.OperationID {
 		return ErrIdentity
 	}
+	if request.Action == UpgradeReadyCurrent && !readyCurrentReportValid(outcome) {
+		return ErrIdentity
+	}
 	if outcome.Disposition.Kind == DispositionStarted && outcome.Disposition.Context != request.Context {
 		return ErrIdentity
 	}
@@ -249,6 +252,13 @@ func validateUpgradeOutcomeSubject(request UpgradeRequest, outcome UpgradeOutcom
 		return ErrIdentity
 	}
 	return nil
+}
+
+func readyCurrentReportValid(outcome UpgradeOutcome) bool {
+	if outcome.Report == (UpgradeReport{}) {
+		return outcome.Condition != UpgradeOK
+	}
+	return outcome.Report.Completed
 }
 
 // ProbeBoundUpgrade is a passive authenticated V5 handshake at exactly expected.

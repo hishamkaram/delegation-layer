@@ -6,7 +6,6 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -23,11 +22,14 @@ import (
 
 type upgradePublicRunner struct {
 	root, rootToken, executable string
+	rootID                      string
+	statusRootID                *string
 	features                    []string
 	calls                       [][]string
 	scopesFailure               bool
 	requestPath                 string
 	binding                     installation.BindingObservation
+	readiness                   *nativeSupervisorControl
 }
 
 func (r *upgradePublicRunner) Run(ctx context.Context, executable string, args []string) (gatewayservice.Result, error) {
@@ -38,7 +40,7 @@ func (r *upgradePublicRunner) Run(ctx context.Context, executable string, args [
 		return gatewayservice.Result{}, task.ErrIdentityMismatch
 	}
 	r.calls = append(r.calls, slices.Clone(args))
-	value := nativeEnvelope{SchemaVersion: 1}
+	value := nativeEnvelope{SchemaVersion: 1, RootID: r.rootID}
 	result := gatewayservice.Result{}
 	switch args[0] {
 	case "context":
@@ -63,7 +65,13 @@ func (r *upgradePublicRunner) Run(ctx context.Context, executable string, args [
 			return result, task.ErrIdentityMismatch
 		}
 		value.Command = "supervisor"
-		value.SupervisorControl = &nativeSupervisorControl{State: "current", InstallationBinding: &r.binding}
+		if r.statusRootID != nil {
+			value.RootID = *r.statusRootID
+		}
+		value.SupervisorControl = &nativeSupervisorControl{State: "ready", NextAction: "none", InstallationBinding: &r.binding}
+		if r.readiness != nil {
+			value.SupervisorControl = r.readiness
+		}
 	default:
 		return result, task.ErrIdentityMismatch
 	}
@@ -111,7 +119,15 @@ func upgradePublicFixture(t *testing.T) (nativeInstallation, *upgradePublicRunne
 	if err != nil {
 		t.Fatal(err)
 	}
-	runner := &upgradePublicRunner{root: root, rootToken: observed.RootToken, executable: "/selected/delegate", features: []string{task.WorkspaceFilesystemFeature, task.NativeExecutionOptionsFeature, task.ProjectTokenSHA256Feature, task.GuardedContinuationFeature, task.ScopedModelDiscoveryFeature}, binding: installation.BindingObservation{Relation: installation.BindingCurrent, Client: installation.RoleBindingObservation{SelectedAvailability: installation.AvailabilityPresent}, Daemon: installation.RoleBindingObservation{SelectedAvailability: installation.AvailabilityPresent}}}
+	store, err := taskdir.OpenExistingStoreMetadataContext(boundedTestContext(t), root, commandDependencies(t, &commandClient{}).Predicates)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rootID := store.RootID
+	if err = store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	runner := &upgradePublicRunner{rootID: rootID, root: root, rootToken: observed.RootToken, executable: "/selected/delegate", features: []string{task.WorkspaceFilesystemFeature, task.NativeExecutionOptionsFeature, task.ProjectTokenSHA256Feature, task.GuardedContinuationFeature, task.ScopedModelDiscoveryFeature}, binding: installation.BindingObservation{Relation: installation.BindingCurrent, Client: installation.RoleBindingObservation{SelectedAvailability: installation.AvailabilityPresent}, Daemon: installation.RoleBindingObservation{SelectedAvailability: installation.AvailabilityPresent}}}
 	return nativeInstallation{executable: runner.executable, runner: runner, dependencies: commandDependencies(t, &commandClient{})}, runner
 }
 
@@ -146,22 +162,24 @@ func checkUpgradePublicPreflight(t *testing.T, missing string) {
 
 func TestGatewayUpgradeReadySupervisorNeedsNoNewOperation(t *testing.T) {
 	native, runner := upgradePublicFixture(t)
+	maintenance := &upgradeMaintenanceReply{}
+	native.dependencies.NativeMaintenance = maintenance
 	transition, err := native.Inspect(boundedTestContext(t), runner.root, runner.rootToken)
 	if err != nil || transition.Pending || transition.HandoffNeeded {
 		t.Fatalf("ready supervisor requested handoff: %+v %v", transition, err)
 	}
 	after, err := native.Ensure(boundedTestContext(t), runner.root, runner.rootToken, transition)
-	if err != nil || after != transition || !reflect.DeepEqual(runner.calls, [][]string{{"supervisor", "status", "--root", runner.root, "--json"}}) {
+	if err != nil || after != transition || len(runner.calls) != 0 || maintenance.request != (NativeMaintenanceRequest{Root: runner.root, ExpectedRoot: runner.rootToken}) {
 		t.Fatalf("ready supervisor caused mutation: %+v %v", runner.calls, err)
 	}
 }
 
-func TestGatewayUpgradeOutdatedBindingAloneAdvisesExistingOwner(t *testing.T) {
+func TestGatewayUpgradeInspectUsesOnlyJournalAuthority(t *testing.T) {
 	native, runner := upgradePublicFixture(t)
 	runner.binding.Relation = installation.BindingDifferent
 	transition, err := native.Inspect(boundedTestContext(t), runner.root, runner.rootToken)
-	if err != nil || !transition.HandoffNeeded || transition.Pending || transition.OperationID != "" {
-		t.Fatalf("actual outdated binding was ignored: %+v %v", transition, err)
+	if err != nil || transition != (NativeTransition{}) || len(runner.calls) != 0 {
+		t.Fatalf("passive status became maintenance authority: %+v %v", transition, err)
 	}
 	// A different connector executable alone is not this source observation.
 	runner.binding.Relation = installation.BindingCurrent
@@ -188,9 +206,9 @@ func TestGatewayUpgradeUninitializedSupervisorStillRequiresInstalledPair(t *test
 	native, runner := upgradePublicFixture(t)
 	runner.binding.Relation = installation.BindingNotInitialized
 	runner.binding.Daemon.SelectedAvailability = installation.AvailabilityMissing
-	transition, err := native.Inspect(boundedTestContext(t), runner.root, runner.rootToken)
-	if !errors.Is(err, ErrInstallationMigrationRequired) || transition.HandoffNeeded {
-		t.Fatalf("missing selected pair was declared compatible: %+v %v", transition, err)
+	err := native.VerifyReady(boundedTestContext(t), runner.root, runner.rootToken)
+	if !errors.Is(err, ErrInstallationMigrationRequired) {
+		t.Fatalf("missing selected pair was declared compatible: %v", err)
 	}
 }
 

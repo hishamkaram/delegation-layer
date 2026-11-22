@@ -27,6 +27,9 @@ func (h Host) UpgradeOwnRoot(ctx context.Context, operation infrastructure.Opera
 		return outcome, err
 	}
 	defer func() { resultErr = errors.Join(resultErr, metadata.Close()) }()
+	if request.Action == infrastructure.UpgradeReadyCurrent {
+		return h.readyCurrentUpgrade(ctx, operation, selected, request, guards, wait, pin)
+	}
 	if request.Action == infrastructure.UpgradeComplete {
 		observed, done, observeErr := observeUpgradeCompletion(ctx, pin, request.OperationID)
 		if done || observeErr != nil {
@@ -85,12 +88,9 @@ func (o *infrastructurePreparationOwner) performUpgrade(ctx context.Context, pin
 		return infrastructure.UpgradeOutcome{}, err
 	}
 	if ordinary {
-		client, prepareErr := supervisor.PreparePrivateAdmissionSupervisorContext(ctx, o.lookup, o.store, o.options)
-		if client != nil && prepareErr == nil {
-			o.observation.RecordReady()
-		}
-		return infrastructure.UpgradeOutcome{Condition: infrastructure.UpgradeOK, Preflight: infrastructure.UpgradePreflight{State: infrastructure.UpgradePreflightPassed}}, supervisor.ClosePrivateAdmissionTransition(client, prepareErr)
+		return o.prepareOrdinaryUpgradeInspection(ctx, pin)
 	}
+
 	var observed pueue.PrivateUpgradeObservation
 	err = pueue.WithExistingBootstrapLockContext(ctx, o.store.Root, func(locked context.Context) error {
 		var transitionErr error
@@ -140,8 +140,11 @@ func (o *infrastructurePreparationOwner) upgradeLocked(ctx context.Context, pin 
 		// Authorization checks retained completed history before the current
 		// drain. A stale Complete(A) must never advance an unrelated B.
 		observed, err = o.authorizeUpgradeCompletion(ctx, pin, pueue.UpgradeOperationID(request.OperationID))
-		if err != nil || observed.Completed {
+		if err != nil {
 			return observed, err
+		}
+		if observed.Completed {
+			return observed, nil
 		}
 	}
 	if reason, pendingErr := unlinkedMigrationPending(ctx, pin); pendingErr != nil || reason != "" {
@@ -160,10 +163,12 @@ func (o *infrastructurePreparationOwner) upgradeLocked(ctx context.Context, pin 
 		return observed, nil
 	}
 	client, observed, err := pueue.CompletePrivateUpgradeWithLock(ctx, pin, observed.OperationID, o.selectUpgradePair, o.options)
-	if client != nil && err == nil && observed.Completed {
-		err = supervisor.EnsureOrdinarySchedulingWithBootstrapLock(ctx, o.store.Root, client)
+	if err == nil && observed.Completed {
+		if client != nil {
+			err = supervisor.EnsureOrdinarySchedulingWithBootstrapLock(ctx, o.store.Root, client)
+		}
 		if err == nil {
-			o.observation.RecordReady()
+			err = o.completeUpgradeInspection(ctx, pin, observed.OperationID)
 		}
 	}
 	return observed, supervisor.ClosePrivateAdmissionTransition(client, err)

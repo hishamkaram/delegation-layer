@@ -1088,6 +1088,134 @@ func guiTestReply(request GUIUpgradeRequest, code int, operation, phase string, 
 	return GUIUpgradeResult{Version: 1, Invocation: request.Invocation, ExitCode: code, Response: payload, OperationID: operation, Phase: phase, Pending: pending}
 }
 
+func guiMaintenancePendingReply(request GUIUpgradeRequest) (GUIUpgradeResult, error) {
+	result := guiTestReply(request, 3, "", "", false)
+	value, err := result.publicUpgrade()
+	if err != nil {
+		return result, err
+	}
+	value.Upgrade.Phase = "supervisor_maintenance_pending"
+	value.Upgrade.Native.RootContextMatches, value.Upgrade.Native.CapabilitiesVerified = false, false
+	result.Response, err = json.Marshal(value)
+	return result, err
+}
+
+func TestGUIUpgradeMaintenancePendingRejectsForgedAuthority(t *testing.T) {
+	for _, kind := range []string{"valid", "wrong exit", "wrong failure", "transport operation", "public handoff", "verified root", "verified capabilities", "retained A", "no-new authority"} {
+		t.Run(kind, func(t *testing.T) { testGUIForgedMaintenancePending(t, kind) })
+	}
+}
+
+func testGUIForgedMaintenancePending(t *testing.T, kind string) {
+	t.Helper()
+	f, _, request := newGUIUpgradeTest(t)
+	request.Version, request.Invocation = 1, strings.Repeat("c", 32)
+	request.RuntimePATH, request.PATHSource = f.manager.config.Path, "existing_definition"
+	result, err := guiMaintenancePendingReply(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	value, err := result.publicUpgrade()
+	if err != nil {
+		t.Fatal(err)
+	}
+	forgeGUIMaintenancePending(kind, &request, &result, &value)
+	result.Response, err = json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = result.validate(request)
+	if kind == "valid" {
+		if err != nil {
+			t.Fatal(err)
+		}
+	} else if !errors.Is(err, ErrGUIUpgradeRecord) {
+		t.Fatalf("forged pending phase gained retry authority: kind=%s err=%v", kind, err)
+	}
+}
+
+func forgeGUIMaintenancePending(kind string, request *GUIUpgradeRequest, result *GUIUpgradeResult, value *guiPublicUpgrade) {
+	switch kind {
+	case "wrong exit":
+		result.ExitCode = 1
+	case "wrong failure":
+		value.Failure = "gateway_upgrade_uncertain"
+	case "transport operation":
+		result.OperationID = "upgrade-v1:" + strings.Repeat("a", 32)
+	case "public handoff":
+		value.Upgrade.Supervisor.HandoffNeeded = true
+	case "verified root":
+		value.Upgrade.Native.RootContextMatches = true
+	case "verified capabilities":
+		value.Upgrade.Native.CapabilitiesVerified = true
+	case "retained A":
+		request.ExpectedOperation = "upgrade-v1:" + strings.Repeat("a", 32)
+	case "no-new authority":
+		request.NoNewNativeOperation = true
+	}
+}
+
+func TestGUIUpgradeMaintenancePendingPreservesExactRetryPins(t *testing.T) {
+	f, _, previous := newGUIUpgradeTest(t)
+	previous.Version, previous.Invocation = 1, strings.Repeat("c", 32)
+	previous.RuntimePATH, previous.PATHSource = f.manager.config.Path, "existing_definition"
+	previous.SavedSource.Executable = "/historical/prior/delegate"
+	result, err := guiMaintenancePendingReply(previous)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, change := range []string{"target", "post-CAS source", "source root", "source context"} {
+		next := previous
+		switch change {
+		case "target":
+			next.Executable += "-other"
+		case "post-CAS source":
+			next.SavedSource.Executable = previous.Executable
+		case "source root":
+			next.SavedSource.Root += "-other"
+		case "source context":
+			next.SavedSource.Context += "-other"
+		}
+		if err := next.retainGUIRetryIntent(previous, result); !errors.Is(err, task.ErrRequestConflict) {
+			t.Fatalf("pending normal retry relaxed %s: %v", change, err)
+		}
+	}
+}
+
+func TestGUIUpgradeMaintenancePendingRolloverCrashRetainsNormalIntent(t *testing.T) {
+	for _, afterPointer := range []bool{false, true} {
+		t.Run(fmt.Sprint(afterPointer), func(t *testing.T) { testGUIMaintenancePendingRollover(t, afterPointer) })
+	}
+}
+
+func testGUIMaintenancePendingRollover(t *testing.T, afterPointer bool) {
+	t.Helper()
+
+	f, runner, request := newGUIUpgradeTest(t)
+	runner.child = func(_ context.Context, r GUIUpgradeRequest) (GUIUpgradeResult, error) {
+		return guiMaintenancePendingReply(r)
+	}
+	if _, err := f.manager.RunGUIUpgrade(f.ctx, request); err != nil {
+		t.Fatal(err)
+	}
+	old, _, err := f.manager.activeGUIUpgrade()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = f.manager.WithProfileLock(f.ctx, func() error { stageGUIReconciliationCrash(t, f.manager, old, "", afterPointer); return nil }); err != nil {
+		t.Fatal(err)
+	}
+	runner.child = nil
+	result, err := f.manager.RunGUIUpgrade(f.ctx, request)
+	if err != nil || result.ExitCode != 0 || runner.starts != 2 {
+		t.Fatalf("normal pending seed stranded after rollover: after_pointer=%t starts=%d err=%v", afterPointer, runner.starts, err)
+	}
+	active, found, err := f.manager.activeGUIUpgrade()
+	if err != nil || !found || active.ExpectedOperation != "" || active.NoNewNativeOperation || active.SavedSource != old.SavedSource || active.RuntimePATH != old.RuntimePATH {
+		t.Fatalf("rollover changed normal authority/source/PATH: %v", err)
+	}
+}
+
 func TestGUIUpgradeRetainedAuthorityCannotAdoptConflictingObservation(t *testing.T) {
 	f, _, base := newGUIUpgradeTest(t)
 	base.Version, base.Invocation, base.RuntimePATH, base.PATHSource, base.Deadline = 1, strings.Repeat("c", 32), f.manager.config.Path, "existing_definition", time.Now().Add(time.Minute)

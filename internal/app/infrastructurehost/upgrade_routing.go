@@ -68,6 +68,10 @@ func (r Routing) UpgradeOwn(ctx context.Context, target *taskdir.Store, selected
 }
 
 func (c infrastructurePreparationContact) requestUpgrade(ctx context.Context, pin taskdir.RootPin, request infrastructure.UpgradeRequest, refresh bool) (infrastructure.UpgradeOutcome, error) {
+	if request.Action == infrastructure.UpgradeReadyCurrent {
+		// ReadyCurrent must reach its resident fence before any retirement.
+		refresh = false
+	}
 	owner := c.selection.owner
 	if owner != (infrastructure.StartupReference{}) && refresh {
 		var operation infrastructure.UpgradeOperationID

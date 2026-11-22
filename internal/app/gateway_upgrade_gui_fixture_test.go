@@ -371,6 +371,11 @@ func (n *gatewayGUIUnexpectedNative) Verify(context.Context, string, string) err
 	return task.ErrRequestConflict
 }
 
+func (n *gatewayGUIUnexpectedNative) VerifyReady(context.Context, string, string) error {
+	n.calls.Add(1)
+	return task.ErrRequestConflict
+}
+
 func (n *gatewayGUIUnexpectedNative) Inspect(context.Context, string, string) (gatewaycommand.NativeTransition, error) {
 	n.calls.Add(1)
 	return gatewaycommand.NativeTransition{}, task.ErrRequestConflict

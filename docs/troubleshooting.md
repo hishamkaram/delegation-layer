@@ -112,9 +112,12 @@ Keep the exact task ID and reported reason. A later `diagnostic_snapshot_at`
 describes the local diagnostic observation, separately from a resident error.
 
 After a completed installation handoff, `legacy_present` with
-`run_supervisor_migrate` means inspection routing still needs completion. Use
-the same root's explicit migration command; existing tasks retain their
-identities. Follow [supervisor recovery](cli-reference.md#supervisor-recovery)
+`run_supervisor_migrate` means inspection routing still needs completion.
+Gateway's supported upgrade requests current readiness from Native; ordinary
+`ensure-owner` also retains its startup and routing preparation. Replaying a
+historical completed upgrade does not repair current state. For an interrupted
+or older flow, follow the same root's explicit migration guidance; existing
+tasks retain their identities. Follow [supervisor recovery](cli-reference.md#supervisor-recovery)
 for blocker priority and prepared-edge behavior.
 
 For an eligible same-boot private ghost, see
