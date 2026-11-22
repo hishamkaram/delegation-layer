@@ -2,10 +2,13 @@ package app
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"io"
 
 	"github.com/hishamkaram/delegation-layer/internal/gatewaycommand"
+	"github.com/hishamkaram/delegation-layer/internal/pueue"
+	"github.com/hishamkaram/delegation-layer/internal/task"
 )
 
 func gatewaySpec() commandSpec {
@@ -69,5 +72,47 @@ func runGatewayCLI(ctx context.Context, a Arguments, deps Dependencies, stdout, 
 	if input.Input == nil {
 		input.Input = deps.Input
 	}
+	if input.NativeMaintenance == nil {
+		input.NativeMaintenance = gatewayNativeMaintenance{dependencies: deps.normalized()}
+	}
 	return gatewaycommand.Run(ctx, a.Gateway, a.Root, a.JSON, stdout, stderr, input)
+}
+
+type gatewayNativeMaintenance struct{ dependencies Dependencies }
+
+func (m gatewayNativeMaintenance) Ensure(ctx context.Context, request gatewaycommand.NativeMaintenanceRequest) (gatewaycommand.NativeTransition, error) {
+	if err := m.dependencies.invocationSource.ValidateUpgrade(ctx); err != nil {
+		return gatewaycommand.NativeTransition{}, err
+	}
+	if request.Root == "" || request.ExpectedRoot == "" {
+		return gatewaycommand.NativeTransition{}, task.ErrIdentityMismatch
+	}
+	arguments := Arguments{Root: request.Root}
+	if request.OperationID != "" {
+		if _, err := pueue.ParseUpgradeOperationID(request.OperationID); err != nil {
+			return gatewaycommand.NativeTransition{}, err
+		}
+		arguments.SupervisorCompleteUpgrade = request.OperationID
+	}
+	result := supervisorEnsureOwnerContext(ctx, arguments, m.dependencies, request.ExpectedRoot)
+	observed := gatewayMaintenanceObservation(result.response)
+	if result.err != nil {
+		return observed, result.err
+	}
+	if result.code == 3 {
+		return observed, gatewaycommand.ErrNativeUpgradePending
+	}
+	if result.code != 0 {
+		return observed, errors.Join(task.ErrEvidenceFault, errors.New("native maintenance returned an invalid control result"))
+	}
+	return observed, nil
+}
+
+func gatewayMaintenanceObservation(response Response) gatewaycommand.NativeTransition {
+	control := response.SupervisorControl
+	if control == nil || control.Upgrade == nil || control.Upgrade.OperationID == "" {
+		return gatewaycommand.NativeTransition{}
+	}
+	observed := control.Upgrade
+	return gatewaycommand.NativeTransition{OperationID: observed.OperationID, Phase: observed.Phase, Pending: !observed.Completed}
 }

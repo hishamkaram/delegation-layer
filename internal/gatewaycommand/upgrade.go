@@ -40,7 +40,7 @@ type NativeInstallationObservation struct {
 
 func nativeUpgradePendingOnly(err error) bool {
 	return errors.Is(err, ErrNativeUpgradePending) && task.AllErrorCauses(err, func(cause error) bool {
-		return errors.Is(cause, ErrNativeUpgradePending) || errors.Is(cause, context.Canceled) || errors.Is(cause, context.DeadlineExceeded)
+		return errors.Is(cause, ErrNativeUpgradePending)
 	})
 }
 

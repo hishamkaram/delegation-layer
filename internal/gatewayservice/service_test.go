@@ -33,6 +33,39 @@ type recordingRunner struct {
 	afterReload              func() error
 	afterStop                func()
 	immediateExit            bool
+	probeResults             []probeResult
+	probes                   [][]string
+}
+
+type probeResult struct {
+	code int
+	err  error
+}
+
+func (r *recordingRunner) Probe(ctx context.Context, _ string, args []string) (int, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return -1, err
+	}
+	r.calls = append(r.calls, slices.Clone(args))
+	r.probes = append(r.probes, slices.Clone(args))
+	if len(r.probeResults) != 0 {
+		result := r.probeResults[0]
+		r.probeResults = r.probeResults[1:]
+		return result.code, result.err
+	}
+	domain := "gui/" + strconv.Itoa(r.uid)
+	if slices.Equal(args, []string{"print", domain}) {
+		return 0, nil
+	}
+	if slices.Equal(args, []string{"print", domain + "/" + strings.TrimSuffix(filepath.Base(r.unit), ".plist")}) {
+		if r.loaded {
+			return 0, nil
+		}
+		return 113, nil
+	}
+	return -1, fmt.Errorf("unexpected exit-only probe %q", args)
 }
 
 func (r *recordingRunner) Run(ctx context.Context, _ string, args []string) (Result, error) {
@@ -108,6 +141,9 @@ func (r *recordingRunner) mutate(operation string) (Result, error) {
 	case "bootout":
 		if !r.holdStop {
 			r.loaded, r.active = false, false
+		}
+		if r.afterStop != nil {
+			r.afterStop()
 		}
 	case "enable", "disable":
 	default:
@@ -346,14 +382,16 @@ func assertServiceCommands(t *testing.T, f *serviceFixture) {
 }
 
 func TestServiceUninstallRequiresManagerAndRuntimeInactivity(t *testing.T) {
-	for _, hold := range []string{"manager", "runtime"} {
-		t.Run(hold, func(t *testing.T) { testPendingServiceUninstall(t, hold) })
+	for _, platform := range []Platform{Linux, MacOS} {
+		for _, hold := range []string{"manager", "runtime"} {
+			t.Run(string(platform)+"/"+hold, func(t *testing.T) { testPendingServiceUninstall(t, platform, hold) })
+		}
 	}
 }
 
-func testPendingServiceUninstall(t *testing.T, hold string) {
+func testPendingServiceUninstall(t *testing.T, platform Platform, hold string) {
 	t.Helper()
-	f := newServiceFixture(t, Linux)
+	f := newServiceFixture(t, platform)
 	if _, err := f.manager.Install(f.ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -425,17 +463,15 @@ func mutateServiceFixture(t *testing.T, f *serviceFixture, fault string) {
 
 func TestServiceMacPrerequisitesAndUnknownManagerErrors(t *testing.T) {
 	f := newServiceFixture(t, MacOS)
-	f.runner.guiName = "Background"
+	f.runner.probeResults = []probeResult{{code: 113}}
 	if _, err := f.manager.Install(f.ctx); !errors.Is(err, ErrGUIRequired) {
-		t.Fatalf("SSH context accepted: %v", err)
+		t.Fatalf("missing GUI domain accepted: %v", err)
 	}
 	if _, err := os.Stat(f.manager.config.Directory); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("GUI failure created directory: %v", err)
 	}
-	f.runner.guiName = "Aqua"
 	for _, code := range []int{1, 3, 112} {
-		f.runner.faultOperation = "list"
-		f.runner.faultResult = Result{ExitCode: code}
+		f.runner.probeResults = []probeResult{{}, {code: code}}
 		if status, err := f.manager.Status(f.ctx); err == nil || status.State != StateUnknown {
 			t.Fatalf("code %d became absence: %+v %v", code, status, err)
 		}

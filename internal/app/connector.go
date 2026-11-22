@@ -118,7 +118,10 @@ func (r connectorJSONReader) readPollable(file *os.File, buffer []byte) (int, er
 	controlErr := connection.Control(func(fd uintptr) {
 		count, readErr = r.readPollDescriptor(fd, buffer)
 	})
-	return count, errors.Join(readErr, controlErr)
+	if controlErr != nil {
+		return count, errors.Join(readErr, controlErr)
+	}
+	return count, readErr
 }
 
 func (r connectorJSONReader) readPollDescriptor(fd uintptr, buffer []byte) (int, error) {

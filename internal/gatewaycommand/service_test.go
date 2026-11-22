@@ -18,6 +18,13 @@ import (
 
 type commandServices struct{ service Service }
 
+func TestGatewayGUIServiceFailureRequestsSessionCheck(t *testing.T) {
+	failure, next, code, matched := servicePublicError(gatewayservice.ErrGUIRequired)
+	if !matched || failure != "gateway_gui_session_required" || next != "check_user_gui_session" || code != 1 {
+		t.Fatalf("GUI availability error retained a caller-context requirement: %s %s %d %t", failure, next, code, matched)
+	}
+}
+
 func (s commandServices) Open(string, string) (Service, error) { return s.service, nil }
 
 type commandService struct {

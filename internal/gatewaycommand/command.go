@@ -30,6 +30,7 @@ type Dependencies struct {
 	OpenBrowser        func(context.Context, string) error
 	Services           ServiceFactory
 	NativeInstallation NativeInstallation
+	NativeMaintenance  NativeMaintenance
 	// RootContextGate can supply the runtime owner at the application boundary.
 	// The default composes Native's existing bootstrap and closure authorities.
 	RootContextGate taskdir.RootContextReconciliationGate

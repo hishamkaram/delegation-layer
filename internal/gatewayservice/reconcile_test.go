@@ -153,6 +153,10 @@ type editingPropertiesRunner struct {
 	new    string
 }
 
+func (r editingPropertiesRunner) Probe(ctx context.Context, executable string, args []string) (int, error) {
+	return r.runner.Probe(ctx, executable, args)
+}
+
 func (r editingPropertiesRunner) Run(ctx context.Context, executable string, args []string) (Result, error) {
 	result, err := r.runner.Run(ctx, executable, args)
 	if err == nil && slices.Contains(args, "show") {
@@ -255,6 +259,10 @@ func TestServiceLinuxCacheReloadReappearingDefinitionIsNeverAdopted(t *testing.T
 type showSideEffectRunner struct {
 	runner Runner
 	after  func() error
+}
+
+func (r showSideEffectRunner) Probe(ctx context.Context, executable string, args []string) (int, error) {
+	return r.runner.Probe(ctx, executable, args)
 }
 
 func (r showSideEffectRunner) Run(ctx context.Context, executable string, args []string) (Result, error) {

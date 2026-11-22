@@ -909,14 +909,14 @@ func legacyActiveWork(snapshot pueue.QueueSnapshot) string {
 	return supervisorcore.QueueActivity(snapshot.Jobs)
 }
 
-func supervisorBootstrapOwner(a Arguments, deps Dependencies) (result commandResult) {
+func supervisorBootstrapOwner(parent context.Context, a Arguments, deps Dependencies) (result commandResult) {
 	response := newResponse("supervisor")
 	root, err := tasklifecycle.ResolveRoot(a.Root)
 	if err != nil {
 		return failed(response, err, 1)
 	}
 	options := supervisorControlOptions(deps)
-	ctx, cancel := supervisorcore.ControlContext(options)
+	ctx, cancel := supervisorcore.ControlContextWithParent(parent, options)
 	defer cancel()
 	store, err := openStoreContext(ctx, root, deps.storeDependencies(), true)
 	if err != nil {

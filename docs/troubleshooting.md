@@ -53,6 +53,12 @@ revisions, pins and history stay preserved. Follow `upgrade.phase`, `failure`,
 create replacement state, copy an executable, use tmux or repeat login to bypass
 a blocked prerequisite. A stopped connector is not provider-task closure.
 
+On macOS, same-user SSH can manage the existing `gui/UID` service domain; the
+calling shell need not run in Aqua. `gateway_gui_session_required` with
+`check_user_gui_session` means that domain is unavailable. Check that the intended
+user has a graphical login; do not create another registration or tmux session.
+Registration still does not prove provider authentication or execution readiness.
+
 Approve an existing ancestor once. New project selection and browsing use a
 scope ID and relative path; manual project/temp aliases are not needed. Whole
 Linux `/tmp` and macOS resolved user temp plus shared `/tmp`/`/private/tmp` are

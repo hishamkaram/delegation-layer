@@ -255,8 +255,11 @@ delegate gateway upgrade --accept-execution-policy-removal --json
 
 Keep its original profile/root selection. This removes obsolete saved execution
 policy through the SDK migration owner and uses the existing Native supervisor
-and OS service owners for the installed-source handoff. It preserves device
-registration, credentials/generation, original root, disabled approvals and
+and OS service owners for the installed-source handoff. It can finish the exact
+retained, prepared Native handoff using
+the current installed pair; a separate manual `ensure-owner` prerequisite is
+not part of this Gateway workflow. It preserves device registration,
+credentials/generation, original root, disabled approvals and
 revisions, pins and history. Preview performs no Native/service command and
 cannot prove prerequisites. Pending/blocked responses require their reported
 next action; no replacement root, copied binary, tmux setup or repeat login is

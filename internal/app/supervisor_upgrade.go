@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"errors"
+	"os"
 	"strings"
 	"time"
 
@@ -25,24 +26,47 @@ type SupervisorUpgradeResponse struct {
 }
 
 func supervisorEnsureOwner(a Arguments, deps Dependencies) (result commandResult) {
+	return supervisorEnsureOwnerContext(context.Background(), a, deps.withCapturedEnvironment(), "")
+}
+
+func supervisorEnsureOwnerContext(parent context.Context, a Arguments, deps Dependencies, expectedRoot string) (result commandResult) {
 	response := newSupervisorCommandResponse("ensure-owner")
+	if parent == nil {
+		return failedSupervisorCause(response, "supervisor upgrade context is unavailable", os.ErrInvalid, 1)
+	}
+	options := supervisorControlOptions(deps)
+	ctx, cancel := supervisor.ControlContextWithParent(parent, options)
+	defer cancel()
+	if err := deps.invocationSource.ValidateUpgrade(ctx); err != nil {
+		return failedSupervisorCause(response, "supervisor upgrade invocation is unavailable", err, 1)
+	}
 	root, err := tasklifecycle.ResolveRoot(a.Root)
 	if err != nil {
 		return failedSupervisorCause(response, "supervisor root is unavailable", err, 1)
 	}
-	options := supervisorControlOptions(deps)
-	ctx, cancel := supervisor.ControlContext(options)
-	defer cancel()
-	plain := !a.SupervisorPrepareUpgrade && a.SupervisorCompleteUpgrade == "" && !a.SupervisorRefreshOwner
+	plain := expectedRoot == "" && !a.SupervisorPrepareUpgrade && a.SupervisorCompleteUpgrade == "" && !a.SupervisorRefreshOwner
 	store, bootstrap, err := openSupervisorUpgradeStore(ctx, root, deps, plain)
 	if err != nil {
 		return failedSupervisorCause(response, "upgrade requires a valid existing root", err, 1)
 	}
 	if bootstrap {
-		return supervisorBootstrapOwner(a, deps)
+		return supervisorBootstrapOwner(ctx, a, deps)
 	}
 	defer func() { mergeCommandClose(&result, store.Close) }()
 	response.RootID = store.RootID
+	if expectedRoot != "" {
+		observed, tokenErr := store.RootTokenContext(ctx)
+		if tokenErr != nil || observed != expectedRoot {
+			return failedSupervisorCause(response, "supervisor root identity changed", errors.Join(task.ErrIdentityMismatch, tokenErr), 1)
+		}
+	}
+	return supervisorEnsureOpened(ctx, a, deps, store)
+}
+
+func supervisorEnsureOpened(ctx context.Context, a Arguments, deps Dependencies, store *taskdir.Store) commandResult {
+	response := newSupervisorCommandResponse("ensure-owner")
+	response.RootID = store.RootID
+	options := supervisorControlOptions(deps)
 	request := infrastructure.UpgradeRequest{Action: infrastructure.UpgradeEnsure}
 	if a.SupervisorRefreshOwner && !a.SupervisorPrepareUpgrade && a.SupervisorCompleteUpgrade == "" {
 		request.Action = infrastructure.UpgradeStatus
@@ -60,7 +84,7 @@ func supervisorEnsureOwner(a Arguments, deps Dependencies) (result commandResult
 	}
 	control := supervisor.ControlRuntime{Options: options, Lookup: deps.supervisorLookup(), Routing: deps.infrastructureRouting()}
 	outcome, err := control.UpgradeOwn(ctx, store, request, a.SupervisorRefreshOwner)
-	result = finishSupervisorUpgrade(a, response, outcome, err)
+	result := finishSupervisorUpgrade(a, response, outcome, err)
 	if outcome.Report.Phase == infrastructure.UpgradeDraining {
 		diagnostic := supervisorMaintenanceDiagnostic(ctx, store, deps, options)
 		result = finishSupervisorUpgradeDiagnostic(result, diagnostic)
@@ -174,11 +198,6 @@ func observeSupervisorUpgradeCompletion(ctx context.Context, store *taskdir.Stor
 		return infrastructure.UpgradeOutcome{}, true, errors.Join(pueue.ErrPrivateUpgradeNotRetained, err)
 	}
 	outcome := infrastructure.UpgradeOutcome{Condition: infrastructure.UpgradeOK, Preflight: infrastructure.UpgradePreflight{State: infrastructure.UpgradePreflightPassed}, Report: infrastructure.UpgradeReport{OperationID: operation, Mode: infrastructure.UpgradeMode(observed.Mode), Phase: infrastructure.UpgradePhase(observed.Phase), Predecessor: observed.Predecessor, Completed: observed.Completed}}
-	if observed.Phase == pueue.UpgradeDraining {
-		outcome.Condition = infrastructure.UpgradePending
-		outcome.ReasonCode = "drain_incomplete"
-		return outcome, true, outcome.Validate()
-	}
 	return outcome, observed.Completed, outcome.Validate()
 }
 

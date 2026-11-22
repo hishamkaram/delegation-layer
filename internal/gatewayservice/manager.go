@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"strconv"
-	"strings"
 	"time"
 )
 
@@ -34,18 +33,29 @@ func (m *Manager) gui(ctx context.Context) error {
 	if m.config.Platform == Linux {
 		return nil
 	}
-	name, err := m.invoke(ctx, "managername")
-	if err != nil || name.ExitCode != 0 || strings.TrimSpace(string(name.Stdout)) != "Aqua" {
-		return errors.Join(ErrGUIRequired, err)
-	}
-	uid, err := m.invoke(ctx, "manageruid")
-	if err != nil || uid.ExitCode != 0 || strings.TrimSpace(string(uid.Stdout)) != strconv.Itoa(m.config.UID) {
+	code, err := m.probe(ctx, "print", m.guiDomain())
+	if err != nil || code != 0 {
 		return errors.Join(ErrGUIRequired, err)
 	}
 	return nil
 }
 
-func (m *Manager) target() string { return "gui/" + strconv.Itoa(m.config.UID) + "/" + m.name }
+func (m *Manager) probe(ctx context.Context, args ...string) (int, error) {
+	if err := finite(ctx); err != nil {
+		return -1, err
+	}
+	code, err := m.config.Runner.Probe(ctx, m.config.ManagerExecutable, args)
+	if err != nil {
+		return -1, errors.Join(ErrManager, err)
+	}
+	if code < 0 || code > 255 {
+		return -1, ErrManager
+	}
+	return code, nil
+}
+
+func (m *Manager) guiDomain() string { return "gui/" + strconv.Itoa(m.config.UID) }
+func (m *Manager) target() string    { return m.guiDomain() + "/" + m.name }
 
 // Install publishes only an exact private service definition. A failed manager
 // reload/enable retains that definition for an explicit idempotent retry.
@@ -94,7 +104,7 @@ func (m *Manager) Start(ctx context.Context) (status Status, resultErr error) {
 		if m.config.Platform == Linux {
 			err = m.requireCommand(ctx, "--user", "start", m.filename)
 		} else if status.State == StateAbsent {
-			err = m.requireCommand(ctx, "bootstrap", "gui/"+strconv.Itoa(m.config.UID), m.unitPath())
+			err = m.requireCommand(ctx, "bootstrap", m.guiDomain(), m.unitPath())
 		} else {
 			err = m.requireCommand(ctx, "kickstart", m.target())
 		}

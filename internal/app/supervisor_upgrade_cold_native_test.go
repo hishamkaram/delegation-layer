@@ -192,6 +192,7 @@ func coldUpgradeCLIStep(t *testing.T, ctx context.Context, f *runtimeRestartCLIN
 		response, code, err := f.command(ctx, arguments...)
 		control := response.SupervisorControl
 		if err != nil || response.RootID != f.rootID || control == nil || control.Upgrade == nil {
+			logColdUpgradeFailure(t, control)
 			t.Fatalf("public cold upgrade response unavailable: exit=%d err=%v", code, err)
 		}
 		view := *control.Upgrade
@@ -210,6 +211,19 @@ func coldUpgradeCLIStep(t *testing.T, ctx context.Context, f *runtimeRestartCLIN
 	}
 	t.Fatal("same public cold-upgrade operation remained pending within its finite workflow")
 	return SupervisorUpgradeResponse{}
+}
+
+func logColdUpgradeFailure(t *testing.T, control *SupervisorControlResponse) {
+	t.Helper()
+	if control == nil {
+		return
+	}
+	var operation, upgradePhase string
+	if control.Upgrade != nil {
+		operation = control.Upgrade.OperationID
+		upgradePhase = control.Upgrade.Phase
+	}
+	t.Logf("public cold upgrade failure facts: state=%q migration_phase=%q upgrade_phase=%q reason=%q next=%q operation=%q", control.State, control.MigrationPhase, upgradePhase, control.ReasonCode, control.NextAction, operation)
 }
 
 func coldUpgradeRepeatableReason(reason string) bool {

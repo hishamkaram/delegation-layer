@@ -6,6 +6,7 @@ import (
 	"os"
 
 	"github.com/hishamkaram/delegation-layer/internal/predicate"
+	"github.com/hishamkaram/delegation-layer/internal/pueue"
 	"github.com/hishamkaram/delegation-layer/internal/supervisor"
 	"github.com/hishamkaram/delegation-layer/internal/supervisor/infrastructure"
 	"github.com/hishamkaram/delegation-layer/internal/supervisor/installation"
@@ -61,13 +62,23 @@ func (r Routing) UpgradeOwn(ctx context.Context, target *taskdir.Store, selected
 	}
 	request.Context = selection.reference
 	contact := infrastructurePreparationContact{routing: r, resources: resources, selection: selection}
-	return contact.requestUpgrade(ctx, request, refresh)
+	return contact.requestUpgrade(ctx, pin, request, refresh)
 }
 
-func (c infrastructurePreparationContact) requestUpgrade(ctx context.Context, request infrastructure.UpgradeRequest, refresh bool) (infrastructure.UpgradeOutcome, error) {
+func (c infrastructurePreparationContact) requestUpgrade(ctx context.Context, pin taskdir.RootPin, request infrastructure.UpgradeRequest, refresh bool) (infrastructure.UpgradeOutcome, error) {
 	owner := c.selection.owner
 	if owner != (infrastructure.StartupReference{}) && refresh {
-		if releaseErr := releaseUpgradeServing(ctx, c.resources.reader, owner); releaseErr != nil {
+		var releaseErr error
+		if request.Action == infrastructure.UpgradeComplete {
+			observed, terminal, err := releaseUpgradeCompletionServing(ctx, c.resources.reader, pin, request.OperationID, owner)
+			if terminal {
+				return upgradeOutcome(observed, err)
+			}
+			releaseErr = err
+		} else {
+			releaseErr = releaseUpgradeServing(ctx, c.resources.reader, owner)
+		}
+		if releaseErr != nil {
 			outcome := infrastructure.UpgradeOutcome{Condition: infrastructure.UpgradeBusy, Preflight: infrastructure.UpgradePreflight{State: infrastructure.UpgradePreflightPending}, ReasonCode: "owner_refresh_busy"}
 			return normalizeUpgradeContact(outcome, releaseErr)
 		}
@@ -94,6 +105,25 @@ func (c infrastructurePreparationContact) requestUpgrade(ctx context.Context, re
 	}
 	outcome, err := infrastructure.RequestBoundUpgrade(ctx, c.resources.reader, established.Owner, request)
 	return normalizeUpgradeContact(outcome, err)
+}
+
+// Exact completion authorizes serving release only while its own unfinished
+// journal remains current. Stop refuses active handlers; accepted serving
+// release does not wait for daemon Wait closure or acquire bootstrap EX.
+func releaseUpgradeCompletionServing(ctx context.Context, reader *taskdir.ReadOnlyStore, pin taskdir.RootPin, operation infrastructure.UpgradeOperationID, owner infrastructure.StartupReference) (observed pueue.PrivateUpgradeObservation, terminal bool, resultErr error) {
+	terminal = true
+	resultErr = pueue.WithExistingBootstrapLockContext(ctx, reader.Root(), func(locked context.Context) error {
+		if err := requireInfrastructureRoutingPin(locked, reader, pin); err != nil {
+			return err
+		}
+		var err error
+		observed, terminal, err = observeUpgradeCompletion(locked, pin, operation)
+		if terminal || err != nil {
+			return err
+		}
+		return releaseUpgradeServing(locked, reader, owner)
+	})
+	return observed, terminal, resultErr
 }
 
 // Only an authenticated typed response and its identical pending marker may
@@ -129,19 +159,10 @@ func upgradeOwnerRefreshRequired(ctx context.Context, reader *taskdir.ReadOnlySt
 }
 
 func (r Routing) validateUpgradeInvocation(ctx context.Context, target *taskdir.Store) error {
-	if ctx == nil || target == nil || r.invocation == nil {
+	if target == nil {
 		return os.ErrInvalid
 	}
-	if _, finite := ctx.Deadline(); !finite {
-		return os.ErrInvalid
-	}
-	if r.invocation.err != nil {
-		return r.invocation.err
-	}
-	if _, nested := r.invocation.source.Origin(); nested {
-		return infrastructure.ErrOwnerRequest
-	}
-	return ctx.Err()
+	return r.invocation.ValidateUpgrade(ctx)
 }
 
 func observeUpgradeOwner(ctx context.Context, reader *taskdir.ReadOnlyStore, currentRunner string, refresh bool) (infrastructureOwnerObservation, bool, error) {

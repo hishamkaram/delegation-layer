@@ -361,6 +361,12 @@ place. Completion creates a fresh daemon generation. An unrelated ordinary
 `ensure-owner` cannot authorize it. Repeating an already completed OP returns
 its retained completion without another launch or readiness claim.
 
+Exact completion can advance that operation's own retained drain when Native's
+queue and canonical maintenance proofs permit it. Active work stays pending;
+it never authorizes another operation. Replaying completed A while B is current
+returns A's history without refreshing B's serving owner. Cancellation,
+transport and cleanup faults remain faults even alongside pending progress.
+
 If the installation was already replaced, ordinary
 `delegate supervisor ensure-owner --json` detects a different selected pair,
 creates or resumes one reactive operation, and fences new private admissions.

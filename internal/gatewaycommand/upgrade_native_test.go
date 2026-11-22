@@ -14,6 +14,7 @@ import (
 
 	"github.com/hishamkaram/delegation-layer/internal/gatewayservice"
 	"github.com/hishamkaram/delegation-layer/internal/provider"
+	"github.com/hishamkaram/delegation-layer/internal/pueue"
 	"github.com/hishamkaram/delegation-layer/internal/supervisor/installation"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
@@ -190,5 +191,89 @@ func TestGatewayUpgradeUninitializedSupervisorStillRequiresInstalledPair(t *test
 	transition, err := native.Inspect(boundedTestContext(t), runner.root, runner.rootToken)
 	if !errors.Is(err, ErrInstallationMigrationRequired) || transition.HandoffNeeded {
 		t.Fatalf("missing selected pair was declared compatible: %+v %v", transition, err)
+	}
+}
+
+type upgradeMaintenanceReply struct {
+	request  NativeMaintenanceRequest
+	observed NativeTransition
+	cause    error
+}
+
+func (m *upgradeMaintenanceReply) Ensure(ctx context.Context, request NativeMaintenanceRequest) (NativeTransition, error) {
+	m.request = request
+	return m.observed, errors.Join(m.cause, ctx.Err())
+}
+
+func TestGatewayUpgradeMaintenanceUsesAppPortAndPreservesFaults(t *testing.T) {
+	fault := errors.New("native storage fault")
+	for _, test := range []struct {
+		name    string
+		cause   error
+		pending bool
+	}{
+		{"ready without operation", nil, false},
+		{"busy without operation", ErrNativeUpgradePending, true},
+		{"hard fault", fault, false},
+		{"pending cancellation", errors.Join(ErrNativeUpgradePending, context.Canceled), false},
+		{"pending deadline", errors.Join(ErrNativeUpgradePending, context.DeadlineExceeded), false},
+		{"pending hard fault", errors.Join(ErrNativeUpgradePending, fault), false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			native, runner := upgradePublicFixture(t)
+			maintenance := &upgradeMaintenanceReply{cause: test.cause}
+			native.dependencies.NativeMaintenance = maintenance
+			observed, err := native.Ensure(boundedTestContext(t), runner.root, runner.rootToken, NativeTransition{HandoffNeeded: true})
+			if observed != (NativeTransition{}) || !errors.Is(err, test.cause) {
+				t.Fatalf("Native's zero-operation observation or error changed: observed=%+v err=%v", observed, err)
+			}
+			want := NativeMaintenanceRequest{Root: runner.root, ExpectedRoot: runner.rootToken}
+			if maintenance.request != want || len(runner.calls) != 0 {
+				t.Fatalf("maintenance escaped App's port: request=%+v commands=%v", maintenance.request, runner.calls)
+			}
+			if errors.Is(err, ErrInstallationMigrationRequired) {
+				t.Fatal("Native control fault became installation incompatibility")
+			}
+			if nativeUpgradePendingOnly(err) != test.pending {
+				t.Fatalf("mixed fault became clean Native pending: %v", err)
+			}
+		})
+	}
+}
+
+func TestGatewayUpgradeMaintenanceAttributesOnlyExactObservedOperation(t *testing.T) {
+	operation := "upgrade-v1:" + strings.Repeat("a", 32)
+	other := "upgrade-v1:" + strings.Repeat("b", 32)
+	fault := errors.New("native publication fault")
+	for _, test := range []struct {
+		name     string
+		observed NativeTransition
+		want     error
+	}{
+		{"known operation absent", NativeTransition{}, task.ErrEvidenceFault},
+		{"returned operation absent", NativeTransition{OperationID: operation, Phase: "migrating"}, task.ErrEvidenceFault},
+		{"different operation", NativeTransition{OperationID: other, Phase: "migrating"}, task.ErrRequestConflict},
+		{"invalid operation", NativeTransition{OperationID: "invalid"}, pueue.ErrPrivateUpgradeOperation},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			native, runner := upgradePublicFixture(t)
+			maintenance := &upgradeMaintenanceReply{observed: test.observed, cause: fault}
+			native.dependencies.NativeMaintenance = maintenance
+			observed, err := native.Ensure(boundedTestContext(t), runner.root, runner.rootToken, NativeTransition{OperationID: operation, Phase: "draining", Pending: true})
+			if !errors.Is(err, test.want) || !errors.Is(err, fault) || observed != test.observed {
+				t.Fatalf("exact operation/error attribution changed: observed=%+v err=%v", observed, err)
+			}
+			if maintenance.request.OperationID != operation || len(runner.calls) != 0 {
+				t.Fatal("exact operation was replaced by unbound or subprocess maintenance")
+			}
+		})
+	}
+}
+
+func TestGatewayUpgradeMaintenanceRequiresExplicitAuthority(t *testing.T) {
+	native, runner := upgradePublicFixture(t)
+	_, err := native.Ensure(boundedTestContext(t), runner.root, runner.rootToken, NativeTransition{HandoffNeeded: true})
+	if err == nil || errors.Is(err, ErrInstallationMigrationRequired) || len(runner.calls) != 0 {
+		t.Fatalf("missing App authority fell back to subprocess or migration advice: calls=%v err=%v", runner.calls, err)
 	}
 }

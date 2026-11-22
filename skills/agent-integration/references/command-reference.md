@@ -580,6 +580,10 @@ Proactive prepare precedes replacement, including same-path updates; complete
 its exact OP afterward. `--refresh-owner` alone refreshes the serving helper,
 without daemon replacement authority.
 
+Exact completion may advance only its own retained drain when Native's proofs
+permit. A completed OP replays its history without refreshing a later operation's
+owner. Mixed cancellation/cleanup faults are not clean pending progress.
+
 Read `supervisor_control.upgrade` (`operation_id`, `mode`, `phase`, optional
 `completed` and `completion_command`) with `state`, `next_action` and errors.
 Exit `0` includes preparation, helper refresh and history, not current readiness.

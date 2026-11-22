@@ -26,6 +26,18 @@ type NativeInstallation interface {
 	Verify(context.Context, string, string) error
 }
 
+// NativeMaintenance borrows the original App invocation for Native's existing
+// supervisor owner. Its observation never replaces the canonical journal.
+type NativeMaintenance interface {
+	Ensure(context.Context, NativeMaintenanceRequest) (NativeTransition, error)
+}
+
+type NativeMaintenanceRequest struct {
+	Root         string
+	ExpectedRoot string
+	OperationID  string
+}
+
 type NativeTransition struct {
 	OperationID   string `json:"operation_id,omitempty"`
 	Phase         string `json:"phase,omitempty"`
@@ -45,9 +57,13 @@ func (t NativeTransition) validate() error {
 	return nil
 }
 
+type nativeCommandRunner interface {
+	Run(context.Context, string, []string) (gatewayservice.Result, error)
+}
+
 type nativeInstallation struct {
 	executable   string
-	runner       gatewayservice.Runner
+	runner       nativeCommandRunner
 	dependencies Dependencies
 }
 
@@ -236,26 +252,42 @@ func (n nativeInstallation) Ensure(ctx context.Context, root, expectedRoot strin
 	if !previous.Pending && !previous.HandoffNeeded {
 		return previous, nil
 	}
-	args := []string{"supervisor", "ensure-owner", "--root", root, "--json"}
+	if n.dependencies.NativeMaintenance == nil {
+		return previous, errors.New("native maintenance authority is unavailable")
+	}
+	request := NativeMaintenanceRequest{Root: root, ExpectedRoot: expectedRoot}
 	if previous.Pending {
-		args = append(args, "--complete-upgrade", previous.OperationID, "--refresh-owner")
+		request.OperationID = previous.OperationID
 	}
-	observed, exit, err := n.command(ctx, args...)
-	if err != nil {
-		return previous, err
+	observed, controlErr := n.dependencies.NativeMaintenance.Ensure(ctx, request)
+	return n.settleMaintenance(ctx, request, observed, controlErr)
+}
+
+func (n nativeInstallation) settleMaintenance(ctx context.Context, request NativeMaintenanceRequest, observed NativeTransition, controlErr error) (NativeTransition, error) {
+	if err := observed.validate(); err != nil {
+		return observed, errors.Join(controlErr, err)
 	}
-	current, readErr := n.inspectJournal(ctx, root, expectedRoot, previous.OperationID)
+	operation := observed.OperationID
+	if operation == "" {
+		operation = request.OperationID
+	}
+	if request.OperationID != "" && operation != request.OperationID {
+		return observed, errors.Join(controlErr, task.ErrRequestConflict)
+	}
+	if operation == "" {
+		// Native may be busy before accepting an operation. Do not attribute
+		// that observation to whichever operation a later latest-read finds.
+		return observed, controlErr
+	}
+	current, readErr := n.inspectJournal(ctx, request.Root, request.ExpectedRoot, operation)
 	if readErr != nil {
-		return previous, readErr
+		return observed, errors.Join(controlErr, readErr)
 	}
-	if previous.Pending && current.OperationID != previous.OperationID {
-		return current, task.ErrRequestConflict
+	if current.OperationID != operation {
+		return observed, errors.Join(controlErr, task.ErrEvidenceFault)
 	}
-	if exit == 3 {
-		return current, ErrNativeUpgradePending
+	if controlErr == nil && current.Pending {
+		controlErr = ErrNativeUpgradePending
 	}
-	if !nativeCommandSucceeded(observed, exit, "supervisor") || current.Pending {
-		return current, ErrInstallationMigrationRequired
-	}
-	return current, nil
+	return current, controlErr
 }

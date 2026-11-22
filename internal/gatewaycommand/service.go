@@ -14,7 +14,7 @@ func servicePublicError(err error) (failure, next string, exitCode int, matched 
 	case gatewayservice.IsPending(err):
 		return "gateway_stop_pending", "inspect_same_profile", 3, true
 	case errors.Is(err, gatewayservice.ErrGUIRequired):
-		return "gateway_gui_session_required", "run_from_user_gui_terminal", 1, true
+		return "gateway_gui_session_required", "check_user_gui_session", 1, true
 	case errors.Is(err, gatewayservice.ErrServiceChanged):
 		return "gateway_service_changed", "retry_same_profile", 1, true
 	case errors.Is(err, gatewayservice.ErrManagerCacheStale):

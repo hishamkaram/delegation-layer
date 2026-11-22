@@ -3,6 +3,7 @@ package gatewayservice
 import (
 	"context"
 	"errors"
+	"io"
 	"os/exec"
 	"slices"
 	"sync"
@@ -29,32 +30,47 @@ func NewNativeRunner(ownerExecutable string, environment []string) (*NativeRunne
 }
 
 func (r NativeRunner) Run(ctx context.Context, executable string, args []string) (Result, error) {
+	stdout := &boundedOutput{}
+	code, err := r.run(ctx, executable, args, stdout, false)
+	result := Result{Stdout: slices.Clone(stdout.bytes), ExitCode: code}
+	if stdout.overflow {
+		err = errors.Join(err, errors.New("gateway service manager output exceeds limit"))
+	}
+	return result, err
+}
+
+func (r NativeRunner) Probe(ctx context.Context, executable string, args []string) (int, error) {
+	return r.run(ctx, executable, args, io.Discard, true)
+}
+
+func (r NativeRunner) run(ctx context.Context, executable string, args []string, stdout io.Writer, nullOutput bool) (int, error) {
 	if err := finite(ctx); err != nil {
-		return Result{}, err
+		return 0, err
 	}
 	selected, err := verifiedexec.LocatePath(executable)
 	if err != nil || selected != executable {
-		return Result{}, errors.Join(ErrConfiguration, err)
+		return 0, errors.Join(ErrConfiguration, err)
 	}
 	command := exec.Command(executable, slices.Clone(args)...)
 	// OS controls use explicit arguments and a stable absolute directory.
 	command.Dir = "/"
 	command.Env = slices.Clone(r.environment)
-	stdout := &boundedOutput{}
 	command.Stdout = stdout
 	// Raw manager diagnostics may contain inherited values; never retain them.
 	command.Stderr = nil
-	err = execution.RunIsolatedCommand(ctx, r.ownerExecutable, command)
-	result := Result{Stdout: slices.Clone(stdout.bytes), ExitCode: -1}
+	if nullOutput {
+		err = execution.RunIsolatedCommandNullOutput(ctx, r.ownerExecutable, command)
+	} else {
+		err = execution.RunIsolatedCommand(ctx, r.ownerExecutable, command)
+	}
 	code, joined := execution.NativeCommandExitCode(err)
 	if joined {
-		result.ExitCode = code
-		err = nil
+		if code < 0 || code > 255 {
+			return -1, ErrManager
+		}
+		return code, nil
 	}
-	if stdout.overflow {
-		err = errors.Join(err, errors.New("gateway service manager output exceeds limit"))
-	}
-	return result, err
+	return -1, err
 }
 
 type boundedOutput struct {

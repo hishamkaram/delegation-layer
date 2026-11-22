@@ -29,9 +29,10 @@ delegate continue --root ABS --task PREDECESSOR --id SUCCESSOR --brief /absolute
 ```
 
 Keep successor ID and both immutable origins across uncertainty. Native inherits
-the frozen project/workspace constraint. Gateway `prepare_continuation` remains
-unfinished; do not substitute another dispatch or claim cloud continuation
-parity. These candidate contracts have no implied full-provider, native macOS,
+the frozen project/workspace constraint. Gateway implements `prepare_continuation`;
+live continuation and checkpoint acceptance with installed providers remain
+unverified. Do not substitute another dispatch or claim unsupported cloud
+continuation parity. These candidate contracts have no implied full-provider, native macOS,
 new-origin/recovery or cloud acceptance. Ordinary task creation, continuation
 and recovery rules in the [command reference](command-reference.md) remain unchanged.
 

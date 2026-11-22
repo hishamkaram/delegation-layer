@@ -131,31 +131,27 @@ func observeUpgradeCompletion(ctx context.Context, pin taskdir.RootPin, operatio
 	if observed.Completed {
 		return observed, true, nil
 	}
-	if observed.Phase == pueue.UpgradeDraining {
-		return observed, true, &pueue.PrivateUpgradeError{ReasonCode: "drain_incomplete", Err: pueue.ErrPrivateUpgradePending}
-	}
 	return observed, false, nil
 }
 
 func (o *infrastructurePreparationOwner) upgradeLocked(ctx context.Context, pin taskdir.RootPin, request infrastructure.UpgradeRequest) (observed pueue.PrivateUpgradeObservation, resultErr error) {
 	var err error
+	if request.Action == infrastructure.UpgradeComplete {
+		// Authorization checks retained completed history before the current
+		// drain. A stale Complete(A) must never advance an unrelated B.
+		observed, err = o.authorizeUpgradeCompletion(ctx, pin, pueue.UpgradeOperationID(request.OperationID))
+		if err != nil || observed.Completed {
+			return observed, err
+		}
+	}
 	if reason, pendingErr := unlinkedMigrationPending(ctx, pin); pendingErr != nil || reason != "" {
 		if pendingErr != nil {
 			return observed, pendingErr
 		}
 		return observed, &pueue.PrivateUpgradeError{ReasonCode: reason, Err: pueue.ErrPrivateUpgradePending}
 	}
-	if request.Action == infrastructure.UpgradeComplete {
-		observed, err = pueue.AuthorizePrivateUpgradeCompletionWithLock(ctx, pin, pueue.UpgradeOperationID(request.OperationID), o.options)
-	} else {
-		mode := pueue.UpgradeReactive
-		if request.Action == infrastructure.UpgradePrepare {
-			mode = pueue.UpgradeOperationRequired
-		}
-		observed, err = pueue.BeginPrivateUpgradeWithLock(ctx, pin, mode, o.options)
-		if err == nil {
-			observed, err = pueue.AdvancePrivateUpgradeDrainWithLock(ctx, pin, observed.OperationID, o.options)
-		}
+	if request.Action != infrastructure.UpgradeComplete {
+		observed, err = o.beginAndAdvanceUpgrade(ctx, pin, request.Action)
 	}
 	if err != nil {
 		return observed, err
@@ -163,16 +159,7 @@ func (o *infrastructurePreparationOwner) upgradeLocked(ctx context.Context, pin 
 	if observed.Phase == pueue.UpgradeAwaitingInstallation {
 		return observed, nil
 	}
-	selector := func(control context.Context) (string, string, error) {
-		if control == nil {
-			return "", "", os.ErrInvalid
-		}
-		if contextErr := control.Err(); contextErr != nil {
-			return "", "", contextErr
-		}
-		return installation.ResolvePrivateSupervisorExecutables(o.lookup)
-	}
-	client, observed, err := pueue.CompletePrivateUpgradeWithLock(ctx, pin, observed.OperationID, selector, o.options)
+	client, observed, err := pueue.CompletePrivateUpgradeWithLock(ctx, pin, observed.OperationID, o.selectUpgradePair, o.options)
 	if client != nil && err == nil && observed.Completed {
 		err = supervisor.EnsureOrdinarySchedulingWithBootstrapLock(ctx, o.store.Root, client)
 		if err == nil {
@@ -180,6 +167,54 @@ func (o *infrastructurePreparationOwner) upgradeLocked(ctx context.Context, pin 
 		}
 	}
 	return observed, supervisor.ClosePrivateAdmissionTransition(client, err)
+}
+
+func (o *infrastructurePreparationOwner) selectUpgradePair(ctx context.Context) (string, string, error) {
+	if ctx == nil {
+		return "", "", os.ErrInvalid
+	}
+	if err := ctx.Err(); err != nil {
+		return "", "", err
+	}
+	return installation.ResolvePrivateSupervisorExecutables(o.lookup)
+}
+
+func (o *infrastructurePreparationOwner) beginAndAdvanceUpgrade(ctx context.Context, pin taskdir.RootPin, action infrastructure.UpgradeAction) (pueue.PrivateUpgradeObservation, error) {
+	mode := pueue.UpgradeReactive
+	if action == infrastructure.UpgradePrepare {
+		mode = pueue.UpgradeOperationRequired
+	}
+	observed, err := pueue.BeginPrivateUpgradeWithLock(ctx, pin, mode, o.options)
+	if err != nil {
+		return observed, err
+	}
+	return pueue.AdvancePrivateUpgradeDrainWithLock(ctx, pin, observed.OperationID, o.options)
+}
+
+func (o *infrastructurePreparationOwner) authorizeUpgradeCompletion(ctx context.Context, pin taskdir.RootPin, operation pueue.UpgradeOperationID) (pueue.PrivateUpgradeObservation, error) {
+	observed, err := pueue.AuthorizePrivateUpgradeCompletionWithLock(ctx, pin, operation, o.options)
+	if !cleanDrainIncomplete(err) {
+		return observed, err
+	}
+	observed, err = pueue.AdvancePrivateUpgradeDrainWithLock(ctx, pin, operation, o.options)
+	if err != nil {
+		return observed, err
+	}
+	return pueue.AuthorizePrivateUpgradeCompletionWithLock(ctx, pin, operation, o.options)
+}
+
+func cleanDrainIncomplete(cause error) bool {
+	var pending *pueue.PrivateUpgradeError
+	if !errors.As(cause, &pending) || pending.ReasonCode != "drain_incomplete" || taskdir.CleanupFault(cause) || infrastructureRoutingRetainsCleanup(cause) {
+		return false
+	}
+	if task.AnyErrorNode(cause, func(node error) bool {
+		var other *pueue.PrivateUpgradeError
+		return errors.As(node, &other) && other.ReasonCode != "drain_incomplete"
+	}) {
+		return false
+	}
+	return task.AllErrorCauses(cause, func(leaf error) bool { return errors.Is(leaf, pueue.ErrPrivateUpgradePending) })
 }
 
 func unlinkedMigrationPending(ctx context.Context, pin taskdir.RootPin) (string, error) {

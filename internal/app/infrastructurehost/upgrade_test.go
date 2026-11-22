@@ -104,7 +104,7 @@ func TestUpgradeOrdinaryCurrentEnsureDoesNotCreateOperationOrStart(t *testing.T)
 	}
 }
 
-func TestUpgradeRoutingEarlyCompleteIsPassiveBeforeRunnerAndStaging(t *testing.T) {
+func TestUpgradeRoutingWrongCompleteIsPassiveBeforeRunnerAndStaging(t *testing.T) {
 	f := newInfrastructureSavedBindingFixture(t, infrastructure.SavedBindingTaskMetadata, true)
 	pin, err := f.store.PinRootContext(t.Context())
 	if err != nil {
@@ -125,16 +125,12 @@ func TestUpgradeRoutingEarlyCompleteIsPassiveBeforeRunnerAndStaging(t *testing.T
 	ctx, cancel := context.WithTimeout(t.Context(), time.Minute)
 	defer cancel()
 	before := supervisorfixture.SnapshotStore(t, f.store.Root)
-	outcome, err := routing.UpgradeOwn(ctx, f.store, infrastructure.LaunchContext{}, infrastructure.UpgradeRequest{Action: infrastructure.UpgradeComplete, OperationID: op}, true)
-	if err != nil || outcome.Condition != infrastructure.UpgradePending || outcome.Report.OperationID != op {
-		t.Fatalf("early complete reached mutable preparation: %+v %v", outcome, err)
-	}
 	wrong := infrastructure.UpgradeOperationID("upgrade-v1:" + strings.Repeat("8", 32))
-	outcome, err = routing.UpgradeOwn(ctx, f.store, infrastructure.LaunchContext{}, infrastructure.UpgradeRequest{Action: infrastructure.UpgradeComplete, OperationID: wrong}, true)
+	outcome, err := routing.UpgradeOwn(ctx, f.store, infrastructure.LaunchContext{}, infrastructure.UpgradeRequest{Action: infrastructure.UpgradeComplete, OperationID: wrong}, true)
 	if err != nil || outcome.Condition != infrastructure.UpgradeRefused || outcome.Report != (infrastructure.UpgradeReport{}) {
 		t.Fatalf("wrong OP reached preparation: %+v %v", outcome, err)
 	}
 	if !maps.Equal(before, supervisorfixture.SnapshotStore(t, f.store.Root)) {
-		t.Fatal("wrong/early completion staged or changed root state")
+		t.Fatal("wrong completion staged or changed root state")
 	}
 }

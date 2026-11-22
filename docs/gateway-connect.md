@@ -109,7 +109,9 @@ Acceptance stops and uninstalls the owned connector service, uses Native's
 existing supervisor upgrade owner, verifies the original root and required
 public contracts, removes obsolete execution-policy fields, and compares the
 saved source before selecting the current installed binary. It then reinstalls
-and starts the service. Registration, credentials and their generation, original
+and starts the service. This explicit upgrade also authorizes completion of a
+retained, prepared Native handoff using the current installed pair; preview and
+status do not. Registration, credentials and their generation, original
 root, approvals including disabled entries/revisions, frozen pins and task
 history are preserved. No replacement root, copied executable, tmux session or
 repeat login is part of this migration.
@@ -249,10 +251,13 @@ no tenant changes or seven-day acceptance are implied by these instructions.
 ## Per-user service and disconnect
 
 Normal connection manages a Linux user systemd service or a macOS LaunchAgent.
-It requires the selected user's available service manager. On macOS, run service
-management from that user's logged-in graphical Terminal session. An SSH session
-does not substitute for the required Aqua session. There is no tmux setup step,
-sudo fallback or automatic service-manager repair.
+It requires the selected user's available service manager. On macOS, Native
+targets that same user's existing `gui/UID` domain explicitly. Service management
+can run through same-user SSH; the calling shell need not be in Aqua. A missing
+GUI domain fails with `gateway_gui_session_required` and
+`check_user_gui_session`. Native does not create the login session, select a
+background service instead, configure tmux or use sudo. Registration alone does
+not prove running, authenticated or execution-ready status.
 The service runs within that user manager's lifetime; this does not configure
 Linux lingering, a system-wide daemon or a pre-login macOS service.
 
