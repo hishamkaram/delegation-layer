@@ -211,6 +211,7 @@ func TestColdUpgradeDriverExpiredContextNeverCompletes(t *testing.T) {
 
 func TestColdUpgradeDriverFailureHistoryExcludesPrivateInputs(t *testing.T) {
 	const private = "PRIVATE-COLD-DRIVER-ERROR-TOKEN-ARGV"
+	fixture := &runtimeRestartCLINative{root: t.TempDir(), rootID: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}
 	result, err := driveColdUpgrade(t.Context(), "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "", infrastructure.UpgradeMigrating, func(context.Context, int) coldUpgradeCommandResult {
 		command := coldUpgradeDriverPending("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "upgrade-v1:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "predecessor_wait_pending")
 		command.err = errors.New(private)
@@ -218,16 +219,23 @@ func TestColdUpgradeDriverFailureHistoryExcludesPrivateInputs(t *testing.T) {
 		command.response.SupervisorControl.Upgrade.OperationID = private
 		command.response.SupervisorControl.Upgrade.CompletionCommand = []string{private}
 		command.response.SupervisorControl.RuntimeRestart = &SupervisorRuntimeRestartResponse{FromStartup: private, SuccessorStartup: private}
+		command.diagnostic = coldUpgradeAttemptFacts(fixture, command.response, 1, command.code, command.err)
 		return command
 	}, nil)
 	if err == nil || strings.Contains(err.Error(), private) {
 		t.Fatal("driver returned an unsafe error or accepted the private-error response")
 	}
+	if len(result.attempts) != 1 || result.attempts[0].Attempt != 1 || !result.attempts[0].CommandError || !result.attempts[0].ResponseError || !result.attempts[0].RootMatches || !result.attempts[0].UpgradePresent {
+		t.Fatal("privacy check did not retain the actual populated per-attempt projection")
+	}
 	facts := coldUpgradeFailureFacts(result.lastResponse, []string{"ensure-owner", "--complete-upgrade", private}, "", false, errors.New(private))
 	facts.Attempts, facts.TotalAttempts = result.attempts, result.totalAttempts
 	data, encodeErr := json.Marshal(facts)
-	if encodeErr != nil || strings.Contains(string(data), private) {
-		t.Fatal("driver failure history exposed private command, error or token data")
+	if encodeErr != nil {
+		t.Fatal("driver failure history could not be encoded")
+	}
+	if strings.Contains(string(data), private) {
+		t.Fatal("serialized failure history exposed the private canary")
 	}
 }
 
