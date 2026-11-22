@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -24,8 +25,17 @@ import (
 )
 
 // Native store, CLI preflight, resident, daemon and operation control are real.
-// Only the unrelated profile SDK and OS connector-service boundaries are doubled.
-func TestGatewayUpgradeNativeMaintenanceUsesOriginalAppInvocation(t *testing.T) {
+// SDK and OS connector/GUI boundaries are doubled. Each App invocation captures
+// its own authority; the GUI route does not reuse the parent's capture.
+func TestGatewayUpgradeNativeMaintenanceComposition(t *testing.T) {
+	t.Run("gui_routed", func(t *testing.T) { testGatewayUpgradeNativeComposition(t, true) })
+	if runtime.GOOS != "darwin" {
+		t.Run("in_process", func(t *testing.T) { testGatewayUpgradeNativeComposition(t, false) })
+	}
+}
+
+func testGatewayUpgradeNativeComposition(t *testing.T, guiRouted bool) {
+	t.Helper()
 	client, daemon := requireRuntimeRestartCLINativeContext(t)
 	f := newRuntimeRestartCLINative(t, client, daemon)
 	prepareGatewayUpgradeNativeKeg(t, f)
@@ -46,7 +56,7 @@ func TestGatewayUpgradeNativeMaintenanceUsesOriginalAppInvocation(t *testing.T) 
 	}
 
 	services := &gatewayUpgradeNativeServices{profile: profile.directory}
-	response := runGatewayUpgradeNativeComposition(t, ctx, f, profile, services, operation)
+	response := runGatewayUpgradeNativeComposition(t, ctx, f, profile, services, operation, guiRouted)
 	assertGatewayUpgradeNativeCompletion(t, ctx, f, profile, services, response, operation)
 	if !bytes.Equal(rootBytes, readGatewayUpgradeNativeRoot(t, f)) {
 		t.Fatal("Gateway maintenance rewrote the original Native root record")
@@ -211,7 +221,7 @@ func readGatewayUpgradeNativeRoot(t *testing.T, f *runtimeRestartCLINative) []by
 	return data
 }
 
-func runGatewayUpgradeNativeComposition(t *testing.T, ctx context.Context, f *runtimeRestartCLINative, profile *gatewayUpgradeNativeProfile, services *gatewayUpgradeNativeServices, operation string) gatewaycommand.Response {
+func runGatewayUpgradeNativeComposition(t *testing.T, ctx context.Context, f *runtimeRestartCLINative, profile *gatewayUpgradeNativeProfile, services *gatewayUpgradeNativeServices, operation string, guiRouted bool) gatewaycommand.Response {
 	t.Helper()
 	dependencies := Dependencies{
 		Gateway: &gatewaycommand.Dependencies{
@@ -219,10 +229,19 @@ func runGatewayUpgradeNativeComposition(t *testing.T, ctx context.Context, f *ru
 		},
 		Environment: f.environment, RunnerExecutable: filepath.Join(f.bin, "delegate-run"), InitialSupervisorExecutable: f.originalClient,
 	}
+	var gui *gatewayGUIFixture
+	if guiRouted {
+		gui = newGatewayGUIFixture(t, ctx, f.base, dependencies, profile)
+		dependencies.Gateway.GUIUpgrade = gui.manager
+		gui.dependencies = dependencies
+	}
 	arguments := []string{"gateway", "upgrade", "--root", f.root, "--profile", profile.directory, "--accept-execution-policy-removal", "--json"}
 	for range 4 {
 		var output, diagnostic bytes.Buffer
 		code := RunContext(ctx, arguments, &output, &diagnostic, dependencies)
+		if gui != nil {
+			gui.observeFinishedInvocation()
+		}
 		var response gatewaycommand.Response
 		if err := json.Unmarshal(output.Bytes(), &response); err != nil || response.Upgrade == nil {
 			t.Fatalf("Gateway composition response unavailable: exit=%d err=%v", code, err)
@@ -231,6 +250,9 @@ func runGatewayUpgradeNativeComposition(t *testing.T, ctx context.Context, f *ru
 			t.Fatal("Gateway response exposed the opaque Native root token")
 		}
 		if code == 0 {
+			if gui != nil {
+				gui.assertCompleted(t, ctx, arguments, dependencies, response, operation)
+			}
 			return response
 		}
 		if !gatewayUpgradeNativePending(response, code, operation) {

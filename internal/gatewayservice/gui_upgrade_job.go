@@ -91,6 +91,7 @@ type GUIUpgradeResult struct {
 
 type GUIUpgradeControl interface {
 	RunGUIUpgrade(context.Context, GUIUpgradeRequest) (GUIUpgradeResult, error)
+	ClaimGUIUpgrade(context.Context, GUIUpgradeRequest) (*GUIUpgradeClaim, error)
 }
 
 func (r GUIUpgradeRequest) validateScope() error {

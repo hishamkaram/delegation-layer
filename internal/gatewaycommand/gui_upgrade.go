@@ -92,11 +92,14 @@ func (c invocation) upgradeGUIChild(parent context.Context, response Response) (
 	if err = c.validateGUIChildIdentity(request); err != nil {
 		return response, err
 	}
-	manager, err := c.nativeServiceManager(request.SavedSource.Executable)
-	if err != nil {
-		return response, err
+	control := c.dependencies.GUIUpgrade
+	if control == nil {
+		control, err = c.nativeServiceManager(request.SavedSource.Executable)
+		if err != nil {
+			return response, err
+		}
 	}
-	claim, err := manager.ClaimGUIUpgrade(ctx, request)
+	claim, err := control.ClaimGUIUpgrade(ctx, request)
 	if err != nil {
 		return response, err
 	}
