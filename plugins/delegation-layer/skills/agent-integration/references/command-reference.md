@@ -580,12 +580,10 @@ Proactive prepare precedes replacement, including same-path updates; complete
 its exact OP afterward. `--refresh-owner` alone refreshes the serving helper,
 without daemon replacement authority.
 
-Exact completion may advance only its own retained drain when Native's proofs
-permit. A completed OP replays its history without refreshing a later operation's
-owner or repairing current state. Ordinary ensure and Gateway's explicit
-installation maintenance request current readiness separately through Native.
-A later same-path generation remains a different operation. Mixed
-cancellation/cleanup faults are not clean pending progress.
+Exact completion advances only its own proven drain. Completed OP replay is
+read-only. Ordinary ensure and explicit Gateway maintenance request current
+readiness. Same-path generations stay distinct. Mixed faults are not clean
+pending progress.
 Native retains clean predecessor shutdown acknowledgement separately from
 closure. Reconciliation observes closure instead of resending an acknowledged
 request. Older strict readers refuse populated acknowledgement records,
