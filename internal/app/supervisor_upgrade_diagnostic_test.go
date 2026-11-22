@@ -57,7 +57,7 @@ func TestSupervisorMigrationPreservesAcceptedStartReviewReason(t *testing.T) {
 			cause := &pueue.PrivateUpgradeError{ReasonCode: reason, Err: pueue.ErrPrivateUpgradePending}
 			result := supervisorMigrationFailure(newSupervisorCommandResponse("migrate"), errors.Join(cause, os.ErrPermission))
 			control := result.response.SupervisorControl
-			if result.code != 1 || control.ReasonCode != reason || control.NextAction != "stop_and_report" || !errors.Is(result.err, pueue.ErrPrivateUpgradePending) || !errors.Is(result.err, os.ErrPermission) {
+			if result.code != 1 || control.ReasonCode != reason || control.NextAction != "stop_and_report" || control.FirstBlocker == nil || control.FirstBlocker.Kind != "upgrade" || control.FirstBlocker.ReasonCode != reason || control.FirstBlocker.NextAction != "stop_and_report" || !errors.Is(result.err, pueue.ErrPrivateUpgradePending) || !errors.Is(result.err, os.ErrPermission) {
 				t.Fatalf("migration lost review disposition or a concrete fault: code=%d control=%+v err=%v", result.code, control, result.err)
 			}
 		})

@@ -822,6 +822,10 @@ func supervisorMigrationFailure(response Response, err error) commandResult {
 	control.State = "unavailable"
 	control.MigrationReadiness = "unknown"
 	control.FirstBlocker = &supervisorcore.MaintenanceBlocker{Kind: "evidence", ReasonCode: "maintenance_evidence_fault", NextAction: "stop_and_report"}
+	if upgradeStartRequiresReview(control.ReasonCode) {
+		control.FirstBlocker.Kind = "upgrade"
+		control.FirstBlocker.ReasonCode = control.ReasonCode
+	}
 	control.NextAction = "stop_and_report"
 	return commandResult{response: response, code: 1, err: publicSupervisorError("Delegate could not safely migrate the legacy supervisor.", err)}
 }

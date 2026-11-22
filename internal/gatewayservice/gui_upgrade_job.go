@@ -977,13 +977,16 @@ func (m *Manager) observeGUIUpgradeStep(ctx context.Context, request GUIUpgradeR
 func (m *Manager) observeGUIWithoutResult(ctx context.Context, request GUIUpgradeRequest) (GUIUpgradeResult, error) {
 	observed, readErr := m.invoke(ctx, "print", m.guiUpgradeTarget(request))
 	readErr = guiManagerObservationError(observed, readErr)
-	if readErr != nil || observed.ExitCode != 0 {
+	if readErr != nil {
+		return GUIUpgradeResult{}, errors.Join(ErrGUIUpgradeUnknown, readErr)
+	}
+	if observed.ExitCode != 0 {
 		// A concurrent observer may have joined and removed the exact job.
-		latest, published, resultErr := m.readGUIResult(request)
-		if readErr == nil && resultErr == nil && published {
-			return latest, ErrPending
+		outcome, err := m.committedGUIOutcome(request)
+		if err == nil && (outcome.hasResult || outcome.hasProof) {
+			return outcome.result, ErrPending
 		}
-		return latest, errors.Join(ErrGUIUpgradeUnknown, readErr, resultErr)
+		return outcome.result, errors.Join(ErrGUIUpgradeUnknown, err)
 	}
 	state := parseGUIJobState(observed.Stdout)
 	if !state.exited() {
@@ -994,6 +997,26 @@ func (m *Manager) observeGUIWithoutResult(ctx context.Context, request GUIUpgrad
 		return GUIUpgradeResult{}, err
 	}
 	return GUIUpgradeResult{}, m.finishGUINotStarted(ctx, request, proof)
+}
+
+type guiCommittedOutcome struct {
+	result    GUIUpgradeResult
+	proof     guiNotStartedProof
+	hasResult bool
+	hasProof  bool
+}
+
+// committedGUIOutcome reads both bounded terminal transports. The caller's
+// earlier absence is dated; conflicting publications are always invalid.
+func (m *Manager) committedGUIOutcome(request GUIUpgradeRequest) (guiCommittedOutcome, error) {
+	result, hasResult, resultErr := m.readGUIResult(request)
+	proof, hasProof, proofErr := m.readGUINotStarted(request)
+	outcome := guiCommittedOutcome{result: result, proof: proof, hasResult: hasResult, hasProof: hasProof}
+	err := errors.Join(resultErr, proofErr)
+	if hasResult && hasProof {
+		err = errors.Join(ErrGUIUpgradeRecord, err)
+	}
+	return outcome, err
 }
 
 func (m *Manager) readGUINotStarted(request GUIUpgradeRequest) (guiNotStartedProof, bool, error) {
@@ -1034,26 +1057,28 @@ func (m *Manager) validateGUIReleasedNoClaim(request GUIUpgradeRequest) error {
 }
 
 func (m *Manager) recordGUINotStarted(ctx context.Context, request GUIUpgradeRequest, proof guiNotStartedProof) error {
-	if err := proof.validate(request); err != nil {
-		return err
-	}
 	return m.WithProfileLock(ctx, func() error {
 		if err := m.validateGUIActiveRequest(request); err != nil {
 			return err
 		}
-		if _, result, err := m.readGUIResult(request); err != nil || result {
-			return errors.Join(ErrPending, err)
-		}
-		if err := m.validateGUINoClaim(request); err != nil {
+		outcome, err := m.committedGUIOutcome(request)
+		if err != nil {
 			return err
 		}
-		if previous, found, err := m.readGUINotStarted(request); err != nil {
-			return err
-		} else if found {
-			if previous != proof {
+		if outcome.hasResult {
+			return ErrPending
+		}
+		if outcome.hasProof {
+			if outcome.proof != proof {
 				return ErrGUIUpgradeRecord
 			}
 			return nil
+		}
+		if err = m.validateGUINoClaim(request); err != nil {
+			return err
+		}
+		if err = proof.validate(request); err != nil {
+			return err
 		}
 		return m.publishGUINotStarted(request, proof)
 	})

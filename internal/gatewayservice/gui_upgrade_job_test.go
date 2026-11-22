@@ -49,24 +49,28 @@ type guiTestJob struct {
 }
 
 type guiTestRunner struct {
-	mu            sync.Mutex
-	manager       *Manager
-	base          Runner
-	jobs          map[string]guiTestJob
-	starts        int
-	wg            sync.WaitGroup
-	child         func(context.Context, GUIUpgradeRequest) (GUIUpgradeResult, error)
-	childErr      error
-	printFailure  int
-	prints        int
-	claimPID      int
-	claimGate     func()
-	claimRefusal  bool
-	beforeBootout func() error
-	afterBootout  func() error
+	mu              sync.Mutex
+	manager         *Manager
+	base            Runner
+	jobs            map[string]guiTestJob
+	starts          int
+	wg              sync.WaitGroup
+	child           func(context.Context, GUIUpgradeRequest) (GUIUpgradeResult, error)
+	childErr        error
+	printFailure    int
+	prints          int
+	claimPID        int
+	claimGate       func()
+	claimRefusal    bool
+	beforeBootout   func() error
+	afterBootout    func() error
+	observationGate func()
 }
 
-type guiClaimGateKey struct{}
+type (
+	guiClaimGateKey       struct{}
+	guiObservationGateKey struct{}
+)
 
 func (r *guiTestRunner) Probe(ctx context.Context, executable string, args []string) (int, error) {
 	if len(args) == 2 && strings.Contains(args[1], ".upgrade.") {
@@ -106,6 +110,9 @@ func (r *guiTestRunner) Run(ctx context.Context, executable string, args []strin
 }
 
 func (r *guiTestRunner) runGUIObservation(ctx context.Context, args []string) (Result, error) {
+	if args[0] == "print" && ctx.Value(guiObservationGateKey{}) != nil && r.observationGate != nil {
+		r.observationGate()
+	}
 	if args[0] == "bootout" && r.beforeBootout != nil {
 		if err := r.beforeBootout(); err != nil {
 			return Result{}, err
@@ -121,6 +128,147 @@ func (r *guiTestRunner) runGUIObservation(ctx context.Context, args []string) (R
 		r.claimGate()
 	}
 	return result, ctx.Err()
+}
+
+type guiObservedResult struct {
+	result GUIUpgradeResult
+	err    error
+}
+
+func gateGUIObservation(t *testing.T, ctx context.Context, runner *guiTestRunner) (context.Context, <-chan struct{}, func()) {
+	t.Helper()
+	entered, release := make(chan struct{}), make(chan struct{})
+	var enteredOnce, releaseOnce sync.Once
+	runner.observationGate = func() { enteredOnce.Do(func() { close(entered) }); <-release }
+	unblock := func() { releaseOnce.Do(func() { close(release) }) }
+	t.Cleanup(unblock)
+	return context.WithValue(ctx, guiObservationGateKey{}, true), entered, unblock
+}
+
+func startGUIObservedJob(t *testing.T, f *serviceFixture, request GUIUpgradeRequest) GUIUpgradeRequest {
+	t.Helper()
+	var selected GUIUpgradeRequest
+	if err := f.manager.WithProfileLock(f.ctx, func() error {
+		var err error
+		selected, _, err = f.manager.prepareGUIUpgrade(f.ctx, request)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.manager.bootstrapGUIUpgrade(f.ctx, selected); err != nil {
+		t.Fatal(err)
+	}
+	return selected
+}
+
+func TestGUIUpgradeConcurrentSuccessPublicationWinsStaleAbsence(t *testing.T) {
+	for _, exitCode := range []int{0, 1} {
+		t.Run(fmt.Sprint(exitCode), func(t *testing.T) { testGUIConcurrentPublication(t, exitCode) })
+	}
+}
+
+func testGUIConcurrentPublication(t *testing.T, exitCode int) {
+	t.Helper()
+	f, runner, request := newGUIUpgradeTest(t)
+	claimed, releaseChild := make(chan struct{}), make(chan struct{})
+	var childOnce sync.Once
+	unblockChild := func() { childOnce.Do(func() { close(releaseChild) }) }
+	t.Cleanup(unblockChild)
+	runner.child = func(_ context.Context, r GUIUpgradeRequest) (GUIUpgradeResult, error) {
+		close(claimed)
+		<-releaseChild
+		return guiTestReply(r, exitCode, "", "", false), nil
+	}
+	selected := startGUIObservedJob(t, f, request)
+	select {
+	case <-claimed:
+	case <-f.ctx.Done():
+		t.Fatal("actual child did not acquire its claim")
+	}
+	ctx, printing, releasePrint := gateGUIObservation(t, f.ctx, runner)
+	returned := make(chan guiObservedResult, 1)
+	var observer sync.WaitGroup
+	observer.Go(func() {
+		result, err := f.manager.RunGUIUpgrade(ctx, request)
+		returned <- guiObservedResult{result, err}
+	})
+	t.Cleanup(func() { unblockChild(); releasePrint(); observer.Wait() })
+	select {
+	case <-printing:
+	case <-f.ctx.Done():
+		t.Fatal("observer did not reach print after missing-result read")
+	}
+	unblockChild()
+	runner.wg.Wait() // Claim.Finish has durably published before the OS edge's natural exit.
+	releasePrint()
+	observed := <-returned
+	assertGUIConcurrentResult(t, f.manager, selected, observed, runner.starts, exitCode)
+}
+
+func assertGUIConcurrentResult(t *testing.T, manager *Manager, request GUIUpgradeRequest, observed guiObservedResult, starts, exitCode int) {
+	t.Helper()
+	expected := guiTestReply(request, exitCode, "", "", false)
+	if observed.err != nil || observed.result.ExitCode != exitCode || !bytes.Equal(observed.result.Response, expected.Response) || starts != 1 {
+		t.Fatalf("committed successful child result lost to stale absence: starts=%d err=%v", starts, observed.err)
+	}
+	if _, found, err := manager.readGUINotStarted(request); err != nil || found {
+		t.Fatalf("successful claimed child gained no-start proof: %v", err)
+	}
+	for _, marker := range []string{"joined", "cleaned"} {
+		if found, err := manager.guiMarker(request, marker); err != nil || !found {
+			t.Fatalf("successful child was not joined/cleaned: %s %v", marker, err)
+		}
+	}
+}
+
+func TestGUIUpgradeCommittedNoStartProofDisagreementRemainsHard(t *testing.T) {
+	f, _, request := stageGUINoStartJob(t)
+	proof := guiNotStartedProof{Invocation: request.Invocation, ExitCode: 1}
+	if err := f.manager.recordGUINotStarted(f.ctx, request, proof); err != nil {
+		t.Fatal(err)
+	}
+	conflicting := proof
+	conflicting.ExitCode = 2
+	if err := f.manager.recordGUINotStarted(f.ctx, request, conflicting); !errors.Is(err, ErrGUIUpgradeRecord) || IsPending(err) {
+		t.Fatalf("conflicting positive no-start evidence became pending: %v", err)
+	}
+	if observed, found, err := f.manager.readGUINotStarted(request); err != nil || !found || observed != proof {
+		t.Fatalf("conflicting observation replaced committed proof: %+v %v", observed, err)
+	}
+}
+
+func TestGUIUpgradeConcurrentNoStartProofWinsAbsentJob(t *testing.T) {
+	f, runner, request := newGUIUpgradeTest(t)
+	runner.claimPID, runner.claimRefusal = -1, true
+	selected := startGUIObservedJob(t, f, request)
+	runner.wg.Wait() // A real refused claim, no result and a known nonzero exit.
+	ctx, printing, releasePrint := gateGUIObservation(t, f.ctx, runner)
+	returned := make(chan guiObservedResult, 1)
+	var observer sync.WaitGroup
+	observer.Go(func() {
+		result, err := f.manager.RunGUIUpgrade(ctx, request)
+		returned <- guiObservedResult{result, err}
+	})
+	t.Cleanup(func() { releasePrint(); observer.Wait() })
+	select {
+	case <-printing:
+	case <-f.ctx.Done():
+		t.Fatal("observer did not reach print after missing-proof read")
+	}
+	_, concurrentErr := f.manager.RunGUIUpgrade(f.ctx, request)
+	var concurrent *GUIUpgradeNotStartedError
+	if !errors.As(concurrentErr, &concurrent) {
+		t.Fatalf("second observer did not publish/clean positive no-start: %v", concurrentErr)
+	}
+	releasePrint() // The first print now returns113 after the second observer's bootout.
+	observed := <-returned
+	var notStarted *GUIUpgradeNotStartedError
+	if !errors.As(observed.err, &notStarted) || notStarted.ExitCode != 1 || len(observed.result.Response) != 0 || runner.starts != 1 {
+		t.Fatalf("committed no-start proof lost to absent job: starts=%d err=%v", runner.starts, observed.err)
+	}
+	if cleaned, err := f.manager.guiMarker(selected, "cleaned"); err != nil || !cleaned {
+		t.Fatalf("concurrent no-start cleanup lost: %v", err)
+	}
 }
 
 func (r *guiTestRunner) observe(args []string) Result {
@@ -392,7 +540,7 @@ func TestGUIUpgradeNoStartRolloverRecoversPublishedSeed(t *testing.T) {
 }
 
 func TestGUIUpgradeNoStartEvidenceRemainsConservative(t *testing.T) {
-	for _, kind := range []string{"absent job", "zero exit", "claimed", "held alive", "bad alive", "bad claim", "bad proof", "proof and claim", "proof and result", "proof and held alive", "manager fault"} {
+	for _, kind := range []string{"absent job", "zero exit", "claimed", "claimed zero exit", "held alive", "bad alive", "bad claim", "bad proof", "proof and claim", "proof and result", "proof and held alive", "manager fault"} {
 		t.Run(kind, func(t *testing.T) {
 			f, runner, request := stageGUINoStartJob(t)
 			wanted := setGUINoStartFault(t, f.manager, runner, request, kind)
@@ -415,8 +563,11 @@ func setGUINoStartFault(t *testing.T, manager *Manager, runner *guiTestRunner, r
 		wanted = ErrGUIUpgradeUnknown
 	case "zero exit":
 		runner.jobs[manager.guiUpgradeTarget(request)] = guiTestJob{exit: 0}
-	case "claimed":
+	case "claimed", "claimed zero exit":
 		err = manager.writeGUIMarker(request, "claim")
+		if kind == "claimed zero exit" {
+			runner.jobs[manager.guiUpgradeTarget(request)] = guiTestJob{exit: 0}
+		}
 		wanted = ErrGUIUpgradeUnknown
 	case "held alive":
 		holdGUINoStartAlive(t, manager.guiFile(request, "alive"))
