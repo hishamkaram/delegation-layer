@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/hishamkaram/delegation-layer/internal/app/infrastructurehost"
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
 	"github.com/hishamkaram/delegation-layer/internal/supervisor"
 	"github.com/hishamkaram/delegation-layer/internal/supervisor/infrastructure"
@@ -249,7 +250,7 @@ func finishSupervisorUpgrade(a Arguments, response Response, outcome infrastruct
 func upgradeStartRequiresReview(reason string) bool {
 	switch reason {
 	case "predecessor_birth_unknown", "predecessor_boot_changed", "predecessor_boot_unknown", "predecessor_wait_closed", "predecessor_not_ready", "predecessor_pid_mismatch", "predecessor_pair_missing",
-		"successor_birth_unknown", "successor_boot_changed", "successor_wait_closed", "successor_pid_mismatch", "successor_not_ready":
+		"successor_birth_unknown", "successor_boot_changed", "successor_wait_closed", "successor_pid_mismatch", "successor_not_ready", infrastructurehost.UpgradeOwnerRefreshSuccessorStartAccepted:
 		return true
 	default:
 		return false

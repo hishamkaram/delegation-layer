@@ -16,6 +16,8 @@ import (
 
 var _ supervisor.UpgradeRouting = Routing{}
 
+const UpgradeOwnerRefreshSuccessorStartAccepted = "owner_refresh_successor_start_accepted"
+
 // UpgradeOwn stages one context and performs one authenticated v5 exchange.
 // Any helper replacement precedes v5 contact and requires positive legacy
 // authentication; an EOF or timeout from v5 never grants fallback authority.
@@ -68,15 +70,13 @@ func (r Routing) UpgradeOwn(ctx context.Context, target *taskdir.Store, selected
 func (c infrastructurePreparationContact) requestUpgrade(ctx context.Context, pin taskdir.RootPin, request infrastructure.UpgradeRequest, refresh bool) (infrastructure.UpgradeOutcome, error) {
 	owner := c.selection.owner
 	if owner != (infrastructure.StartupReference{}) && refresh {
-		var releaseErr error
+		var operation infrastructure.UpgradeOperationID
 		if request.Action == infrastructure.UpgradeComplete {
-			observed, terminal, err := releaseUpgradeCompletionServing(ctx, c.resources.reader, pin, request.OperationID, owner)
-			if terminal {
-				return upgradeOutcome(observed, err)
-			}
-			releaseErr = err
-		} else {
-			releaseErr = releaseUpgradeServing(ctx, c.resources.reader, owner)
+			operation = request.OperationID
+		}
+		observed, terminal, releaseErr := releaseUpgradeOwnerRefreshServing(ctx, c.resources.reader, pin, operation, owner)
+		if terminal {
+			return upgradeOutcome(observed, releaseErr)
 		}
 		if releaseErr != nil {
 			outcome := infrastructure.UpgradeOutcome{Condition: infrastructure.UpgradeBusy, Preflight: infrastructure.UpgradePreflight{State: infrastructure.UpgradePreflightPending}, ReasonCode: "owner_refresh_busy"}
@@ -107,20 +107,33 @@ func (c infrastructurePreparationContact) requestUpgrade(ctx context.Context, pi
 	return normalizeUpgradeContact(outcome, err)
 }
 
-// Exact completion authorizes serving release only while its own unfinished
-// journal remains current. Stop refuses active handlers; accepted serving
-// release does not wait for daemon Wait closure or acquire bootstrap EX.
-func releaseUpgradeCompletionServing(ctx context.Context, reader *taskdir.ReadOnlyStore, pin taskdir.RootPin, operation infrastructure.UpgradeOperationID, owner infrastructure.StartupReference) (observed pueue.PrivateUpgradeObservation, terminal bool, resultErr error) {
+// Retirement policy stays outside canonical control. Eligibility and serving
+// release share bootstrap EX; establishment and v5 contact happen after unlock.
+// An exact completed operation replays before inspecting any current Start.
+func releaseUpgradeOwnerRefreshServing(ctx context.Context, reader *taskdir.ReadOnlyStore, pin taskdir.RootPin, operation infrastructure.UpgradeOperationID, owner infrastructure.StartupReference) (observed pueue.PrivateUpgradeObservation, terminal bool, resultErr error) {
 	terminal = true
 	resultErr = pueue.WithExistingBootstrapLockContext(ctx, reader.Root(), func(locked context.Context) error {
 		if err := requireInfrastructureRoutingPin(locked, reader, pin); err != nil {
 			return err
 		}
+		if operation != "" {
+			var done bool
+			var err error
+			observed, done, err = observeUpgradeCompletion(locked, pin, operation)
+			if done || err != nil {
+				return err
+			}
+		}
+		var accepted bool
 		var err error
-		observed, terminal, err = observeUpgradeCompletion(locked, pin, operation)
-		if terminal || err != nil {
+		observed, accepted, err = pueue.ObservePrivateUpgradeAcceptedStartWithLock(locked, pin, pueue.UpgradeOperationID(operation))
+		if err != nil {
 			return err
 		}
+		if accepted {
+			return &pueue.PrivateUpgradeError{ReasonCode: UpgradeOwnerRefreshSuccessorStartAccepted, Err: pueue.ErrPrivateUpgradePending}
+		}
+		terminal = false
 		return releaseUpgradeServing(locked, reader, owner)
 	})
 	return observed, terminal, resultErr

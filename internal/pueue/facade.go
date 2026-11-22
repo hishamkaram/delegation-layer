@@ -71,6 +71,10 @@ func ObservePrivateUpgrade(ctx context.Context, root taskdir.RootPin, op Upgrade
 	return control.ObservePrivateUpgrade(ctx, root, op)
 }
 
+func ObservePrivateUpgradeAcceptedStartWithLock(ctx context.Context, root taskdir.RootPin, op UpgradeOperationID) (PrivateUpgradeObservation, bool, error) {
+	return control.ObservePrivateUpgradeAcceptedStartWithLock(ctx, root, op)
+}
+
 func BeginPrivateUpgradeWithLock(ctx context.Context, root taskdir.RootPin, mode UpgradeMode, options Options) (PrivateUpgradeObservation, error) {
 	return control.BeginPrivateUpgradeWithLock(ctx, root, mode, options)
 }
