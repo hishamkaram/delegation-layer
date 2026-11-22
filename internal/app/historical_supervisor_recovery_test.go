@@ -65,15 +65,18 @@ type historicalPrivateDaemonIdentity struct {
 	Endpoint             string                  `json:"endpoint,omitempty"`
 }
 
+// This DTO reads current migration output in historical-recovery scenarios.
+// Frozen older-reader compatibility is checked separately by the migration codec.
 type historicalPrivateMigrationRecord struct {
-	SchemaVersion            int                             `json:"schema_version"`
-	Legacy                   historicalPrivateDaemonIdentity `json:"legacy"`
-	Successor                historicalPrivateDaemonIdentity `json:"successor"`
-	LegacyPID                int                             `json:"legacy_pid,omitempty"`
-	LegacyProcessStart       string                          `json:"legacy_process_start,omitempty"`
-	LegacyShutdownRequested  bool                            `json:"legacy_shutdown_requested,omitempty"`
-	LegacyShutdownDispatched bool                            `json:"legacy_shutdown_dispatched,omitempty"`
-	LegacyStopped            bool                            `json:"legacy_stopped,omitempty"`
+	SchemaVersion              int                             `json:"schema_version"`
+	Legacy                     historicalPrivateDaemonIdentity `json:"legacy"`
+	Successor                  historicalPrivateDaemonIdentity `json:"successor"`
+	LegacyPID                  int                             `json:"legacy_pid,omitempty"`
+	LegacyProcessStart         string                          `json:"legacy_process_start,omitempty"`
+	LegacyShutdownRequested    bool                            `json:"legacy_shutdown_requested,omitempty"`
+	LegacyShutdownDispatched   bool                            `json:"legacy_shutdown_dispatched,omitempty"`
+	LegacyShutdownAcknowledged bool                            `json:"legacy_shutdown_acknowledged,omitempty"`
+	LegacyStopped              bool                            `json:"legacy_stopped,omitempty"`
 }
 
 type historicalPrivateMigrationHistory struct {
@@ -873,7 +876,7 @@ func assertHistoricalMigrationHistory(t *testing.T, fixture *historicalSuperviso
 	migration := history.Migrations[0]
 	assertHistoricalDaemonIdentity(t, "legacy migration history", migration.Legacy, fixture.predecessor)
 	assertHistoricalDaemonIdentity(t, "successor migration history", migration.Successor, fixture.successor)
-	if !migration.LegacyShutdownDispatched || !migration.LegacyStopped || migration.LegacyPID <= 0 {
+	if !migration.LegacyShutdownDispatched || !migration.LegacyShutdownAcknowledged || !migration.LegacyStopped || migration.LegacyPID <= 0 {
 		t.Fatalf("migration history did not record a stopped predecessor: %+v", migration)
 	}
 }
