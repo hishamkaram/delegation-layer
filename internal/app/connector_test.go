@@ -1365,7 +1365,11 @@ func TestConnectorSuccessfulResponsesUseActualRootFeatures(t *testing.T) {
 			if err := json.Unmarshal(output.Bytes(), &response); err != nil {
 				t.Fatal(err)
 			}
-			if code != 0 || response.Connector == nil || !slices.Equal(response.Connector.Features, []string{task.NamespaceAdmissionFeature, task.NamespaceMutationFeature}) {
+			features := []string{task.NamespaceAdmissionFeature, task.NamespaceMutationFeature}
+			if args[0] == "context" && args[1] == "inspect" {
+				features = []string{task.NamespaceAdmissionFeature, task.NamespaceMutationFeature, task.WorkspaceFilesystemFeature, task.NativeExecutionOptionsFeature, task.ProjectTokenSHA256Feature, task.GuardedContinuationFeature, task.ScopedModelDiscoveryFeature, task.OriginBindingFeature}
+			}
+			if code != 0 || response.Connector == nil || !slices.Equal(response.Connector.Features, features) {
 				t.Fatalf("actual feature projection: code=%d response=%+v diagnostics=%s", code, response, diagnostics.String())
 			}
 		})

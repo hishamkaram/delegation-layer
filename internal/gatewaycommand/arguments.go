@@ -8,43 +8,33 @@ import (
 	"flag"
 	"net/url"
 	"path/filepath"
-	"time"
 
 	"github.com/hishamkaram/delegation-layer/internal/task"
 )
 
-const defaultMaximumBudget = 60 * time.Second
-
 // Arguments are requested choices; parsing grants no local or remote authority.
 type Arguments struct {
-	Action           string
-	WorkspaceAction  string
-	ServiceAction    string
-	GatewayURL       string
-	Profile          string
-	DeviceName       string
-	PrivateCA        string
-	Headless         bool
-	Foreground       bool
-	Revoke           bool
-	TokenFile        string
-	Replace          bool
-	Directory        string
-	Alias            string
-	WorkspaceID      string
-	ExpectedRevision uint64
-	Provider         string
-	Model            string
-	Effort           string
-	Permission       string
-	MaximumBudget    time.Duration
-	ConfirmContext   string
-	OfflineConfirmed bool
-	policySet        bool
-	permissionSet    bool
-	budgetSet        bool
-	modelSet         bool
-	effortSet        bool
+	Action                       string
+	WorkspaceAction              string
+	ServiceAction                string
+	GatewayURL                   string
+	Profile                      string
+	DeviceName                   string
+	PrivateCA                    string
+	Headless                     bool
+	Foreground                   bool
+	Revoke                       bool
+	TokenFile                    string
+	Replace                      bool
+	Directory                    string
+	Alias                        string
+	WorkspaceID                  string
+	ExpectedRevision             uint64
+	Preview                      bool
+	AcceptExecutionPolicyRemoval bool
+	ConfirmContext               string
+	OfflineConfirmed             bool
+	GUIUpgradeRequest            string
 }
 
 func RegisterFlags(fs *flag.FlagSet, a *Arguments) {
@@ -57,7 +47,10 @@ func RegisterFlags(fs *flag.FlagSet, a *Arguments) {
 		fs.BoolVar(&a.Foreground, "foreground", false, "serve in this terminal after enrollment instead of installing a user service")
 		fs.StringVar(&a.TokenFile, "token-file", "", "unattended enrollment token JSON file, or - for stdin")
 		fs.BoolVar(&a.Replace, "replace", false, "explicit credential replacement for this same selected profile")
-		registerPolicyFlags(fs, a)
+	case "upgrade":
+		fs.StringVar(&a.GUIUpgradeRequest, "gui-upgrade-request", "", "private fixed-purpose GUI upgrade request locator")
+		fs.BoolVar(&a.Preview, "preview", false, "preview profile and installed executable handoff without mutation")
+		fs.BoolVar(&a.AcceptExecutionPolicyRemoval, "accept-execution-policy-removal", false, "explicitly remove saved execution policy and hand this profile to the current installed binary")
 	case "disconnect":
 		fs.BoolVar(&a.Revoke, "revoke", false, "after confirmed local connector stop, request fresh login to revoke this device credential")
 		fs.BoolVar(&a.Headless, "headless", false, "print the revocation login challenge without opening a browser; requires --revoke")
@@ -68,61 +61,29 @@ func RegisterFlags(fs *flag.FlagSet, a *Arguments) {
 		switch a.WorkspaceAction {
 		case "allow":
 			fs.StringVar(&a.Alias, "alias", "", "explicit workspace alias (default: valid directory basename)")
-			registerPolicyFlags(fs, a)
 		case "update":
 			fs.StringVar(&a.Alias, "alias", "", "new alias for the same immutable workspace")
 			fs.Uint64Var(&a.ExpectedRevision, "expected-revision", 0, "current workspace revision")
-			registerPolicyFlags(fs, a)
 		case "remove":
 			fs.Uint64Var(&a.ExpectedRevision, "expected-revision", 0, "current workspace revision")
 		}
 	}
 }
 
-func registerPolicyFlags(fs *flag.FlagSet, a *Arguments) {
-	permission, budget := "", time.Duration(0)
-	providerHelp := "select one provider; omission keeps the approved provider set"
-	if a.Action == "connect" {
-		permission, budget = "read-only", defaultMaximumBudget
-		providerHelp = "explicit eligible provider profile (default: compiled eligible profiles)"
-	}
-	fs.StringVar(&a.Provider, "provider", "", providerHelp)
-	fs.StringVar(&a.Model, "model", "", "allow only this explicit model; requires --provider")
-	fs.StringVar(&a.Effort, "effort", "", "allow only this explicit effort; requires --provider")
-	fs.StringVar(&a.Permission, "permission", permission, "provider permission ceiling; workspace omission preserves approved policy")
-	fs.DurationVar(&a.MaximumBudget, "max-budget", budget, "finite maximum task budget in whole seconds; workspace omission preserves approved policy")
-}
-
-// NoteFlags preserves nil policy meaning for workspace updates and approvals.
-func (a *Arguments) NoteFlags(fs *flag.FlagSet) {
-	fs.Visit(func(f *flag.Flag) {
-		switch f.Name {
-		case "provider":
-			a.policySet = true
-		case "model":
-			a.policySet, a.modelSet = true, true
-		case "effort":
-			a.policySet, a.effortSet = true, true
-		case "permission":
-			a.policySet, a.permissionSet = true, true
-		case "max-budget":
-			a.policySet, a.budgetSet = true, true
-		}
-	})
-}
-
 func (a *Arguments) Validate(positional []string) error {
+	if a.GUIUpgradeRequest != "" && a.Action != "upgrade" {
+		return errors.New("private GUI upgrade locator requires upgrade")
+	}
 	if a.Profile != "" && !filepath.IsAbs(a.Profile) {
 		return errors.New("gateway profile must be absolute")
-	}
-	if (a.Model != "" || a.Effort != "" || a.modelSet || a.effortSet) && a.Provider == "" {
-		return errors.New("gateway model/effort policy requires one explicit provider")
 	}
 	switch a.Action {
 	case "connect":
 		return a.validateConnect(positional)
 	case "repair-context":
 		return a.validateContextRepair(positional)
+	case "upgrade":
+		return a.validateUpgrade(positional)
 	case "status", "doctor", "disconnect", "serve", "service":
 		return a.validateSavedProfile(positional)
 	case "workspace":
@@ -130,6 +91,16 @@ func (a *Arguments) Validate(positional []string) error {
 	default:
 		return errors.New("unknown gateway action")
 	}
+}
+
+func (a *Arguments) validateUpgrade(positional []string) error {
+	if a.GUIUpgradeRequest != "" && (!filepath.IsAbs(a.GUIUpgradeRequest) || !a.AcceptExecutionPolicyRemoval || a.Preview) {
+		return errors.New("invalid private GUI upgrade invocation")
+	}
+	if len(positional) != 0 || a.Preview == a.AcceptExecutionPolicyRemoval {
+		return errors.New("gateway upgrade requires exactly one of --preview or --accept-execution-policy-removal, with no operands")
+	}
+	return nil
 }
 
 func (a *Arguments) validateContextRepair(positional []string) error {
@@ -191,8 +162,8 @@ func (a *Arguments) validateWorkspace(positional []string) error {
 			return errors.New("gateway workspace update/remove requires an ID and expected-revision")
 		}
 		a.WorkspaceID = positional[0]
-		if a.WorkspaceAction == "update" && a.Alias == "" && !a.policySet {
-			return errors.New("gateway workspace update requires alias or explicit policy change")
+		if a.WorkspaceAction == "update" && a.Alias == "" {
+			return errors.New("gateway workspace update requires an alias")
 		}
 	default:
 		return errors.New("unknown gateway workspace action")

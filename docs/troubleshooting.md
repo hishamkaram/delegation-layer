@@ -27,6 +27,76 @@ destination replacement still need authorization covering that action.
 | Rejected answer | Follow [result handling](../skills/agent-integration/references/result-handling.md#observe-and-collect); use [offline recheck](../skills/agent-integration/references/result-handling.md#offline-recovery) only when offered. |
 | Valid outcome accompanied by an operational error | Keep the outcome and report the ancillary error; follow [result handling](../skills/agent-integration/references/result-handling.md#observe-and-collect). |
 
+## Gateway upgrade and scope errors
+
+The prepared Native 0.9.0 / Gateway 0.2.0 candidate is not a published release.
+Check installed help before using its new surface. Native owns execution choices
+and defaults; connection/workspace commands no longer accept provider/model/
+effort/permission/budget policy flags. Do not reconstruct an old ceiling as a
+client-side execution rule. Native budgets remain finite.
+
+A saved old-policy profile or unavailable saved executable uses the supported
+same-profile upgrade flow:
+
+```sh
+delegate gateway upgrade --preview --json
+delegate gateway upgrade --accept-execution-policy-removal --json
+```
+
+Preview reports source/count observations; it does not run Native/service checks.
+Acceptance needs authorization to remove obsolete execution policy. It stops the
+owned connector and uses existing SDK profile, Native supervisor and OS service
+owners, with a compare against the saved source before selecting the installed
+binary. Registration, credentials/generation, original root, disabled approvals,
+revisions, pins and history stay preserved. Follow `upgrade.phase`, `failure`,
+`next_action` and pending supervisor evidence. Do not edit journals/source paths,
+create replacement state, copy an executable, use tmux or repeat login to bypass
+a blocked prerequisite. A stopped connector is not provider-task closure.
+
+On macOS, same-user SSH can manage the existing `gui/UID` service domain; the
+calling shell need not run in Aqua. `gateway_gui_session_required` with
+`check_user_gui_session` means that domain is unavailable. Check that the intended
+user has a graphical login; do not create another registration or tmux session.
+Registration still does not prove provider authentication or execution readiness.
+Accepted upgrade maintenance also uses that GUI domain automatically, preserving
+the existing validated service PATH across pending retries. It copies no other
+SSH environment or credentials. `gateway_upgrade_uncertain` requires inspection
+of the same profile; do not launch replacement maintenance. In contrast,
+`gateway_upgrade_not_started` confirms a pre-claim refusal and recorded exact-job
+cleanup; follow its next action to run the same command explicitly again.
+`gateway_upgrade_review_required` carries Native's `stop_and_report`; preserve
+the exact operation and inspect its Native blocker instead of retrying. A known
+initial installation-verification failure permits correcting the installation
+and retrying, while ambiguous historical receipts remain uncertain. An invalid
+private record reports `gateway_upgrade_record_invalid` with `stop_and_report`.
+
+Approve an existing ancestor once. New project selection and browsing use a
+scope ID and relative path; manual project/temp aliases are not needed. Whole
+Linux `/tmp` and macOS resolved user temp plus shared `/tmp`/`/private/tmp` are
+automatic. Preserve `scope_discovery_error` instead of substituting a guessed
+path. Missing paths, changed versions, special-file reads and escaping symlinks
+are explicit failures, not evidence that content was filtered. Git structural
+`candidate`/`partial` is not repository validation.
+
+Scoped models requires all three selection guards and an exact opaque path
+workspace token in a bounded regular file, not JSON or a regenerated token.
+A supplied cwd must match the derived canonical path. Historical project-token
+SHA guards are for saved tasks, not fresh admission. See the
+[connector contract](connector-contract.md#scoped-model-discovery).
+
+The paired Gateway candidate exposes `prepare_continuation` over guarded Native
+`continue`, using the exact predecessor and a separately correlated successor.
+Preserve uncertain delivery and observe the same operation; do not fall back to
+another dispatch. Installed-provider and Cloud acceptance are specific to the
+tested installation/client, not implied by CLI capability discovery.
+
+If a cloud login expires, follow the Gateway
+[cloud login guide](https://github.com/hishamkaram/delegation-layer-gateway/blob/main/docs/cloud-login.md).
+The IdP must issue refresh grants and the real client must use them. Increasing
+device certificate or WSS timeouts cannot establish a seven-day cloud session.
+No tenant change or seven-day soak is proven by local tests. After refresh,
+resolve the original operation; authentication renewal does not authorize a retry.
+
 ## Supervisor configuration fails
 
 Use [supervisor recovery](cli-reference.md#supervisor-recovery) for explicit
@@ -42,9 +112,12 @@ Keep the exact task ID and reported reason. A later `diagnostic_snapshot_at`
 describes the local diagnostic observation, separately from a resident error.
 
 After a completed installation handoff, `legacy_present` with
-`run_supervisor_migrate` means inspection routing still needs completion. Use
-the same root's explicit migration command; existing tasks retain their
-identities. Follow [supervisor recovery](cli-reference.md#supervisor-recovery)
+`run_supervisor_migrate` means inspection routing still needs completion.
+Gateway's supported upgrade requests current readiness from Native; ordinary
+`ensure-owner` also retains its startup and routing preparation. Replaying a
+historical completed upgrade does not repair current state. For an interrupted
+or older flow, follow the same root's explicit migration guidance; existing
+tasks retain their identities. Follow [supervisor recovery](cli-reference.md#supervisor-recovery)
 for blocker priority and prepared-edge behavior.
 
 For an eligible same-boot private ghost, see
@@ -64,6 +137,13 @@ Finish the handoff before another installation replacement. A missing candidate
 can be reselected before target acceptance; an unavailable accepted target
 remains a fault. Preserve that operation and report it. See the same upgrade
 procedure for the exact boundary.
+
+`owner_refresh_successor_start_accepted` means Native cannot validate completion
+of an accepted target Start. Refresh would detach progress from the resident that
+may own its Wait, so Native keeps that owner serving and reports
+`stop_and_report`. Do not repeat refresh, reset the journal or launch a second
+target. Preserve the exact OP and use the matching resident installation for
+completion; see [installation upgrades](cli-reference.md#installation-upgrades).
 
 A clean absent or refused predecessor during a retained drain can make passive
 `supervisor status` exit `0` with `active_work: "unknown"`,
@@ -106,6 +186,13 @@ preserve rejected tasks and verify any separately authorized new task normally.
 If the old daemon is alive but unreachable, repeating restart cannot progress;
 investigate that daemon's availability without clearing the saved fence. A
 pending shutdown may persist until its underlying command fault is fixed.
+
+For an installation handoff, a clean shutdown acknowledgement does not prove
+daemon exit. The same operation waits for canonical closure without resending
+an acknowledged shutdown while the endpoint still responds. Keep following its
+reported pending or fault action. Do not delete the journal/history or switch to
+an older build that cannot read the retained acknowledgement; see
+[installation upgrades](cli-reference.md#installation-upgrades).
 
 ## Gateway root context no longer matches
 

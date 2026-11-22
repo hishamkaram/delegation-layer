@@ -178,11 +178,11 @@ func Run(args []string, stdout, stderr io.Writer, deps Dependencies) int {
 	if parsed.Command == "help" {
 		return presentHelp(parsed, stdout, stderr)
 	}
-	if parsed.Command == "version" {
-		if _, err = fmt.Fprintf(stdout, "delegate %s\n", deps.normalized().PublisherVersion); err != nil {
-			return 1
-		}
-		return 0
+	if code, handled := runInspectionCommand(parsed, deps, stdout, stderr); handled {
+		return code
+	}
+	if parsed.Command == "filesystem" {
+		return runFilesystem(context.Background(), parsed, deps, stdout, stderr)
 	}
 	if parsed.Command == "gateway" {
 		return runGatewayCLI(context.Background(), parsed, deps, stdout, stderr)
@@ -198,25 +198,36 @@ func Run(args []string, stdout, stderr io.Writer, deps Dependencies) int {
 	if parsed.Command != "schedule" {
 		normalized = deps.normalized()
 	}
-	if parsed.Command == "doctor" {
-		return runDoctor(parsed, normalized, stdout, stderr)
-	}
-	if parsed.Command == "providers" {
-		return runProviders(parsed.JSON, stdout, stderr, normalized.Catalog)
-	}
-	if parsed.Command == "capabilities" {
-		return runCapabilities(parsed.JSON, stdout, stderr, normalized.Catalog, parsed.Provider)
-	}
-	if parsed.Command == "models" {
-		return runModels(parsed, stdout, normalized)
-	}
 	var result commandResult
 	if parsed.Command == "scheduler" {
 		result = runSchedulerCommand(context.Background(), parsed, normalized, stderr)
 	} else {
 		result = runCommand(parsed, normalized)
 	}
+	if parsed.Command == "context" && parsed.Connector.Action == "inspect" && result.code == 0 {
+		projectExecutableContextFeatures(&result.response)
+	}
 	return presentCommandResult(parsed, result, stdout, stderr)
+}
+
+func runInspectionCommand(a Arguments, deps Dependencies, stdout, stderr io.Writer) (int, bool) {
+	switch a.Command {
+	case "version":
+		if _, err := fmt.Fprintf(stdout, "delegate %s\n", deps.normalized().PublisherVersion); err != nil {
+			return 1, true
+		}
+		return 0, true
+	case "doctor":
+		return runDoctor(a, deps.normalized(), stdout, stderr), true
+	case "providers":
+		return runProviders(a.JSON, stdout, stderr, deps.normalized().Catalog), true
+	case "capabilities":
+		return runCapabilities(a.JSON, stdout, stderr, deps.normalized().Catalog, a.Provider), true
+	case "models":
+		return runModels(a, stdout, deps.normalized()), true
+	default:
+		return 0, false
+	}
 }
 
 // RunContext supplies caller cancellation for scheduler hosting and Gateway
@@ -228,6 +239,9 @@ func RunContext(ctx context.Context, args []string, stdout, stderr io.Writer, de
 	}
 	if parsed.Command == "help" {
 		return presentHelp(parsed, stdout, stderr)
+	}
+	if parsed.Command == "filesystem" {
+		return runFilesystem(ctx, parsed, deps, stdout, stderr)
 	}
 	if parsed.Command == "gateway" {
 		return runGatewayCLI(ctx, parsed, deps.withCapturedEnvironmentContext(ctx), stdout, stderr)
@@ -260,12 +274,12 @@ func argumentUsageErrorFor(args []string, stderr io.Writer, err error) int {
 func presentCommandResult(parsed Arguments, result commandResult, stdout, stderr io.Writer) int {
 	result.response = projectConnectorWorkspace(result.response, parsed.Connector.IncludeWorkspaceConstraint || connectorWorkspace(parsed.Connector) != nil)
 	if parsed.JSON {
-		if err := writeJSONResponse(stdout, parsed.Command, &result.response, result.err); err != nil {
-			return scheduleOutputFailure(stderr, result.response, err)
+		if err := writeJSONResponseWithPolicy(stdout, parsed.Command, &result.response, result.err, commandJSONOutputPolicy(parsed, result)); err != nil {
+			return commandOutputFailure(stderr, result.response, err)
 		}
 	} else {
 		if err := writeHumanResponse(stdout, result.response); err != nil {
-			return scheduleOutputFailure(stderr, result.response, err)
+			return commandOutputFailure(stderr, result.response, err)
 		}
 		if result.err != nil {
 			return writeCLIError(stderr, commandPresentationError(parsed.Command, result), result.code)
@@ -274,9 +288,12 @@ func presentCommandResult(parsed Arguments, result commandResult, stdout, stderr
 	return result.code
 }
 
-func scheduleOutputFailure(stderr io.Writer, response Response, err error) int {
+func commandOutputFailure(stderr io.Writer, response Response, err error) int {
 	if response.Command == "schedule" && response.Schedule != nil && response.Schedule.ID != "" {
 		return writeCLIError(stderr, fmt.Errorf("writing schedule output for %s: %w; inspect with schedule show %s", response.Schedule.ID, err, response.Schedule.ID), 1)
+	}
+	if errors.Is(err, ErrJSONResponseTooLarge) {
+		return writeCLIError(stderr, ErrJSONResponseTooLarge, 1)
 	}
 	return 1
 }

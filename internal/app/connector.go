@@ -118,7 +118,10 @@ func (r connectorJSONReader) readPollable(file *os.File, buffer []byte) (int, er
 	controlErr := connection.Control(func(fd uintptr) {
 		count, readErr = r.readPollDescriptor(fd, buffer)
 	})
-	return count, errors.Join(readErr, controlErr)
+	if controlErr != nil {
+		return count, errors.Join(readErr, controlErr)
+	}
+	return count, readErr
 }
 
 func (r connectorJSONReader) readPollDescriptor(fd uintptr, buffer []byte) (int, error) {
@@ -170,6 +173,7 @@ func loadConnectorOrigin(ctx context.Context, a *Arguments, deps Dependencies) e
 		return err
 	}
 	a.Connector.origin = &origin
+	a.Connector.outputPolicy = a.Connector.outputPolicy.withOrigin(origin)
 	return nil
 }
 
@@ -209,6 +213,7 @@ func connectorMutationRequested(a Arguments) bool {
 }
 
 func connectorCommandContext(ctx context.Context, a Arguments, deps Dependencies) (result commandResult) {
+	defer func() { result.connectorOutput = a.Connector.outputPolicy }()
 	response := newResponse(a.Command)
 	if a.Command == "result" && a.Connector.Action == "save" {
 		return ordinaryResultSaveContext(ctx, a, deps, response)
@@ -297,7 +302,7 @@ func connectorInventoryInspection(ctx context.Context, a Arguments, reader *task
 }
 
 func connectorPassiveTaskContext(ctx context.Context, a Arguments, deps Dependencies, reader *taskdir.ReadOnlyStore, response Response) commandResult {
-	guard, err := reader.BorrowConnectorControlContext(ctx, a.Connector.ExpectedRoot, a.Connector.ExpectedProject)
+	guard, err := reader.BorrowConnectorControlSelectionContext(ctx, a.Connector.ExpectedRoot, a.Connector.ExpectedProject, a.Connector.ExpectedProjectSHA256)
 	if err != nil {
 		return connectorFailure(response, err)
 	}
@@ -380,13 +385,18 @@ func resolveConnectorReaderContext(ctx context.Context, a Arguments, reader *tas
 }
 
 func matchConnectorReceipt(a Arguments, receipt taskdir.ConnectorReceipt) error {
-	if receipt.RootToken != a.Connector.ExpectedRoot || receipt.ProjectToken != a.Connector.ExpectedProject || a.Connector.origin == nil || receipt.Origin != *a.Connector.origin || !connectorWorkspaceMatches(a, receipt.WorkspaceConstraint) {
+	if !connectorWorkspaceMatches(a, receipt.WorkspaceConstraint) {
 		return task.ErrRequestConflict
 	}
-	if a.Connector.ExpectedSpecSHA256 != "" && receipt.SpecSHA256 != a.Connector.ExpectedSpecSHA256 {
-		return task.ErrRequestConflict
+	return connectorTaskSelection(a).MatchReceipt(receipt)
+}
+
+func connectorTaskSelection(a Arguments) taskdir.ConnectorTaskSelection {
+	return taskdir.ConnectorTaskSelection{
+		RootToken: a.Connector.ExpectedRoot, ProjectToken: a.Connector.ExpectedProject,
+		ProjectSHA256: a.Connector.ExpectedProjectSHA256, SpecSHA256: a.Connector.ExpectedSpecSHA256,
+		Origin: a.Connector.origin, WorkspaceConstraint: connectorWorkspace(a.Connector),
 	}
-	return nil
 }
 
 func connectorMutationContext(ctx context.Context, a Arguments, deps Dependencies) (result commandResult) {
@@ -422,7 +432,7 @@ func connectorMutationContext(ctx context.Context, a Arguments, deps Dependencie
 	if a.Connector.ResumeAdmission {
 		return connectorResumeGuardedContext(ctx, a, deps, store, response)
 	}
-	guard, err := store.BorrowConnectorControlContext(ctx, a.Connector.ExpectedRoot, a.Connector.ExpectedProject)
+	guard, err := store.BorrowConnectorControlSelectionContext(ctx, a.Connector.ExpectedRoot, a.Connector.ExpectedProject, a.Connector.ExpectedProjectSHA256)
 	if err != nil {
 		return connectorFailure(response, err)
 	}
@@ -487,16 +497,15 @@ func connectorResumeContext(ctx context.Context, a Arguments, deps Dependencies,
 	}
 	// Validate complete prepared bytes BEFORE entering the existing recovery owner;
 	// ExistingOnly also forbids fallback if records disappear before its re-read.
-	request, meta, spec, _, err := td.PreparedIdentity()
+	request, meta, _, _, err := td.PreparedIdentity()
 	if err != nil {
 		return connectorFailure(response, errors.Join(err, td.Close()))
 	}
-	if request.Origin == nil || request.ConnectorContext == nil || *request.Origin != *a.Connector.origin || request.ConnectorContext.RootToken != a.Connector.ExpectedRoot || spec != a.Connector.ExpectedSpecSHA256 || !connectorWorkspaceMatches(a, request.ConnectorContext.WorkspaceConstraint) {
+	if request.ConnectorContext == nil || !connectorWorkspaceMatches(a, request.ConnectorContext.WorkspaceConstraint) {
 		return connectorFailure(response, errors.Join(task.ErrRequestConflict, td.Close()))
 	}
-	project, err := taskdir.ProjectToken(request.ConnectorContext.Project)
-	if err != nil || project != a.Connector.ExpectedProject {
-		return connectorFailure(response, errors.Join(task.ErrIdentityMismatch, err, td.Close()))
+	if _, err = store.BorrowConnectorTaskControlContext(ctx, a.TaskID, connectorTaskSelection(a)); err != nil {
+		return connectorFailure(response, errors.Join(err, td.Close()))
 	}
 	if err = td.RequireTaskLaunchPermissionContext(ctx); err != nil {
 		return connectorFailure(response, errors.Join(err, td.Close()))
@@ -589,27 +598,10 @@ func retainOpenedTaskGuardContext(ctx context.Context, a Arguments, store *taskd
 	if a.Connector.ExpectedRoot == "" {
 		return nil, nil
 	}
-	if a.Connector.origin == nil {
-		return nil, errors.New("guarded task operation has no validated immutable origin")
-	}
-	request, _, spec, _, err := td.PreparedIdentity()
-	if err != nil {
+	if _, _, _, _, err := td.PreparedIdentity(); err != nil {
 		return nil, err
 	}
-	if request.Origin == nil || request.ConnectorContext == nil {
-		return nil, task.ErrRequestConflict
-	}
-	project, err := taskdir.ProjectToken(request.ConnectorContext.Project)
-	if err != nil {
-		return nil, err
-	}
-	if *request.Origin != *a.Connector.origin || project != a.Connector.ExpectedProject || request.ConnectorContext.RootToken != a.Connector.ExpectedRoot || !connectorWorkspaceMatches(a, request.ConnectorContext.WorkspaceConstraint) {
-		return nil, task.ErrRequestConflict
-	}
-	if a.Connector.ExpectedSpecSHA256 != "" && spec != a.Connector.ExpectedSpecSHA256 {
-		return nil, task.ErrRequestConflict
-	}
-	return store.BorrowConnectorControlContext(ctx, a.Connector.ExpectedRoot, a.Connector.ExpectedProject)
+	return store.BorrowConnectorTaskControlContext(ctx, td.TaskID, connectorTaskSelection(a))
 }
 
 func prepareGuardedDispatchContext(ctx context.Context, a *Arguments, deps Dependencies) error {

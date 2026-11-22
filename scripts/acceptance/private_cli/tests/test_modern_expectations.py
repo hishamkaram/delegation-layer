@@ -194,6 +194,7 @@ class ModernMigrationFactPolicyTests(unittest.TestCase):
     def test_rejects_postshutdown_or_mismatched_prepared_intent_and_old_writer_retarget(self):
         self.fixture.prepare_migration()
         for field, value in (("legacy_shutdown_requested", True), ("legacy_shutdown_dispatched", True),
+                             ("legacy_shutdown_acknowledged", True), ("legacy_shutdown_acknowledged", 1),
                              ("legacy_stopped", True), ("legacy_pid", 123), ("legacy_process_start", "start"),
                              ("legacy_shutdown_requested", 1)):
             facts = self.facts()

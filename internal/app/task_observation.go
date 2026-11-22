@@ -77,6 +77,7 @@ func collect(a Arguments, deps storeDependencies) commandResult {
 }
 
 func collectContext(ctx context.Context, a Arguments, deps storeDependencies) (result commandResult) {
+	defer func() { result.connectorOutput = a.Connector.outputPolicy }()
 	response := newResponse("collect")
 	if a.Connector.ExpectedRoot != "" {
 		deps.observeSupervisor = false

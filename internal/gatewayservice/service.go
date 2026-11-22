@@ -26,7 +26,7 @@ var (
 	ErrForeignService    = errors.New("gateway service identity or settings differ")
 	ErrManager           = errors.New("gateway service manager operation failed")
 	ErrPending           = errors.New("gateway connector stop remains unconfirmed")
-	ErrGUIRequired       = errors.New("gateway LaunchAgent requires this user's Aqua session")
+	ErrGUIRequired       = errors.New("gateway LaunchAgent requires this user's available GUI launchd domain")
 	ErrServiceChanged    = errors.New("gateway service definition changed during reconciliation; retry")
 	ErrManagerCacheStale = errors.New("gateway service manager cache is stale; run service stop on this profile, then retry")
 )
@@ -46,9 +46,11 @@ type Result struct {
 }
 
 // Runner executes exactly the selected installed executable and argv, with a
-// finite caller deadline, bounded output and joined process cleanup.
+// finite caller deadline and joined process cleanup. Run captures bounded output;
+// Probe discards output and reports only a proven exit code.
 type Runner interface {
 	Run(context.Context, string, []string) (Result, error)
+	Probe(context.Context, string, []string) (int, error)
 }
 
 // Config is selected by the thin Native caller. Directory is the canonical

@@ -37,8 +37,7 @@ depends on the workspace and namespace features. Existing connector-enabled
 roots need an explicit offline cutover before using these capabilities:
 
 ```sh
-delegate context enable-connector --root ABS --workspace-constrained \
-  --offline-cutover-confirmed --json
+delegate context enable-connector --root ABS --workspace-constrained --offline-cutover-confirmed --json
 ```
 
 For an absent root, `delegate context initialize --root ABS
@@ -139,8 +138,7 @@ A connector explicitly approves an existing ancestor using its ordinary opaque
 project token. It then asks Delegate to resolve an existing relative project:
 
 ```sh
-delegate context inspect --root ABS --expected-workspace WORKSPACE_TOKEN \
-  --relative-project team/service --json
+delegate context inspect --root ABS --expected-workspace WORKSPACE_TOKEN --relative-project team/service --json
 ```
 
 The returned `project_token` binds the same selected leaf used for workspace
@@ -185,6 +183,80 @@ inventory accepts smaller pages with `--limit 1` (valid range 1..200); callers
 must follow `next_cursor` until `complete`. Pagination bounds the emitted entry
 count, not the full canonical membership scan needed for completeness.
 
+## Read-only filesystem observations
+
+`workspace-filesystem-v1` is an executable capability reported by successful
+public context inspection. It is not a new persisted root-required feature.
+The connector maps public scope IDs to saved local approvals; raw local paths
+and tokens stay local. New selection uses scope ID plus relative path, without
+creating a permanent project pin. Linux automatically exposes whole `/tmp`;
+macOS resolves user temp with trusted `/usr/bin/getconf DARWIN_USER_TEMP_DIR`
+and includes shared `/tmp` (canonical `/private/tmp`), deduplicating canonical
+paths. Discovery errors remain explicit.
+
+```sh
+printf '%s\n' '{}' | delegate filesystem scopes --request - --json
+delegate filesystem list --root ABS --request /absolute/private/list.json --json
+delegate filesystem read --root ABS --request /absolute/private/read.json --json
+delegate filesystem inspect --root ABS --request /absolute/private/inspect.json --json
+delegate filesystem git --root ABS --request /absolute/private/git.json --json
+```
+
+`--request` requires a strict JSON regular file or `-` for stdin, at most 1 MiB.
+`--control-timeout` is positive and at most `30s` (default `30s`). Empty scope
+discovery `{}` needs no Native root. Other operations require an existing root
+and matching local `expected_root`. A workspace list request is:
+
+```json
+{"expected_root":"ROOT_TOKEN","scope":{"kind":"workspace","expected_workspace":"WORKSPACE_TOKEN"},"relative_path":".","limit":100}
+```
+
+Use a separate read request with `offset` and a decoded-byte `limit` up to 65536.
+Lists return at most 100 entries per page. Follow the opaque `next_cursor` only
+for the same selection and observed version; mutation can invalidate it. No
+cursor state, root, task, approval or pin is created. Pass `expected_version`
+when a later range must match an earlier observation.
+
+Names and requested bytes are unfiltered, including hidden files, hard links,
+non-UTF-8 names and binary files. Use standard padded base64
+`relative_path_base64` instead of `relative_path` to round-trip arbitrary Unix
+names. Never reconstruct a path from lossy display text. `read` returns
+`data_base64` and optional UTF-8 `text`; special entries are inspectable but not
+read as regular content. Symlink containment stays inside the same selected
+root, not the union of approved scopes.
+
+Git observations are rooted structural evidence: marker, linked-worktree file,
+bare layout and HEAD shape. `candidate` and `partial` do not mean validated;
+external metadata remains partial. This operation runs no Git command and makes
+no definitive repository-validity claim. See [observation results](../skills/agent-integration/references/result-handling.md#filesystem-and-model-observations).
+
+## Scoped model discovery
+
+`scoped-model-discovery-v1` is a separate executable capability. The public form
+uses an existing approved **path** workspace token supplied exactly as saved:
+
+```sh
+delegate models --root ABS --provider PROFILE --cwd CANONICAL_PROJECT --expected-root ROOT_TOKEN --expected-workspace-file /absolute/private/workspace-token --relative-project team/service --json
+```
+
+The three selection guards are required together. The token file is a regular
+file containing the exact opaque token bytes, at most 1 MiB; it is not JSON and
+has no added newline. Do not decode, regenerate or synthesize tokens. A supplied
+`--cwd` must match the derived canonical project; omission derives it from the
+selection. This new route rejects legacy physical approvals and accepts no raw
+project token, origin or historical project digest.
+
+Native saves the derived originless path `ConnectorContext` in the canonical
+inspection request. The worker reacquires the selected path and starts each
+provider command through the existing project-aware lifetime and child gate;
+a conflicting cwd, missing project-aware lifetime or custody/finish failure
+cannot yield accepted model facts. Same-path replacement remains supported.
+Setup and process work use the same persisted absolute inspection deadline;
+there is no renewed budget or second process owner. Ordinary unguarded `models`
+keeps its existing behavior. Model discovery remains explicit, finite and
+advisory; it may probe a provider and record inspection evidence without admitting
+a provider task.
+
 ## Guarded task operations
 
 ```sh
@@ -204,9 +276,10 @@ delegate cancel TASK --id CONTROL_ID --expected-root ROOT_TOKEN \
 nothing. Existing-task `resolve`, `status`, `collect`, `cancel`, and `result read`
 also accept `--expected-spec-sha256`; it is checked against the canonical request
 before task control, publication, or result bytes. Existing recovery requires it.
-Dispatch rejects this flag before preparation. Guarded dispatch uses an explicit provider and project; alternate
-routing, continuation, managed workspace selection and Team selection are
-rejected. Ordinary commands without guards preserve existing behavior.
+Dispatch rejects this flag before preparation. Guarded dispatch uses an explicit
+provider and project; alternate routing, managed workspace selection and Team
+selection are rejected. Guarded continuation has its own successor contract below.
+Ordinary commands without guards preserve existing behavior.
 
 `ORIGIN_JSON` is a strict JSON file, or `-` for stdin:
 
@@ -221,14 +294,29 @@ The first four values contain 1..128 ASCII letters, digits, `.`, `_`, `:` or
 `brief_sha256`, `root_token`, `project_token` and `execution_options`.
 The spec digest identifies the actual canonical request bytes.
 
+Origin additionally accepts optional `binding`: immutable opaque UTF-8 text,
+without NUL, bounded by the existing 1 MiB control-record limit. The encoded
+Origin input must also fit that limit. Native advertises executable capability
+`origin-binding-v1`; it does not interpret Gateway's binding format or add a
+root-required feature. Absent/empty binding preserves historical canonical bytes.
+Once binding-bearing records exist, older strict readers cannot read them;
+root-wide inventory and upgrade recovery can fail. Keep a binding-capable
+installation for that root and use the supported upgrade handoff before replacing
+writers. This is not a new root migration or permission to mix incompatible writers.
+
 `execution_options` projects `provider`, `permission` (canonical request mode),
 exact `budget_nanoseconds` (signed 64-bit positive nanoseconds), and requested
 `model` and `effort` selections. Each selection is `{kind: "explicit", value:
 "..."}` or `{kind: "native_default"}`. These report canonical requested
 configuration, not a resolved native default. There are no briefs, project
 paths or environment values in this projection. Before resuming, a connector
-must compare the spec identity and these options against its current local
-provider/permission/budget allowance.
+must compare the spec identity. Legacy correlations also compare the retained
+requested options. A Gateway compact binding instead commits original caller
+intent without reconstructing it from this receipt; bodyless existing-only
+recovery still validates the exact canonical Native spec. Native owns execution
+validity and defaults. Gateway and the
+connector retain routing/authorization and resource limits; they add no provider,
+model, effort, permission or budget policy ceiling.
 
 Passive resolve never submits or repairs. `connector.resolution` is `existing`,
 `absent`, `unresolved` or `permanently_refused`. Absence is not permission to
@@ -270,6 +358,49 @@ When combining a native cancel response with a separate canonical observation,
 match their nonempty root IDs, the requested task ID and the cancellation ID
 before accepting stop evidence. Ordinary cancellation uses the common response
 fields; it does not supply a connector receipt itself.
+
+## Historical project guards
+
+Existing-task observation, cancellation, result access and recovery can use
+`--expected-project-sha256 SHA` instead of raw `--expected-project TOKEN`.
+The SHA is over the exact saved opaque token bytes. Supply one representation,
+not both; do not regenerate a token from its decoded path. This lets historical
+controls compare the saved binding after the project disappears. It does not
+select a fresh project or authorize fresh dispatch/scoped model discovery.
+The live Native root and the original origin/spec guards still apply.
+
+## Guarded Native continuation
+
+The candidate supports an explicit successor ID and fresh successor origin:
+
+```sh
+delegate continue --root ABS --task PREDECESSOR --id SUCCESSOR --brief /absolute/brief.txt --expected-root ROOT_TOKEN --expected-project-sha256 PROJECT_TOKEN_SHA --expected-origin /absolute/private/predecessor-origin.json --expected-spec-sha256 PREDECESSOR_SPEC_SHA --origin /absolute/private/successor-origin.json --json
+```
+
+IDs are distinct 32-character lowercase hex values. Expected origin/spec/project
+identify the predecessor; `--origin` identifies the fresh successor. Native
+validates the predecessor and inherits its frozen project/workspace constraint
+before reserving the successor. A predecessor spec digest is never reused as
+the successor spec. Keep the same successor ID and both origin files across
+uncertainty; observe/recover that operation instead of creating another task.
+Normal local continuation keeps its existing behavior.
+
+The Gateway candidate implements `prepare_continuation`, followed by its existing
+`dispatch_task` confirmation. These Native flags and local tests do not prove
+deployed cloud continuation parity. The [Gateway verification record](https://github.com/hishamkaram/delegation-layer-gateway/blob/main/docs/verification.md)
+identifies the exact paired-process, installed-provider and Cloud scenarios
+tested; those observations do not establish other revisions, clients or providers.
+
+Binding-present control output keeps full Outcome, receipts, descriptors/ranges,
+closure, fresh stop and structured failure data in a 4 MiB response envelope.
+Auxiliary fields and the human `failure.recovery_command` hint are omitted.
+Overflow reports a fixed diagnostic with nonzero exit and no partial JSON.
+Ordinary and schedule limits stay unchanged. Native retains top-level
+`execution_assurance` and `result_range` for its own CLI consumers; the current
+Gateway strict DTO does not accept them. Gateway does not request the assurance
+flag and uses guarded `connector.result_range` instead. Inventory retains its
+existing canonical bytes and membership hashing; it does not infer this output
+projection from returned entries.
 
 ## Execution closure and quota release
 

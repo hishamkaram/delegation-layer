@@ -54,6 +54,7 @@ type GatewayOrigin struct {
 	OperationID          string `json:"operation_id"`
 	PrincipalRef         string `json:"principal_ref"`
 	GatewayRequestSHA256 string `json:"gateway_request_sha256"`
+	Binding              string `json:"binding,omitempty"`
 }
 
 // DirectoryIdentity records either a legacy physical binding or a canonical
@@ -133,6 +134,9 @@ func ValidateGatewayOrigin(origin GatewayOrigin) error {
 		if err := ValidateConnectorID(id); err != nil {
 			return err
 		}
+	}
+	if len(origin.Binding) > MaxControlRecordSize || !utf8.ValidString(origin.Binding) || strings.ContainsRune(origin.Binding, '\x00') {
+		return fmt.Errorf("%w: invalid origin binding", ErrIdentityMismatch)
 	}
 	return ValidateSHA256(origin.GatewayRequestSHA256)
 }

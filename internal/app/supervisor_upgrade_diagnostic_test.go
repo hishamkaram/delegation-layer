@@ -12,12 +12,62 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hishamkaram/delegation-layer/internal/app/infrastructurehost"
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
 	supervisorcore "github.com/hishamkaram/delegation-layer/internal/supervisor"
 	"github.com/hishamkaram/delegation-layer/internal/supervisor/infrastructure"
 	supervisorfixture "github.com/hishamkaram/delegation-layer/internal/supervisor/testsupport"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 )
+
+func TestSupervisorUpgradeAcceptedTargetRefreshRequiresReview(t *testing.T) {
+	binding := task.SupervisorRef{ClientExecutable: "/private/pueue", DaemonExecutable: "/private/pueued", ConfigPath: "/private/state/.supervisor/pueue.yml", ConfigDigest: strings.Repeat("b", 64), ResolvedConfigSHA256: strings.Repeat("c", 64), Endpoint: "unix:/private/socket", ObservedVersion: "pueue 4.0.4", ExecutableIdentity: task.ExecutableIdentityInstalledPathV1}
+	operation := "upgrade-v1:" + strings.Repeat("a", 32)
+	outcome := infrastructure.UpgradeOutcome{
+		Condition:  infrastructure.UpgradePending,
+		ReasonCode: infrastructurehost.UpgradeOwnerRefreshSuccessorStartAccepted,
+		Preflight:  infrastructure.UpgradePreflight{State: infrastructure.UpgradePreflightPassed},
+		Report: infrastructure.UpgradeReport{
+			OperationID: infrastructure.UpgradeOperationID(operation), Mode: infrastructure.UpgradeOperationRequired,
+			Phase: infrastructure.UpgradeMigrating, Predecessor: binding,
+		},
+	}
+	for _, arguments := range []Arguments{
+		{SupervisorRefreshOwner: true},
+		{SupervisorCompleteUpgrade: operation},
+		{SupervisorCompleteUpgrade: operation, SupervisorRefreshOwner: true},
+	} {
+		result := finishSupervisorUpgrade(arguments, newSupervisorCommandResponse("ensure-owner"), outcome, nil)
+		control := result.response.SupervisorControl
+		if result.err != nil || result.code != 3 || control.NextAction != "stop_and_report" || control.ReasonCode != outcome.ReasonCode || control.Upgrade == nil || control.Upgrade.OperationID != operation || len(control.Upgrade.CompletionCommand) != 0 {
+			t.Fatalf("accepted target proposed refresh/retry or lost exact operation: code=%d control=%+v err=%v", result.code, control, result.err)
+		}
+		diagnostic := newSupervisorCommandResponse("status")
+		diagnostic.SupervisorControl.MigrationReadiness = "ready"
+		result = finishSupervisorUpgradeDiagnostic(result, commandResult{response: diagnostic})
+		if result.response.SupervisorControl.NextAction != "stop_and_report" || result.response.SupervisorControl.Upgrade.OperationID != operation {
+			t.Fatal("later queue diagnostic replaced accepted-target refusal with retry guidance")
+		}
+	}
+}
+
+func TestSupervisorMigrationPreservesAcceptedStartReviewReason(t *testing.T) {
+	for _, reason := range []string{infrastructurehost.UpgradeOwnerRefreshSuccessorStartAccepted, "successor_birth_unknown"} {
+		t.Run(reason, func(t *testing.T) {
+			cause := &pueue.PrivateUpgradeError{ReasonCode: reason, Err: pueue.ErrPrivateUpgradePending}
+			result := supervisorMigrationFailure(newSupervisorCommandResponse("migrate"), errors.Join(cause, os.ErrPermission))
+			control := result.response.SupervisorControl
+			if result.code != 1 || control.ReasonCode != reason || control.NextAction != "stop_and_report" || control.FirstBlocker == nil || control.FirstBlocker.Kind != "upgrade" || control.FirstBlocker.ReasonCode != reason || control.FirstBlocker.NextAction != "stop_and_report" || !errors.Is(result.err, pueue.ErrPrivateUpgradePending) || !errors.Is(result.err, os.ErrPermission) {
+				t.Fatalf("migration lost review disposition or a concrete fault: code=%d control=%+v err=%v", result.code, control, result.err)
+			}
+		})
+	}
+	privateReason := "private-unrecognized-reason-canary"
+	result := supervisorMigrationFailure(newSupervisorCommandResponse("migrate"), &pueue.PrivateUpgradeError{ReasonCode: privateReason, Err: pueue.ErrPrivateUpgradePending})
+	if result.response.SupervisorControl.ReasonCode == privateReason || result.response.SupervisorControl.NextAction != "stop_and_report" {
+		t.Fatal("unrecognized private metadata became public upgrade guidance")
+	}
+}
 
 func TestSupervisorUpgradeStatusUnavailablePredecessorPreservesDrain(t *testing.T) {
 	for _, endpoint := range []string{"absent", "refused"} {

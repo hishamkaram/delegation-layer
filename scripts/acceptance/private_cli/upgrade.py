@@ -255,7 +255,8 @@ def require_pending_successor(pending_libexec, state, supervisor):
     """Validate the reversible installed proposal without editing its executable paths."""
     migration = read_json(supervisor / "migration.json")
     require(not any(migration.get(name, False) for name in
-                    ("legacy_shutdown_requested", "legacy_shutdown_dispatched", "legacy_stopped")),
+                    ("legacy_shutdown_requested", "legacy_shutdown_dispatched",
+                     "legacy_shutdown_acknowledged", "legacy_stopped")),
             "native migration crossed shutdown before its active-work refusal")
     require(migration.get("legacy_pid", 0) == 0 and migration.get("legacy_process_start", "") == "",
             "native migration captured shutdown provenance before its active-work refusal")

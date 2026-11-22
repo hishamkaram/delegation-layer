@@ -245,7 +245,7 @@ func assertHistoricalInstalledMigrationCompleted(t *testing.T, fixture *historic
 	migration := history.Migrations[0]
 	assertHistoricalDaemonIdentity(t, "historical predecessor", migration.Legacy, fixture.predecessor)
 	assertHistoricalDaemonIdentity(t, "installed successor", migration.Successor, published)
-	if migration.LegacyPID != predecessorPID || !migration.LegacyShutdownDispatched || !migration.LegacyStopped {
+	if migration.LegacyPID != predecessorPID || !migration.LegacyShutdownDispatched || !migration.LegacyShutdownAcknowledged || !migration.LegacyStopped {
 		t.Fatalf("migration lost actual predecessor shutdown evidence: %+v", migration)
 	}
 	if starts := string(readSupervisorProbeTestFile(t, fixture.daemonStartLog)); starts != "A\nB\n" {
@@ -1941,7 +1941,7 @@ func prepareStoppedInspectionMigration(t *testing.T, scenario *historicalInspect
 	var phase historicalPrivateMigrationRecord
 	readHistoricalRecord(t, filepath.Join(fixture.root, ".supervisor", "migration.json"), &phase)
 	waits := fixture.component.daemonWaits()
-	if len(waits) != 1 || phase.LegacyPID != waits[0].pid || phase.LegacyProcessStart == "" || !phase.LegacyShutdownRequested || !phase.LegacyShutdownDispatched || !phase.LegacyStopped {
+	if len(waits) != 1 || phase.LegacyPID != waits[0].pid || phase.LegacyProcessStart == "" || !phase.LegacyShutdownRequested || !phase.LegacyShutdownDispatched || !phase.LegacyShutdownAcknowledged || !phase.LegacyStopped {
 		t.Fatalf("migration lacks actual predecessor shutdown provenance: %+v", phase)
 	}
 	assertHistoricalDaemonIdentity(t, "pinned successor", phase.Successor, scenario.successorGroup.Supervisor)

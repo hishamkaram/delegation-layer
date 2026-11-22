@@ -2,6 +2,7 @@ package infrastructurehost
 
 import (
 	"context"
+	"os"
 
 	"github.com/hishamkaram/delegation-layer/internal/supervisor/infrastructure"
 )
@@ -12,6 +13,24 @@ import (
 type Invocation struct {
 	source infrastructure.InvocationSource
 	err    error
+}
+
+// ValidateUpgrade checks the original capture before maintenance replay or work.
+// It never recaptures a caller or removes its contained invocation origin.
+func (i *Invocation) ValidateUpgrade(ctx context.Context) error {
+	if i == nil || ctx == nil {
+		return os.ErrInvalid
+	}
+	if _, finite := ctx.Deadline(); !finite {
+		return os.ErrInvalid
+	}
+	if i.err != nil {
+		return i.err
+	}
+	if _, nested := i.source.Origin(); nested {
+		return infrastructure.ErrOwnerRequest
+	}
+	return ctx.Err()
 }
 
 func CaptureInvocation(ctx context.Context) *Invocation {

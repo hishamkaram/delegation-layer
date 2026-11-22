@@ -97,18 +97,27 @@ func runModelCommand(scope execution.PreflightScope, definition provider.Inspect
 	if input != nil {
 		cmd.Stdin = input
 	}
-	startErr := scope.StartCommand(cmd, func() error { return hooks.startCommand(cmd) })
+	started := false
+	startErr := scope.StartCommand(cmd, func() error {
+		commandErr := hooks.startCommand(cmd)
+		started = commandErr == nil
+		return commandErr
+	})
 	closeErr := errors.Join(stdout.writer.Close(), stderr.writer.Close())
 	if input != nil {
 		closeErr = errors.Join(closeErr, input.Close())
 	}
-	var waitErr error
-	if startErr == nil {
+	var waitErr, finishErr error
+	// Preserve the owned Wait after a later scope cleanup/control failure.
+	if started {
 		waitErr = hooks.waitCommand(cmd)
-		waitErr = errors.Join(waitErr, scope.FinishCommand(cmd))
+		finishErr = scope.FinishCommand(cmd)
+	}
+	if startErr == nil && !started {
+		startErr = errNativeInspection
 	}
 	stdoutErr, stderrErr := <-stdout.done, <-stderr.done
-	if errors.Join(startErr, closeErr, stdoutErr, stderrErr, ctx.Err()) != nil {
+	if errors.Join(startErr, closeErr, finishErr, stdoutErr, stderrErr, ctx.Err()) != nil {
 		clear(stdout.buffer.bytes)
 		clear(stderr.buffer.bytes)
 		return modelCommandResult{}, errNativeInspection

@@ -3,9 +3,11 @@ package app
 import (
 	"context"
 	"errors"
+	"os"
 	"strings"
 	"time"
 
+	"github.com/hishamkaram/delegation-layer/internal/app/infrastructurehost"
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
 	"github.com/hishamkaram/delegation-layer/internal/supervisor"
 	"github.com/hishamkaram/delegation-layer/internal/supervisor/infrastructure"
@@ -25,24 +27,44 @@ type SupervisorUpgradeResponse struct {
 }
 
 func supervisorEnsureOwner(a Arguments, deps Dependencies) (result commandResult) {
+	return supervisorEnsureOwnerContext(context.Background(), a, deps.withCapturedEnvironment(), "")
+}
+
+func supervisorEnsureOwnerContext(parent context.Context, a Arguments, deps Dependencies, expectedRoot string) (result commandResult) {
 	response := newSupervisorCommandResponse("ensure-owner")
+	if parent == nil {
+		return failedSupervisorCause(response, "supervisor upgrade context is unavailable", os.ErrInvalid, 1)
+	}
+	options := supervisorControlOptions(deps)
+	ctx, cancel := supervisor.ControlContextWithParent(parent, options)
+	defer cancel()
+	if err := deps.invocationSource.ValidateUpgrade(ctx); err != nil {
+		return failedSupervisorCause(response, "supervisor upgrade invocation is unavailable", err, 1)
+	}
 	root, err := tasklifecycle.ResolveRoot(a.Root)
 	if err != nil {
 		return failedSupervisorCause(response, "supervisor root is unavailable", err, 1)
 	}
-	options := supervisorControlOptions(deps)
-	ctx, cancel := supervisor.ControlContext(options)
-	defer cancel()
-	plain := !a.SupervisorPrepareUpgrade && a.SupervisorCompleteUpgrade == "" && !a.SupervisorRefreshOwner
+	plain := expectedRoot == "" && !a.SupervisorPrepareUpgrade && a.SupervisorCompleteUpgrade == "" && !a.SupervisorRefreshOwner
 	store, bootstrap, err := openSupervisorUpgradeStore(ctx, root, deps, plain)
 	if err != nil {
 		return failedSupervisorCause(response, "upgrade requires a valid existing root", err, 1)
 	}
 	if bootstrap {
-		return supervisorBootstrapOwner(a, deps)
+		return supervisorBootstrapOwner(ctx, a, deps)
 	}
 	defer func() { mergeCommandClose(&result, store.Close) }()
 	response.RootID = store.RootID
+	if expectedRoot != "" {
+		observed, tokenErr := store.RootTokenContext(ctx)
+		if tokenErr != nil || observed != expectedRoot {
+			return failedSupervisorCause(response, "supervisor root identity changed", errors.Join(task.ErrIdentityMismatch, tokenErr), 1)
+		}
+	}
+	return supervisorEnsureOpened(ctx, a, deps, store)
+}
+
+func supervisorEnsureOpened(ctx context.Context, a Arguments, deps Dependencies, store *taskdir.Store) commandResult {
 	request := infrastructure.UpgradeRequest{Action: infrastructure.UpgradeEnsure}
 	if a.SupervisorRefreshOwner && !a.SupervisorPrepareUpgrade && a.SupervisorCompleteUpgrade == "" {
 		request.Action = infrastructure.UpgradeStatus
@@ -53,14 +75,25 @@ func supervisorEnsureOwner(a Arguments, deps Dependencies) (result commandResult
 	if a.SupervisorCompleteUpgrade != "" {
 		request.Action = infrastructure.UpgradeComplete
 		request.OperationID = infrastructure.UpgradeOperationID(a.SupervisorCompleteUpgrade)
+	}
+	return supervisorEnsureRequestOpened(ctx, a, deps, store, request, a.SupervisorRefreshOwner)
+}
+
+// The Gateway bridge selects an explicit owner intent after validating the
+// same opened root. Public refresh-only arguments retain their Status meaning.
+func supervisorEnsureRequestOpened(ctx context.Context, a Arguments, deps Dependencies, store *taskdir.Store, request infrastructure.UpgradeRequest, refresh bool) commandResult {
+	response := newSupervisorCommandResponse("ensure-owner")
+	response.RootID = store.RootID
+	options := supervisorControlOptions(deps)
+	if request.Action == infrastructure.UpgradeComplete {
 		observed, done, observeErr := observeSupervisorUpgradeCompletion(ctx, store, request.OperationID)
 		if done || observeErr != nil {
 			return finishSupervisorUpgrade(a, response, observed, observeErr)
 		}
 	}
 	control := supervisor.ControlRuntime{Options: options, Lookup: deps.supervisorLookup(), Routing: deps.infrastructureRouting()}
-	outcome, err := control.UpgradeOwn(ctx, store, request, a.SupervisorRefreshOwner)
-	result = finishSupervisorUpgrade(a, response, outcome, err)
+	outcome, err := control.UpgradeOwn(ctx, store, request, refresh)
+	result := finishSupervisorUpgrade(a, response, outcome, err)
 	if outcome.Report.Phase == infrastructure.UpgradeDraining {
 		diagnostic := supervisorMaintenanceDiagnostic(ctx, store, deps, options)
 		result = finishSupervisorUpgradeDiagnostic(result, diagnostic)
@@ -174,11 +207,6 @@ func observeSupervisorUpgradeCompletion(ctx context.Context, store *taskdir.Stor
 		return infrastructure.UpgradeOutcome{}, true, errors.Join(pueue.ErrPrivateUpgradeNotRetained, err)
 	}
 	outcome := infrastructure.UpgradeOutcome{Condition: infrastructure.UpgradeOK, Preflight: infrastructure.UpgradePreflight{State: infrastructure.UpgradePreflightPassed}, Report: infrastructure.UpgradeReport{OperationID: operation, Mode: infrastructure.UpgradeMode(observed.Mode), Phase: infrastructure.UpgradePhase(observed.Phase), Predecessor: observed.Predecessor, Completed: observed.Completed}}
-	if observed.Phase == pueue.UpgradeDraining {
-		outcome.Condition = infrastructure.UpgradePending
-		outcome.ReasonCode = "drain_incomplete"
-		return outcome, true, outcome.Validate()
-	}
 	return outcome, observed.Completed, outcome.Validate()
 }
 
@@ -230,7 +258,7 @@ func finishSupervisorUpgrade(a Arguments, response Response, outcome infrastruct
 func upgradeStartRequiresReview(reason string) bool {
 	switch reason {
 	case "predecessor_birth_unknown", "predecessor_boot_changed", "predecessor_boot_unknown", "predecessor_wait_closed", "predecessor_not_ready", "predecessor_pid_mismatch", "predecessor_pair_missing",
-		"successor_birth_unknown", "successor_boot_changed", "successor_wait_closed", "successor_pid_mismatch", "successor_not_ready":
+		"successor_birth_unknown", "successor_boot_changed", "successor_wait_closed", "successor_pid_mismatch", "successor_not_ready", infrastructurehost.UpgradeOwnerRefreshSuccessorStartAccepted:
 		return true
 	default:
 		return false

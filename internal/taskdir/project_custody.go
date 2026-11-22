@@ -52,6 +52,15 @@ func (l *RunnerLease) ValidateProject(ctx context.Context) error {
 	return l.state.validateBorrowedProject(ctx, project)
 }
 
+// ValidateProject uses the runner's shared custody state, including sticky
+// faults observed by an earlier borrow.
+func (p *StartPermit) ValidateProject(ctx context.Context) error {
+	if p == nil {
+		return task.ErrInvalidPermit
+	}
+	return p.RunnerLease().ValidateProject(ctx)
+}
+
 func (s *leaseState) borrowProject(ctx context.Context, permit *permitState, required bool) (*ConnectorContextLease, error) {
 	if ctx == nil {
 		return nil, context.Canceled

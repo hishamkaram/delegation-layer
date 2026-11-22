@@ -105,7 +105,8 @@ def migration_expectation(facts: dict[str, object], *, active: bool) -> Migratio
         if not isinstance(pending, dict) or type(pending.get("schema_version")) is not int or pending["schema_version"] != 1:
             raise RuntimeError("modern migration journal has an invalid schema")
         flags = (pending.get(field, False) for field in
-                 ("legacy_shutdown_requested", "legacy_shutdown_dispatched", "legacy_stopped"))
+                 ("legacy_shutdown_requested", "legacy_shutdown_dispatched",
+                  "legacy_shutdown_acknowledged", "legacy_stopped"))
         if any(type(flag) is not bool or flag for flag in flags) or pending.get("legacy_pid", 0) != 0 or pending.get("legacy_process_start", ""):
             raise RuntimeError("modern migration crossed its prepared-only phase")
         legacy, successor = pending.get("legacy"), pending.get("successor")

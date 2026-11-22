@@ -26,10 +26,11 @@ func ParseUpgradeOperationID(value string) (UpgradeOperationID, error) {
 type UpgradeAction string
 
 const (
-	UpgradeStatus   UpgradeAction = "upgrade-status"
-	UpgradeEnsure   UpgradeAction = "upgrade-ensure"
-	UpgradePrepare  UpgradeAction = "upgrade-prepare"
-	UpgradeComplete UpgradeAction = "upgrade-complete"
+	UpgradeStatus       UpgradeAction = "upgrade-status"
+	UpgradeEnsure       UpgradeAction = "upgrade-ensure"
+	UpgradePrepare      UpgradeAction = "upgrade-prepare"
+	UpgradeComplete     UpgradeAction = "upgrade-complete"
+	UpgradeReadyCurrent UpgradeAction = "upgrade-ready-current"
 )
 
 type UpgradeRequest struct {
@@ -47,7 +48,7 @@ func (r UpgradeRequest) Validate() error {
 		if r.OperationID != "" {
 			return ErrIdentity
 		}
-	case UpgradeComplete:
+	case UpgradeComplete, UpgradeReadyCurrent:
 		if _, err := ParseUpgradeOperationID(string(r.OperationID)); err != nil {
 			return err
 		}

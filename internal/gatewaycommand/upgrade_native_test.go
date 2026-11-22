@@ -1,0 +1,299 @@
+package gatewaycommand
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"os"
+	"path/filepath"
+	"slices"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/hishamkaram/delegation-layer/internal/gatewayservice"
+	"github.com/hishamkaram/delegation-layer/internal/provider"
+	"github.com/hishamkaram/delegation-layer/internal/pueue"
+	"github.com/hishamkaram/delegation-layer/internal/supervisor/installation"
+	"github.com/hishamkaram/delegation-layer/internal/task"
+	"github.com/hishamkaram/delegation-layer/internal/taskdir"
+	"github.com/hishamkaram/delegation-layer/internal/workspacefiles"
+)
+
+type upgradePublicRunner struct {
+	root, rootToken, executable string
+	rootID                      string
+	statusRootID                *string
+	features                    []string
+	calls                       [][]string
+	scopesFailure               bool
+	requestPath                 string
+	binding                     installation.BindingObservation
+	readiness                   *nativeSupervisorControl
+}
+
+func (r *upgradePublicRunner) Run(ctx context.Context, executable string, args []string) (gatewayservice.Result, error) {
+	if err := ctx.Err(); err != nil {
+		return gatewayservice.Result{}, err
+	}
+	if executable != r.executable {
+		return gatewayservice.Result{}, task.ErrIdentityMismatch
+	}
+	r.calls = append(r.calls, slices.Clone(args))
+	value := nativeEnvelope{SchemaVersion: 1, RootID: r.rootID}
+	result := gatewayservice.Result{}
+	switch args[0] {
+	case "context":
+		if !slices.Equal(args, []string{"context", "inspect", "--root", r.root, "--json"}) {
+			return result, task.ErrIdentityMismatch
+		}
+		value.Command = "context"
+		value.Connector = &taskdir.ConnectorContextObservation{ContractVersion: 1, RootToken: r.rootToken, Features: r.features}
+	case "providers":
+		if !slices.Equal(args, []string{"providers", "--json"}) {
+			return result, task.ErrIdentityMismatch
+		}
+		value.Providers = []provider.Description{}
+	case "filesystem":
+		var err error
+		value, result.ExitCode, err = r.filesystem(args)
+		if err != nil {
+			return result, err
+		}
+	case "supervisor":
+		if !slices.Equal(args, []string{"supervisor", "status", "--root", r.root, "--json"}) {
+			return result, task.ErrIdentityMismatch
+		}
+		value.Command = "supervisor"
+		if r.statusRootID != nil {
+			value.RootID = *r.statusRootID
+		}
+		value.SupervisorControl = &nativeSupervisorControl{State: "ready", NextAction: "none", InstallationBinding: &r.binding}
+		if r.readiness != nil {
+			value.SupervisorControl = r.readiness
+		}
+	default:
+		return result, task.ErrIdentityMismatch
+	}
+	var err error
+	result.Stdout, err = json.Marshal(value)
+	return result, err
+}
+
+func (r *upgradePublicRunner) filesystem(args []string) (nativeEnvelope, int, error) {
+	if len(args) != 7 || !slices.Equal(args[:3], []string{"filesystem", "scopes", "--request"}) || !slices.Equal(args[4:], []string{"--root", r.root, "--json"}) {
+		return nativeEnvelope{}, 0, task.ErrIdentityMismatch
+	}
+	r.requestPath = args[3]
+	if err := r.checkRequest(); err != nil {
+		return nativeEnvelope{}, 0, err
+	}
+	value := nativeEnvelope{SchemaVersion: 1, Command: "filesystem"}
+	if r.scopesFailure {
+		value.Failure = json.RawMessage(`{"code":"unsupported"}`)
+		return value, 1, nil
+	}
+	value.Filesystem = &workspacefiles.Result{SchemaVersion: 1, Operation: workspacefiles.Scopes, ObservedAt: time.Now(), Scopes: &workspacefiles.ScopesResult{Scopes: []workspacefiles.ObservedScope{}}}
+	return value, 0, nil
+}
+
+func (r *upgradePublicRunner) checkRequest() error {
+	info, err := os.Stat(r.requestPath)
+	if err != nil || info.Mode().Perm() != 0o600 {
+		return errors.Join(task.ErrIdentityMismatch, err)
+	}
+	data, err := os.ReadFile(r.requestPath)
+	if err != nil {
+		return err
+	}
+	var request workspacefiles.Request
+	if err = task.DecodeStrict(data, &request); err != nil || request.ExpectedRoot != r.rootToken || request.Scope != (workspacefiles.Scope{}) {
+		return errors.Join(task.ErrIdentityMismatch, err)
+	}
+	return nil
+}
+
+func upgradePublicFixture(t *testing.T) (nativeInstallation, *upgradePublicRunner) {
+	t.Helper()
+	root, observed, err := rootContext(boundedTestContext(t), filepath.Join(t.TempDir(), "state"), commandDependencies(t, &commandClient{}).Predicates, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := taskdir.OpenExistingStoreMetadataContext(boundedTestContext(t), root, commandDependencies(t, &commandClient{}).Predicates)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rootID := store.RootID
+	if err = store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	runner := &upgradePublicRunner{rootID: rootID, root: root, rootToken: observed.RootToken, executable: "/selected/delegate", features: []string{task.WorkspaceFilesystemFeature, task.NativeExecutionOptionsFeature, task.ProjectTokenSHA256Feature, task.GuardedContinuationFeature, task.ScopedModelDiscoveryFeature}, binding: installation.BindingObservation{Relation: installation.BindingCurrent, Client: installation.RoleBindingObservation{SelectedAvailability: installation.AvailabilityPresent}, Daemon: installation.RoleBindingObservation{SelectedAvailability: installation.AvailabilityPresent}}}
+	return nativeInstallation{executable: runner.executable, runner: runner, dependencies: commandDependencies(t, &commandClient{})}, runner
+}
+
+func TestGatewayUpgradePublicPreflightRequiresFeaturesAndFunctionalScopes(t *testing.T) {
+	for _, missing := range []string{"none", task.WorkspaceFilesystemFeature, task.NativeExecutionOptionsFeature, task.ProjectTokenSHA256Feature, task.GuardedContinuationFeature, task.ScopedModelDiscoveryFeature, "functional scopes"} {
+		t.Run(missing, func(t *testing.T) { checkUpgradePublicPreflight(t, missing) })
+	}
+}
+
+func checkUpgradePublicPreflight(t *testing.T, missing string) {
+	t.Helper()
+	native, runner := upgradePublicFixture(t)
+	if missing == "functional scopes" {
+		runner.scopesFailure = true
+	} else {
+		runner.features = slices.DeleteFunc(runner.features, func(value string) bool { return value == missing })
+	}
+	err := native.Verify(boundedTestContext(t), runner.root, runner.rootToken)
+	if missing == "none" {
+		if err != nil || len(runner.calls) != 3 {
+			t.Fatalf("compatible public preflight failed: calls=%v err=%v", runner.calls, err)
+		}
+	} else if !errors.Is(err, ErrInstallationMigrationRequired) {
+		t.Fatalf("missing %s was accepted: %v", missing, err)
+	}
+	if runner.requestPath != "" {
+		if _, statErr := os.Lstat(runner.requestPath); !errors.Is(statErr, os.ErrNotExist) {
+			t.Fatalf("owned preflight request was retained: %v", statErr)
+		}
+	}
+}
+
+func TestGatewayUpgradeReadySupervisorNeedsNoNewOperation(t *testing.T) {
+	native, runner := upgradePublicFixture(t)
+	maintenance := &upgradeMaintenanceReply{}
+	native.dependencies.NativeMaintenance = maintenance
+	transition, err := native.Inspect(boundedTestContext(t), runner.root, runner.rootToken)
+	if err != nil || transition.Pending || transition.HandoffNeeded {
+		t.Fatalf("ready supervisor requested handoff: %+v %v", transition, err)
+	}
+	after, err := native.Ensure(boundedTestContext(t), runner.root, runner.rootToken, transition)
+	if err != nil || after != transition || len(runner.calls) != 0 || maintenance.request != (NativeMaintenanceRequest{Root: runner.root, ExpectedRoot: runner.rootToken}) {
+		t.Fatalf("ready supervisor caused mutation: %+v %v", runner.calls, err)
+	}
+}
+
+func TestGatewayUpgradeInspectUsesOnlyJournalAuthority(t *testing.T) {
+	native, runner := upgradePublicFixture(t)
+	runner.binding.Relation = installation.BindingDifferent
+	transition, err := native.Inspect(boundedTestContext(t), runner.root, runner.rootToken)
+	if err != nil || transition != (NativeTransition{}) || len(runner.calls) != 0 {
+		t.Fatalf("passive status became maintenance authority: %+v %v", transition, err)
+	}
+	// A different connector executable alone is not this source observation.
+	runner.binding.Relation = installation.BindingCurrent
+	runner.executable = "/other/selected/delegate"
+	native.executable = runner.executable
+	transition, err = native.Inspect(boundedTestContext(t), runner.root, runner.rootToken)
+	if err != nil || transition.HandoffNeeded {
+		t.Fatalf("connector pathname invented supervisor drift: %+v %v", transition, err)
+	}
+}
+
+func TestGatewayUpgradeNativeGuardRejectsDifferentOriginalRoot(t *testing.T) {
+	native, runner := upgradePublicFixture(t)
+	_, err := native.Inspect(boundedTestContext(t), runner.root, strings.Repeat("0", 64))
+	if !errors.Is(err, task.ErrIdentityMismatch) || len(runner.calls) != 0 {
+		t.Fatalf("different root reached public supervisor control: calls=%v err=%v", runner.calls, err)
+	}
+	if err = native.Verify(boundedTestContext(t), runner.root, strings.Repeat("0", 64)); !errors.Is(err, task.ErrIdentityMismatch) {
+		t.Fatalf("public context root mismatch became installation advice: %v", err)
+	}
+}
+
+func TestGatewayUpgradeUninitializedSupervisorStillRequiresInstalledPair(t *testing.T) {
+	native, runner := upgradePublicFixture(t)
+	runner.binding.Relation = installation.BindingNotInitialized
+	runner.binding.Daemon.SelectedAvailability = installation.AvailabilityMissing
+	err := native.VerifyReady(boundedTestContext(t), runner.root, runner.rootToken)
+	if !errors.Is(err, ErrInstallationMigrationRequired) {
+		t.Fatalf("missing selected pair was declared compatible: %v", err)
+	}
+}
+
+type upgradeMaintenanceReply struct {
+	request  NativeMaintenanceRequest
+	observed NativeTransition
+	cause    error
+}
+
+func (*upgradeMaintenanceReply) ValidateUpgrade(ctx context.Context) error { return ctx.Err() }
+
+func (m *upgradeMaintenanceReply) Ensure(ctx context.Context, request NativeMaintenanceRequest) (NativeTransition, error) {
+	m.request = request
+	return m.observed, errors.Join(m.cause, ctx.Err())
+}
+
+func TestGatewayUpgradeMaintenanceUsesAppPortAndPreservesFaults(t *testing.T) {
+	fault := errors.New("native storage fault")
+	for _, test := range []struct {
+		name    string
+		cause   error
+		pending bool
+	}{
+		{"ready without operation", nil, false},
+		{"busy without operation", ErrNativeUpgradePending, true},
+		{"hard fault", fault, false},
+		{"pending cancellation", errors.Join(ErrNativeUpgradePending, context.Canceled), false},
+		{"pending deadline", errors.Join(ErrNativeUpgradePending, context.DeadlineExceeded), false},
+		{"pending hard fault", errors.Join(ErrNativeUpgradePending, fault), false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			native, runner := upgradePublicFixture(t)
+			maintenance := &upgradeMaintenanceReply{cause: test.cause}
+			native.dependencies.NativeMaintenance = maintenance
+			observed, err := native.Ensure(boundedTestContext(t), runner.root, runner.rootToken, NativeTransition{HandoffNeeded: true})
+			if observed != (NativeTransition{}) || !errors.Is(err, test.cause) {
+				t.Fatalf("Native's zero-operation observation or error changed: observed=%+v err=%v", observed, err)
+			}
+			want := NativeMaintenanceRequest{Root: runner.root, ExpectedRoot: runner.rootToken}
+			if maintenance.request != want || len(runner.calls) != 0 {
+				t.Fatalf("maintenance escaped App's port: request=%+v commands=%v", maintenance.request, runner.calls)
+			}
+			if errors.Is(err, ErrInstallationMigrationRequired) {
+				t.Fatal("Native control fault became installation incompatibility")
+			}
+			if nativeUpgradePendingOnly(err) != test.pending {
+				t.Fatalf("mixed fault became clean Native pending: %v", err)
+			}
+		})
+	}
+}
+
+func TestGatewayUpgradeMaintenanceAttributesOnlyExactObservedOperation(t *testing.T) {
+	operation := "upgrade-v1:" + strings.Repeat("a", 32)
+	other := "upgrade-v1:" + strings.Repeat("b", 32)
+	fault := errors.New("native publication fault")
+	for _, test := range []struct {
+		name     string
+		observed NativeTransition
+		want     error
+	}{
+		{"known operation absent", NativeTransition{}, task.ErrEvidenceFault},
+		{"returned operation absent", NativeTransition{OperationID: operation, Phase: "migrating"}, task.ErrEvidenceFault},
+		{"different operation", NativeTransition{OperationID: other, Phase: "migrating"}, task.ErrRequestConflict},
+		{"invalid operation", NativeTransition{OperationID: "invalid"}, pueue.ErrPrivateUpgradeOperation},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			native, runner := upgradePublicFixture(t)
+			maintenance := &upgradeMaintenanceReply{observed: test.observed, cause: fault}
+			native.dependencies.NativeMaintenance = maintenance
+			observed, err := native.Ensure(boundedTestContext(t), runner.root, runner.rootToken, NativeTransition{OperationID: operation, Phase: "draining", Pending: true})
+			if !errors.Is(err, test.want) || !errors.Is(err, fault) || observed != test.observed {
+				t.Fatalf("exact operation/error attribution changed: observed=%+v err=%v", observed, err)
+			}
+			if maintenance.request.OperationID != operation || len(runner.calls) != 0 {
+				t.Fatal("exact operation was replaced by unbound or subprocess maintenance")
+			}
+		})
+	}
+}
+
+func TestGatewayUpgradeMaintenanceRequiresExplicitAuthority(t *testing.T) {
+	native, runner := upgradePublicFixture(t)
+	_, err := native.Ensure(boundedTestContext(t), runner.root, runner.rootToken, NativeTransition{HandoffNeeded: true})
+	if err == nil || errors.Is(err, ErrInstallationMigrationRequired) || len(runner.calls) != 0 {
+		t.Fatalf("missing App authority fell back to subprocess or migration advice: calls=%v err=%v", runner.calls, err)
+	}
+}

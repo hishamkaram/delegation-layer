@@ -15,19 +15,22 @@ func (m *Manager) managerStatus(ctx context.Context, installed bool) (Status, er
 
 func (m *Manager) macManagerStatus(ctx context.Context, installed bool) (Status, error) {
 	status := Status{Name: m.name, Installed: installed, State: StateUnknown}
-	result, err := m.invoke(ctx, "list", m.name)
+	code, err := m.probe(ctx, "print", m.target())
 	if err != nil {
 		return status, err
 	}
-	switch result.ExitCode {
+	switch code {
 	case 0:
 		if !installed {
 			return status, ErrForeignService
 		}
 		status.State = StateRegistered
 	case 113:
-		// Exact-label list's service-not-found disposition is verified on
-		// native macOS; other domain/permission/transport failures stay unknown.
+		// The target may disappear during logout. A missing label establishes
+		// dated absence only while the same user's GUI domain remains available.
+		if err = m.gui(ctx); err != nil {
+			return status, err
+		}
 		status.State = StateAbsent
 	default:
 		return status, ErrManager

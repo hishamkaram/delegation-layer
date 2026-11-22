@@ -278,6 +278,10 @@ type replacingDisableRunner struct {
 	path   string
 }
 
+func (r replacingDisableRunner) Probe(ctx context.Context, executable string, args []string) (int, error) {
+	return r.runner.Probe(ctx, executable, args)
+}
+
 func (r replacingDisableRunner) Run(ctx context.Context, executable string, args []string) (Result, error) {
 	result, err := r.runner.Run(ctx, executable, args)
 	if err == nil && slices.Contains(args, "disable") {

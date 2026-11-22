@@ -56,6 +56,8 @@ type PrivateUpgradeObservation struct {
 	Phase       UpgradePhase       `json:"phase"`
 	Predecessor task.SupervisorRef `json:"predecessor"`
 	Completed   bool               `json:"completed,omitempty"`
+	// Target is canonical completed-record metadata, never public JSON.
+	Target task.SupervisorRef `json:"-"`
 }
 
 type privateUpgradePair struct {
@@ -224,7 +226,7 @@ func observePrivateUpgradeRecords(ctx context.Context, root taskdir.RootPin, op 
 	for _, completed := range history.Migrations {
 		u := completed.UpgradeGeneration
 		if u.OperationID == op && u.Root == upgradeRootSubject(root) && u.Completed {
-			return PrivateUpgradeObservation{OperationID: op, Mode: u.Mode, Phase: UpgradeMigrating, Predecessor: u.Predecessor, Completed: true}, true, ctx.Err()
+			return PrivateUpgradeObservation{OperationID: op, Mode: u.Mode, Phase: UpgradeMigrating, Predecessor: u.Predecessor, Completed: true, Target: u.Target}, true, ctx.Err()
 		}
 	}
 	if err != nil {

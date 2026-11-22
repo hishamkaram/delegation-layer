@@ -21,6 +21,8 @@ import (
 
 // Arguments contains requested values only. Parsing grants no external authority.
 type Arguments struct {
+	Filesystem                FilesystemArguments
+	Models                    ScopedModelArguments
 	SettlementKind            string
 	SettlementPrepare         bool
 	SettlementConfirm         string
@@ -184,6 +186,10 @@ func registerCommandFlags(fs *flag.FlagSet, a *Arguments, watch *string) {
 		return
 	}
 	fs.BoolVar(&a.JSON, "json", false, "emit versioned JSON")
+	if a.Command == "filesystem" {
+		registerFilesystemFlags(fs, a)
+		return
+	}
 	if a.Command == "settle" {
 		fs.StringVar(&a.SettlementKind, "kind", "task", "local maintenance target: task or inspection")
 		fs.BoolVar(&a.SettlementPrepare, "prepare", false, "prepare an exact maintenance-only challenge without changing task state")
@@ -203,6 +209,7 @@ func registerCommandFlags(fs *flag.FlagSet, a *Arguments, watch *string) {
 		return
 	}
 	if a.Command == "models" {
+		registerScopedModelFlags(fs, a)
 		fs.StringVar(&a.Provider, "provider", "", "provider profile")
 		fs.StringVar(&a.Cwd, "cwd", "", "working directory (default: current directory)")
 		return
@@ -268,6 +275,8 @@ func (a *Arguments) validatePaths() error {
 
 func (a *Arguments) validateCommand(positional []string, watch string) error {
 	switch a.Command {
+	case "filesystem":
+		return validateFilesystemArguments(*a, positional)
 	case "context", "resolve", "result", "origin":
 		return validateConnectorArguments(a, positional)
 	case "help", "version", "providers", "tui":
@@ -275,15 +284,7 @@ func (a *Arguments) validateCommand(positional []string, watch string) error {
 	case "supervisor":
 		return a.validateSupervisor(positional)
 	case "scheduler":
-		if a.schedulerResident && (a.SchedulerAction != "run" || a.schedulerHostReadFD != 3 || a.schedulerHostWriteFD != 4) {
-			return errors.New("scheduler resident requires its exact inherited host channels")
-		}
-		switch a.SchedulerAction {
-		case "serve", "status", "stop", "run", "migrate":
-			return validateNoPositional("scheduler "+a.SchedulerAction, positional)
-		default:
-			return errors.New("scheduler requires serve, status, stop, run or migrate")
-		}
+		return a.validateSchedulerCommand(positional)
 	case "models":
 		return a.validateModels(positional)
 	case "capabilities":
@@ -296,6 +297,18 @@ func (a *Arguments) validateCommand(positional []string, watch string) error {
 		return validateTaskReviewArguments(a, positional)
 	}
 	return nil
+}
+
+func (a *Arguments) validateSchedulerCommand(positional []string) error {
+	if a.schedulerResident && (a.SchedulerAction != "run" || a.schedulerHostReadFD != 3 || a.schedulerHostWriteFD != 4) {
+		return errors.New("scheduler resident requires its exact inherited host channels")
+	}
+	switch a.SchedulerAction {
+	case "serve", "status", "stop", "run", "migrate":
+		return validateNoPositional("scheduler "+a.SchedulerAction, positional)
+	default:
+		return errors.New("scheduler requires serve, status, stop, run or migrate")
+	}
 }
 
 func (a *Arguments) validateSupervisor(positional []string) error {
@@ -324,6 +337,9 @@ func (a *Arguments) validateSupervisor(positional []string) error {
 func (a *Arguments) validateModels(positional []string) error {
 	if a.Cwd != "" && !filepath.IsAbs(a.Cwd) {
 		return errors.New("models --cwd must be absolute")
+	}
+	if err := validateScopedModelArguments(*a); err != nil {
+		return err
 	}
 	return validateCapabilities(positional, a.Provider)
 }
@@ -433,8 +449,34 @@ func (a *Arguments) validateContinue(positional []string) error {
 	if a.Brief != "" && !filepath.IsAbs(a.Brief) {
 		return errors.New("continue --brief must be an absolute path")
 	}
+	if err := a.validateContinuationIdentity(); err != nil {
+		return err
+	}
 	_, err := config.ParseBudget(a.Config.Budget)
 	return err
+}
+
+func (a *Arguments) validateContinuationIdentity() error {
+	if a.SuccessorTaskID != "" {
+		if err := task.ValidateTaskID(a.SuccessorTaskID); err != nil {
+			return err
+		}
+		if a.SuccessorTaskID == a.TaskID {
+			return errors.New("successor must differ from predecessor")
+		}
+	}
+	if hasConnectorGuards(a.Connector) {
+		if err := validateConnectorArguments(a, nil); err != nil {
+			return err
+		}
+		if a.SuccessorTaskID == "" || a.Connector.SuccessorOriginFile == "" || a.Connector.ExpectedSpecSHA256 == "" {
+			return errors.New("guarded continue requires successor id, fresh origin and expected predecessor spec")
+		}
+		if a.Connector.SuccessorOriginFile == "-" && a.Connector.OriginFile == "-" {
+			return errors.New("predecessor and successor origins cannot both consume stdin")
+		}
+	}
+	return nil
 }
 
 func (a *Arguments) validateTaskCommand(positional []string, watch string) error {
@@ -622,6 +664,7 @@ func registerAdmissionFlags(fs *flag.FlagSet, a *Arguments) {
 	fs.Var(guardFlag{disabled: &a.ResourceGuards.DisableMemory}, "memory-guard", "check memory pressure before fresh admission (default true)")
 	if a.Command == "continue" {
 		fs.StringVar(&a.TaskID, "task", "", "predecessor task ID")
+		fs.StringVar(&a.SuccessorTaskID, "id", "", "stable successor task ID")
 		fs.StringVar(&a.Brief, "brief", "", "optional follow-up brief file")
 		fs.StringVar(&a.Config.Budget, "budget", "", "finite continuation budget")
 		fs.StringVar(&a.Config.Model, "model", "", "continuation model override")

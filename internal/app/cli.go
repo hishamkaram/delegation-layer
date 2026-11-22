@@ -19,6 +19,7 @@ func leaf(name, summary, operands string) commandSpec {
 func commandTree() commandSpec {
 	return commandSpec{Register: argumentFlags(registerGlobalFlags), Notes: "\nTask results keep admission, liveness and publication independent.\n", Summary: "Manage bounded agent tasks and their evidence", Children: []commandSpec{
 		gatewaySpec(),
+		filesystemSpec(),
 		withFlags(commandSpec{Name: "tui", Summary: "Open the terminal workbench", Operands: "", Example: []string{"delegate", "tui"}, Notes: "\nRequires terminal stdin and stdout. Closing the workbench does not cancel admitted tasks or stop the independent scheduler host.\n", ExitNotes: "  3 forced exit with unresolved operations; signals use 128 + signal.\n"}, registerGlobalFlags),
 		{Name: "context", Summary: "Inspect or explicitly upgrade connector context", Children: []commandSpec{leaf("inspect", "Passively inspect pinned root and project", ""), leaf("initialize", "Create-only connector state without starting a supervisor", ""), leaf("enable-connector", "Explicit offline one-way root upgrade", "")}},
 		{Name: "resolve", Summary: "Passively resolve an immutable task or explicitly fence/recover it", Operands: "TASK_ID"},
@@ -109,6 +110,8 @@ func argumentsForPath(path []string) Arguments {
 		configureGatewayPath(&a.Gateway, path)
 	case "context", "result", "origin":
 		a.Connector.Action = path[1]
+	case "filesystem":
+		a.Filesystem.Operation = path[1]
 	case "supervisor":
 		a.SupervisorAction = path[1]
 	case "scheduler":
@@ -196,7 +199,6 @@ func (p *argumentParser) validate(fs *flag.FlagSet) error {
 	noteControlFlags(fs, a)
 	switch a.Command {
 	case "gateway":
-		a.Gateway.NoteFlags(fs)
 		if err := a.validatePaths(); err != nil {
 			return err
 		}

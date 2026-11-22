@@ -5,7 +5,9 @@ to reach this device from an MCP client. Delegate remains the task execution,
 supervision and result owner. Gateway authenticates callers and routes requests;
 it does not replace Delegate's task engine.
 
-Install a compatible Delegate release on the device. The Gateway operator first
+This guide describes the prepared Native 0.9.0 / Gateway 0.2.0 candidate, not a published release. Check the installed `delegate help gateway` before using these commands.
+
+Install a compatible Delegate build on the device. The Gateway operator first
 deploys HTTPS and device connectivity, configures identity and owner policy, and
 enables enrollment. Follow the [Gateway deployment guide](https://github.com/hishamkaram/delegation-layer-gateway/blob/main/docs/deployment.md)
 for those server-side steps. Examples below use an example hostname and existing
@@ -17,12 +19,11 @@ local directories; replace them with your own.
 delegate gateway connect https://gateway.example.com --name mac-home
 ```
 
-`--provider` is optional. Without it, connection saves defaults for the eligible
-provider profiles compiled into this Delegate installation: `read-only`, a
-maximum of 60 seconds, and each profile's permitted native model and effort
-defaults. These are request ceilings, not a check that a provider is installed
-or logged in. Profiles requiring an explicit model or effort are excluded unless
-that option is supplied with an explicit `--provider`.
+Connection records identity and routing only. It does not select or save a
+provider, model, effort, permission mode or execution budget. Those choices and
+their defaults belong to Native for each task. `connect` and `workspace` do not
+accept execution-policy flags. Omitted choices stay omitted until Native
+applies its defaults; finite Native task budgets remain required.
 
 Use `--name mac-home` to give the device a recognizable display name. Otherwise,
 the name defaults to the local hostname. The name can help an MCP client find
@@ -53,11 +54,9 @@ the Gateway operator's documented token workflow. Store it in an owned regular
 0600 file outside the checkout, or provide the JSON through stdin:
 
 ```sh
-delegate gateway connect https://gateway.example.com \
-  --token-file /absolute/private/enrollment.json
+delegate gateway connect https://gateway.example.com --token-file /absolute/private/enrollment.json
 
-delegate gateway connect https://gateway.example.com --token-file - \
-  < /absolute/private/enrollment.json
+delegate gateway connect https://gateway.example.com --token-file - < /absolute/private/enrollment.json
 ```
 
 Pass the file path or `-`, never the token value as an argument. Enrollment
@@ -91,16 +90,77 @@ on each command to select another profile; there is no hidden current-profile
 selection. Advanced installations can also select their existing root with
 `--root ABSOLUTE_DIRECTORY`.
 
-The profile fixes the selected installed executable's canonical path. A package
-upgrade that removes that path needs a reviewed offline migration; this feature
-does not transparently replace the executable or rebind saved source identity.
-No in-place source migration command is provided. Preserve the root, profile,
-credentials and task history, and review the migration before removing the
-selected installation. Ordinary Delegate upgrades retain their existing behavior.
-A newer installed Delegate can still inspect, stop or uninstall the exact saved
-service and request credential revocation. Those cleanup commands use the
-current executable as their helper without changing the saved service source.
-New installation or startup refuses a missing or redirected saved executable.
+The profile records the installed executable's canonical path and the original
+Native root. Use the supported upgrade owner when handing an existing profile
+to a newer installed binary or removing an old saved execution policy:
+
+```sh
+delegate gateway upgrade --preview --json
+delegate gateway upgrade --accept-execution-policy-removal --json
+```
+
+Preview reports profile migration counts and saved/current source selection;
+it performs no service or Native command and does not prove readiness. Review
+it before explicit acceptance. Preserve the same `--profile` and `--root` on
+both commands when using overrides. Quiesce the scheduler and other producers
+as described in [installation upgrades](cli-reference.md#installation-upgrades).
+
+Acceptance stops and uninstalls the owned connector service, uses Native's
+existing supervisor upgrade owner to complete the current inspection routing,
+then verifies admission readiness, the original root and required
+public contracts, removes obsolete execution-policy fields, and compares the
+saved source before selecting the current installed binary. It then reinstalls
+and starts the service. This explicit upgrade also authorizes completion of a
+retained, prepared Native handoff using the current installed pair; preview and
+status do not. Registration, credentials and their generation, original
+root, approvals including disabled entries/revisions, frozen pins and task
+history are preserved. No replacement root, copied executable, tmux session or
+repeat login is part of this migration.
+
+If Native's private supervisor has not been initialized, the upgrade preserves
+startup on first dispatch; it does not start a daemon just to verify the
+installation. Existing partial or conflicting state is reported explicitly.
+Current-readiness maintenance is internal to this command and needs no extra
+CLI flag or registration step.
+
+On macOS, accepted maintenance runs automatically in the same user's existing
+GUI session, including when invoked through SSH. Preview stays passive. The
+fixed-purpose maintenance job is separate from the normal connector and is not
+installed for login autostart. It preserves PATH from the validated
+managed service definition. A retained pending invocation preserves that PATH
+even after service removal; only an initial invocation without either source
+uses the invoking user's PATH. No other SSH environment or credentials are
+copied into the GUI session.
+
+Read `upgrade.phase`, `failure`, `next_action` and the Native supervisor
+observation together. Missing prerequisites and pending handoffs block progress;
+service startup does not prove cloud connectivity or provider readiness. Retry
+the same supported command only as its reported next action allows. Do not edit
+saved source paths, credentials or journals to bypass a refusal. See
+[Gateway upgrade troubleshooting](troubleshooting.md#gateway-upgrade-and-scope-errors).
+
+Once an invocation reports a Native operation, reconciliation retains that exact
+operation; it never substitutes a later one or relaunches an uncertain invocation.
+A clean `gateway_upgrade_pending` with phase `supervisor_maintenance_pending`
+has no attributed Native operation. After the reported blocker clears, repeat
+the accepted command explicitly with the same installation, root and profile.
+That new invocation can complete a compatible prepared handoff it observes;
+the earlier response remains unbound. There is no automatic retry.
+`gateway_upgrade_uncertain`
+requires inspection of the same profile. `gateway_upgrade_not_started` means
+the maintenance job exited before claiming the upgrade; after its recorded
+cleanup, the reported next action permits a new invocation of the same command.
+It preserves the saved source, PATH and any exact Native operation. A known
+installation-verification failure before Native maintenance also permits an
+explicit retry after correcting the installation. Ambiguous historical receipts
+remain uncertain; they are never reclassified as proof that nothing changed.
+`gateway_upgrade_review_required` preserves Native's `stop_and_report`, even
+when Native returned a pending exit code. Keep the reported operation and
+inspect its Native blocker; do not retry maintenance. An invalid private
+maintenance record reports `gateway_upgrade_record_invalid` and
+`stop_and_report`; do not delete records as repair. Same-path executable replacement still uses Native's
+[installation upgrade procedure](cli-reference.md#installation-upgrades).
+Gateway does not infer replacement from path equality or force a daemon reload.
 
 If only the native device number changed for the same original root path and
 inode, use [explicit root context repair](cli-reference.md#root-context-repair).
@@ -113,8 +173,7 @@ reports `root_cutover_required`, first stop older Delegate writers/frontends and
 drain their tasks. Then explicitly enable the feature on that same selected root:
 
 ```sh
-delegate context enable-connector --root /absolute/delegate/state \
-  --workspace-constrained --offline-cutover-confirmed --json
+delegate context enable-connector --root /absolute/delegate/state --workspace-constrained --offline-cutover-confirmed --json
 ```
 
 This is a one-way cutover: older strict Delegate versions refuse the upgraded
@@ -125,79 +184,57 @@ Retry the original connection after completing the cutover.
 
 ## Approve an existing workspace once
 
-No workspace is approved by default. Explicitly approve an existing local
-directory, such as a parent holding several projects:
+Approve an existing ancestor once, such as the parent holding several projects:
 
 ```sh
-delegate gateway workspace allow /absolute/work --alias work
+delegate gateway workspace allow /absolute/work
 delegate gateway workspace list --json
 ```
 
-`--provider` is optional on workspace approval too. A **new** approval without
-policy overrides copies the saved connection profile's provider, permission,
-model, effort and budget policy. This is a snapshot at approval time; later
-profile changes do not synchronize existing approvals. An existing narrowed
-workspace stays narrowed. Use the revision-checked update below to change its
-policy rather than repeating `allow`.
+Approval stores its canonical path and grants routing beneath that ancestor. It
+creates no projects or repositories and saves no provider or execution policy.
+New child projects need no separate approval. New cloud requests select a
+returned `scope_id` and relative project path; they do not require manual aliases
+or permanent project pins. `--alias` remains optional local display/legacy
+selection metadata.
 
-Approval records that directory's canonical path. Replacing or recloning the
-ancestor or a project at the same path is allowed. Approval does not scan
-projects, create directories or clone repositories. The default alias is the
-canonical directory's basename when it is a valid alias; otherwise supply
-`--alias`.
+Native automatically discovers the whole shared `/tmp` scope on Linux. On
+macOS it discovers the user's temporary directory using the fixed trusted
+`getconf DARWIN_USER_TEMP_DIR` lookup, plus shared `/tmp` (normally canonical
+`/private/tmp`), with canonical duplicates removed. These are whole scopes, not
+only Delegate-created temporary files. A discovery failure is reported; no
+arbitrary environment path is substituted and no manual temp alias is needed.
 
-Within this approved ancestor, a Gateway client can select an existing relative
-project, for example `team/service`. The connector asks Delegate to resolve and
-pin that exact project before admission. Creating another child project does not
-require approving the same ancestor again. Stable project handles retain the
-same canonical path across replacement and policy edits. Each new command
-selects the current directory at that path; an already running command keeps
-its original working directory. Replacement or removal alone does not invalidate
-its accepted result. Missing paths, traversal and escaping symlinks refuse new
-launches. A handle never switches devices or canonical paths.
+Within one selected scope, clients can list directories, read requested regular
+file bytes and inspect Git structural evidence. Hidden files, hard links,
+non-UTF-8 names and binary requested files are supported. No filename/content
+filter or secret scanner changes the requested data. Devices, FIFOs and sockets
+can be listed/inspected but are never opened as file content. Symlinks must stay
+inside that same selected scope, even if another scope is also approved. Git
+inspection reports candidates/partial evidence; it does not validate a repository
+with Git commands or establish repository trust.
 
-The path-binding feature requires `connector-path-project-v1` on the selected
-Native root. New Gateway roots enable it at creation; an existing root needs the
-explicit offline cutover described above. Existing physical-identity approvals
-keep their original checks. Replace such an approval explicitly once to adopt
-path semantics; restarting the service needs no new approval or project handle.
-The Native root guard remains strict: if a host restart changes its observed
-filesystem identity, connection fails closed and needs explicit operator
-reconciliation. No task history or saved guard is silently rewritten.
+New commands reacquire the current directory at the approved canonical path;
+same-path replacement or recloning is allowed. An already running command keeps
+its original cwd. Missing paths, traversal and escaping symlinks refuse new
+launches. Native root identity stays exact. Older physical approvals keep their
+original checks; replace one explicitly once to adopt path semantics. Existing
+roots require the [offline cutover](#native-root-and-profile) before path-bound
+operations. Approval and provider read-only mode are not an OS sandbox.
 
-To limit a **new** workspace to Claude only, use this alternative approval
-instead of the provider-free `allow` command above:
-
-```sh
-delegate gateway workspace allow /absolute/work --alias work \
-  --provider claude:print
-```
-
-This limits the new workspace's provider set; it does not test Claude login.
-You can also set `--provider claude:print` when connecting to save Claude-only
-defaults for future approvals. Omitting `--provider` later does not automatically
-broaden a previously narrowed profile or workspace.
-
-An explicit `--model` or `--effort` also requires one explicit `--provider`.
-Gateway's server-side owner policy and the local workspace ceiling must both
-permit a request. Neither a workspace approval nor read-only
-provider mode is an OS sandbox; trusted providers retain their native account
-and filesystem access.
-
-Read the workspace ID and revision from `workspace list`. Revise its alias or
-ceiling with that exact revision:
+Only display metadata can be revised; use the actual returned workspace ID and
+revision, rather than assuming these example numbers:
 
 ```sh
-delegate gateway workspace update WORKSPACE_ID --expected-revision 1 \
-  --max-budget 60s
+delegate gateway workspace update WORKSPACE_ID --expected-revision 1 --alias work
 delegate gateway workspace remove WORKSPACE_ID --expected-revision 2
 ```
 
-Use the actual returned revision rather than assuming these example numbers.
-Concurrent edits fail explicitly. An update preserves omitted policy fields and
-cannot retarget the approved directory. Removal disables fresh work and retains
-history and frozen pins for safe status, result retrieval and cancellation. It
-does not cancel existing tasks or delete their results.
+Updates cannot retarget the approved directory. Removal disables fresh routing
+and retains history/frozen pins for observation, retrieval and cancellation. It
+does not cancel existing tasks or delete their results. Native alone validates
+provider/model/effort/permission/budget choices for every task; discovery is
+advisory and never vetoes an explicit model ID merely because it is unlisted.
 
 ## Observe credentials and local prerequisites
 
@@ -216,7 +253,7 @@ connection, then explicitly select the intended device and project.
 Gateway commands support `--json` for a versioned response with explicit
 `failure` and `next_action` on error. Exit `0` means that command succeeded,
 `1` reports an operational failure, `2` reports invalid arguments, and `3`
-reports a qualified busy profile or an unconfirmed connector stop. Joined
+reports a qualified busy profile, pending installation handoff or unconfirmed connector stop. Joined
 storage, identity, manager or cleanup faults remain operational failures, even
 when the stop also remains unconfirmed. Inspect the response;
 command success alone is not a provider readiness or task closure claim.
@@ -225,28 +262,42 @@ command success alone is not a provider readiness or task closure claim.
 
 After connecting and approving a workspace, a prompt can name the device:
 
-> On mac-home, use workspace work and project team/service. Ask Claude to read
-> the project and summarize it, read-only, with a 60-second budget.
+> On mac-home, browse the approved work scope, select team/service, and ask
+> Claude to summarize it read-only with a 60-second budget.
 
-The client must call `list_devices`, find one unambiguous matching device name,
-and use its returned `device_id` when selecting that device in tool calls.
-Tool inputs still require the ID. If names are duplicated or the device is
-offline, stop and ask for the intended device rather than guessing or switching
-devices.
+The client calls `list_devices`, finds one unambiguous name and uses its returned
+`device_id`. Workspace inventory supplies scopes; file tools take a scope ID and
+relative path. `get_capabilities` reports actual Native provider contracts;
+explicit `list_models` pages advisory model/effort facts and may perform Native
+inspection. It is not run implicitly by capability discovery. Explicit Native
+execution options are forwarded to task preparation; omissions retain Native
+defaults. No cloud-side model list or connector policy supplies execution
+permission.
 
-Choosing Claude for this task selects an execution provider; it does not limit
-or expand the workspace's allowed providers. The request must fit both the
-approved workspace policy and Gateway's owner policy. The selected provider
-must also be available and usable in the device's execution context; connection
-and workspace approval do not establish provider login or execution readiness.
+Names are display metadata. Duplicate names or an offline device require an
+explicit device choice; do not guess or switch destinations. Connection and
+approval do not establish provider login or task readiness. The paired candidate
+uses Gateway `prepare_continuation` followed by `dispatch_task` over Native's
+[guarded continuation](connector-contract.md#guarded-native-continuation).
+Retain the exact predecessor and successor identities through uncertain
+delivery; do not substitute a fresh dispatch.
+
+A cloud connection usable for at least seven days depends on the identity
+provider issuing refresh grants and the actual cloud client using them. Device
+certificate lifetime and WSS/socket timeouts do not extend a cloud OAuth login.
+Follow the Gateway [cloud login guide](https://github.com/hishamkaram/delegation-layer-gateway/blob/main/docs/cloud-login.md);
+no tenant changes or seven-day acceptance are implied by these instructions.
 
 ## Per-user service and disconnect
 
 Normal connection manages a Linux user systemd service or a macOS LaunchAgent.
-It requires the selected user's available service manager. On macOS, run service
-management from that user's logged-in graphical Terminal session. An SSH session
-does not substitute for the required Aqua session. There is no tmux setup step,
-sudo fallback or automatic service-manager repair.
+It requires the selected user's available service manager. On macOS, Native
+targets that same user's existing `gui/UID` domain explicitly. Service management
+can run through same-user SSH; the calling shell need not be in Aqua. A missing
+GUI domain fails with `gateway_gui_session_required` and
+`check_user_gui_session`. Native does not create the login session, select a
+background service instead, configure tmux or use sudo. Registration alone does
+not prove running, authenticated or execution-ready status.
 The service runs within that user manager's lifetime; this does not configure
 Linux lingering, a system-wide daemon or a pre-login macOS service.
 
@@ -343,3 +394,11 @@ revisions and environments to the release being installed; preparing a release
 does not publish it or extend that evidence to other installations. Unit,
 fixture and race checks alone do not establish real browser authorization,
 provider authentication, service persistence or cloud-client compatibility.
+
+The current [Gateway verification record](https://github.com/hishamkaram/delegation-layer-gateway/blob/main/docs/verification.md)
+separates paired-process, native macOS, installed-provider and actual Cloud
+evidence by revision. Home's two-turn Native and ChatGPT continuation passed at
+the recorded candidate revisions. The automatic Mac maintenance correction,
+Office rollout, other-provider coverage and seven elapsed days of Cloud refresh
+remain unverified. Earlier results do not establish those later acceptance gates
+or candidate release readiness.

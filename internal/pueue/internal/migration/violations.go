@@ -108,6 +108,8 @@ func ValidateProcessState(record Record) *ViolationError {
 		return violation(ViolationProcessState, errors.New("negative predecessor PID"))
 	case record.LegacyProcessStart != "" && record.LegacyPID <= 0:
 		return violation(ViolationProcessState, errors.New("process start token lacks predecessor PID"))
+	case record.LegacyShutdownAcknowledged && !acknowledgedShutdownValid(record):
+		return violation(ViolationProcessState, errors.New("acknowledged shutdown lacks request, dispatch or predecessor identity"))
 	case record.LegacyShutdownRequested && (record.LegacyPID <= 0 || record.LegacyProcessStart == ""):
 		return violation(ViolationProcessState, errors.New("shutdown request lacks predecessor process identity"))
 	case record.LegacyShutdownDispatched && record.LegacyPID <= 0:
@@ -117,6 +119,10 @@ func ValidateProcessState(record Record) *ViolationError {
 	default:
 		return nil
 	}
+}
+
+func acknowledgedShutdownValid(record Record) bool {
+	return record.LegacyShutdownRequested && record.LegacyShutdownDispatched && record.LegacyPID > 0 && record.LegacyProcessStart != ""
 }
 
 func ValidateHistoryRecord(record Record) *ViolationError {

@@ -10,6 +10,14 @@ import (
 )
 
 func writeJSONResponse(stdout io.Writer, command string, response *Response, resultErr error) error {
+	return writeJSONResponseWithPolicy(stdout, command, response, resultErr, jsonOutputPolicy{limit: ordinaryJSONResponseLimit(*response)})
+}
+
+func writeJSONResponseWithPolicy(stdout io.Writer, command string, response *Response, resultErr error, policy jsonOutputPolicy) error {
+	if policy.connector == connectorOutputBinding {
+		copy := *response
+		response = &copy
+	}
 	response.setError(resultErr)
 	if (command == "dispatch" || command == "continue") && resultErr != nil {
 		if response.Failure == nil {
@@ -22,17 +30,17 @@ func writeJSONResponse(stdout io.Writer, command string, response *Response, res
 			response.Error = public.Error()
 		}
 	}
-	return writeJSON(stdout, *response)
+	return writeJSONWithLimit(stdout, projectConnectorOutput(*response, policy.connector), policy.limit)
 }
 
 func writeJSON(w io.Writer, response Response) error {
+	return writeJSONWithLimit(w, response, ordinaryJSONResponseLimit(response))
+}
+
+func writeJSONWithLimit(w io.Writer, response Response, limit int) error {
 	data, err := encodeJSONResponse(response)
 	if err != nil {
 		return err
-	}
-	limit := MaxJSONResponseBytes
-	if response.Command == "schedule" && response.Schedule != nil && response.Schedule.Request != nil {
-		limit = 2 << 20
 	}
 	if len(data) > limit {
 		for budget := 4096; budget >= 0; budget /= 2 {

@@ -11,7 +11,8 @@ The main skill owns [root selection](../SKILL.md#3-prepare-separate-paths-and-a-
 | `delegate --version` | Check the control CLI | None |
 | `providers --json` | List compiled profiles | None |
 | `capabilities --provider ID --json` | Read a compiled contract | None |
-| `models --provider ID [--cwd ABS] --json` | Discover model/effort facts | Native inspection, no admitted task |
+| `models --provider ID [--cwd ABS] --json` | Discover model/effort facts; optional approved [scope guards](gateway.md#scoped-model-discovery) | Native inspection, no admitted task |
+| `filesystem scopes/list/read/inspect/git --request FILE_OR_DASH --json` | [Bounded filesystem observations](gateway.md#filesystem-observations) | None; scopes may use the fixed Native OS temp lookup |
 | `doctor [--provider ID --cwd ABS] --json` | Optional passive bundle/root/provider observations | None |
 | `preflight --provider ID --cwd ABS --json` | Check static readiness | None |
 | `dispatch [--auto \| --provider ID] ... --json` | Admit a bounded turn; a Member may supply the destination | At most one launch attempt |
@@ -579,6 +580,20 @@ Proactive prepare precedes replacement, including same-path updates; complete
 its exact OP afterward. `--refresh-owner` alone refreshes the serving helper,
 without daemon replacement authority.
 
+Exact completion advances only its own proven drain. Completed OP replay is
+read-only. Ordinary ensure and explicit Gateway maintenance request current
+readiness. Same-path generations stay distinct. Mixed faults are not clean
+pending progress.
+Native retains clean predecessor shutdown acknowledgement separately from
+closure. Reconciliation observes closure instead of resending an acknowledged
+request. Older strict readers refuse populated acknowledgement records,
+including completed history; preserve them and use a compatible build.
+`owner_refresh_successor_start_accepted` refuses retirement after an unfinished
+target Start, including unknown birth. Missing-helper refresh through ordinary
+ensure or manual migration uses the same fence. Keep the OP and current custodian;
+follow `stop_and_report`, not another refresh. See the
+[installation upgrade contract](https://github.com/hishamkaram/delegation-layer/blob/main/docs/cli-reference.md#installation-upgrades).
+
 Read `supervisor_control.upgrade` (`operation_id`, `mode`, `phase`, optional
 `completed` and `completion_command`) with `state`, `next_action` and errors.
 Exit `0` includes preparation, helper refresh and history, not current readiness.
@@ -593,16 +608,8 @@ infer closure from queue completion.
 
 ### Gateway root context repair
 
-```text
-delegate gateway repair-context [--profile ABS] [--json]
-delegate gateway repair-context [--profile ABS] --confirm CHALLENGE --offline-cutover-confirmed [--json]
-```
-
-Prepare is passive; confirmation explicitly accepts a same-path/same-inode
-device-number change for the original root. Follow the
-[repair procedure and response decisions](delegate-upgrade.md#explicit-gateway-root-context-repair)
-for exact root/profile selection, human attestation, compatibility and failure
-handling. Never auto-confirm or retry uncertain work.
+See [Gateway root context repair](gateway.md#gateway-root-context-repair) for
+the explicit prepare/confirmation commands and saved-root requirements.
 
 ### Maintenance-only settlement
 
@@ -959,8 +966,7 @@ them. Keep defaults when no explicit choice is needed. Resolve a natural-languag
 name through native discovery:
 
 ```sh
-delegate models \
-  --provider PROVIDER_ID --cwd ABSOLUTE_WORKSPACE --json
+delegate models --provider PROVIDER_ID --cwd ABSOLUTE_WORKSPACE --json
 ```
 
 If discovery cannot resolve a name to one exact ID, ask for that ID; never
@@ -996,6 +1002,16 @@ with the result; follow `failure.next_action`, stopping on `stop_and_report`.
 Supervisor refusals retain `supervisor_migration_blocked`,
 `supervisor_migration_unsupported`, or `supervisor_upgrade_required` as
 reason codes and return no model facts.
+
+### Scoped model discovery
+
+For a selected Gateway scope, follow the [scoped model contract](gateway.md#scoped-model-discovery).
+Ordinary model discovery above is unchanged.
+
+### Filesystem observations
+
+The [Gateway filesystem reference](gateway.md#filesystem-observations) covers
+scope selection, local CLI forms and response limits.
 
 ## Checking readiness
 
@@ -1051,6 +1067,5 @@ guidance; never replace this with manual journal deletion.
 
 ## Guarded local connectors
 
-Operator-managed connectors use the public guarded context, resolve, result and
-origin commands described in the [connector contract](https://github.com/hishamkaram/delegation-layer/blob/main/docs/connector-contract.md).
-Ordinary agent task creation and recovery rules above remain unchanged.
+See [Gateway and guarded local connectors](gateway.md) for saved approvals,
+historical task guards, continuation identities and connector profile upgrades.

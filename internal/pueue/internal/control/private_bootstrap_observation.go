@@ -1,10 +1,43 @@
 package control
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
+
+	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 )
+
+// PrivateSupervisorDirectoryAbsent is narrower than bootstrap eligibility:
+// even an empty/schema-only private directory is present. This passive App
+// guard never provisions a lock, repairs state or infers resident absence.
+func PrivateSupervisorDirectoryAbsent(ctx context.Context, root taskdir.RootPin) (absent bool, resultErr error) {
+	if err := checkPrivateUpgradeRoot(ctx, root); err != nil {
+		return false, err
+	}
+	path := filepath.Join(root.Root(), privateSupervisorDirectory)
+	info, err := os.Lstat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return true, checkPrivateUpgradeRoot(ctx, root)
+	}
+	if err != nil {
+		return false, err
+	}
+	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return false, ErrBinding
+	}
+	directory, err := os.Open(path)
+	if err != nil {
+		return false, err
+	}
+	defer func() { resultErr = errors.Join(resultErr, directory.Close()) }()
+	held, err := directory.Stat()
+	if err != nil || !os.SameFile(info, held) {
+		return false, errors.Join(ErrBinding, err)
+	}
+	return false, checkPrivateUpgradeRoot(ctx, root)
+}
 
 // PrivateSupervisorInitialBootstrapEligible reports only the absence of any
 // predecessor authority. A schema-only ordinary bootstrap intent may resume.

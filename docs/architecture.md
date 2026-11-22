@@ -389,11 +389,18 @@ rewritten. Public recovery instructions live in
 
 Private generation completion and inspection-edge preparation have separate
 owners. Shared admission and continuation refuse an unprepared inspection edge.
-Only explicit migration may prepare the selected canonical target after reading
-its current queue and checking root-wide maintenance quiescence under bootstrap
-EX. A stopped published current daemon may restart normally for that observation;
-the completed private history remains unchanged. Unaccepted inspection proposals
-cannot replace a connected completed private generation.
+Explicit migration and the installation-upgrade owner may complete that derived
+edge after checking the canonical target, current queue and root-wide maintenance
+quiescence under bootstrap EX. Historical upgrade completion remains read-only.
+Gateway requests current admission readiness through a separate Native-owned
+intent bound to the exact completed operation and canonical installation. Native
+reuses its ordinary startup owner for runtime recovery, then completes the
+derived edge without another Start or a change to private history. A different
+current operation refuses before repair, even at the same executable paths.
+Ordinary ensure retains the same preparation and routing-completion path.
+Explicit migration can restart a stopped published current daemon before its
+own checks. Unaccepted
+inspection proposals cannot replace a connected completed private generation.
 
 Installation handoff uses a `drain_v1` variant in that same bootstrap journal.
 It owns the exact root and predecessor, stable operation identity, preparation
@@ -420,9 +427,11 @@ global writer exclusion or an OS sandbox.
 The existing migration journal owns shutdown and successor launch progress.
 Its upgrade variant links to the drain, records accepted Start and the native
 birth captured before reaping, and requires predecessor Wait settlement before
-publication. A live custodian's actual Wait must complete. Native absence is a
-fallback only after proving no live custodian can hold that Wait; endpoint loss
-alone proves neither. Even an equal installed pair requires a fresh daemon generation.
+publication. A live custodian's actual Wait must complete. Upgrade refresh and shared
+missing-helper replacement recheck accepted target Start under the same
+bootstrap exclusion held through serving release; establishment follows unlock.
+Native absence is a fallback only after proving no live custodian can hold that
+Wait; endpoint loss alone proves neither. Even an equal installed pair requires a fresh daemon generation.
 Such same-pair events remain completion history without becoming installation
 lineage edges. Repeating a completed operation reads its original winner;
 an uncertain Start or birth cannot authorize another launch. This adds no task

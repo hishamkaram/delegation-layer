@@ -14,7 +14,7 @@ func servicePublicError(err error) (failure, next string, exitCode int, matched 
 	case gatewayservice.IsPending(err):
 		return "gateway_stop_pending", "inspect_same_profile", 3, true
 	case errors.Is(err, gatewayservice.ErrGUIRequired):
-		return "gateway_gui_session_required", "run_from_user_gui_terminal", 1, true
+		return "gateway_gui_session_required", "check_user_gui_session", 1, true
 	case errors.Is(err, gatewayservice.ErrServiceChanged):
 		return "gateway_service_changed", "retry_same_profile", 1, true
 	case errors.Is(err, gatewayservice.ErrManagerCacheStale):
@@ -51,7 +51,7 @@ func (c invocation) serviceManager(executable string) (Service, error) {
 }
 
 func (c invocation) service(ctx context.Context, response Response) (Response, error) {
-	local, err := c.dependencies.Client.LocalContext(ctx, c.profile)
+	local, err := c.dependencies.Client.ProfileMigrationSource(ctx, c.profile)
 	if err != nil {
 		return response, err
 	}
@@ -82,6 +82,9 @@ func (c invocation) service(ctx context.Context, response Response) (Response, e
 		err = errors.New("unsupported_gateway_service_action")
 	}
 	response.Service = &status
+	if err == nil && c.arguments.ServiceAction == "status" {
+		_, err = c.selectedContext(ctx)
+	}
 	return response, err
 }
 

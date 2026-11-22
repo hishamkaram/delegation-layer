@@ -1,6 +1,7 @@
 package control
 
 import (
+	"context"
 	"errors"
 	"maps"
 	"os"
@@ -9,7 +10,62 @@ import (
 	"testing"
 
 	"github.com/hishamkaram/delegation-layer/internal/task"
+	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 )
+
+func TestPrivateDirectoryAbsenceDoesNotMeanBootstrapEligibility(t *testing.T) {
+	for _, state := range []string{"absent", "present", "initial intent", "wrong type", "symlink", "canceled"} {
+		t.Run(state, func(t *testing.T) { testPrivateDirectoryAbsence(t, state) })
+	}
+}
+
+func testPrivateDirectoryAbsence(t *testing.T, state string) {
+	t.Helper()
+	store, err := taskdir.InitStore(filepath.Join(canonicalTemp(t), "state"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if closeErr := store.Close(); closeErr != nil {
+			t.Error(closeErr)
+		}
+	})
+	pin := mustReadyCurrentPin(t, store.Root)
+	path := filepath.Join(store.Root, privateSupervisorDirectory)
+	seedPrivateDirectoryState(t, store.Root, path, state)
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	if state == "canceled" {
+		cancel()
+	}
+	absent, err := PrivateSupervisorDirectoryAbsent(ctx, pin)
+	wantFault := state == "wrong type" || state == "symlink" || state == "canceled"
+	if absent != (state == "absent") || wantFault != (err != nil) {
+		t.Fatalf("private absence incorrectly inferred from %s: absent=%t err=%v", state, absent, err)
+	}
+	if state == "absent" {
+		if _, err = os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("passive absence initialized private state: %v", err)
+		}
+	}
+}
+
+func seedPrivateDirectoryState(t *testing.T, root, path, state string) {
+	t.Helper()
+	switch state {
+	case "present", "initial intent":
+		makePrivateTestDirectory(t, path)
+		if state == "initial intent" {
+			writePrivateSuccessorTestRecord(t, privateBootstrapRecordPath(root), privateBootstrapRecord{SchemaVersion: task.SchemaVersion})
+		}
+	case "wrong type":
+		writePrivateSuccessorTestBytes(t, path, nil)
+	case "symlink":
+		if err := os.Symlink(canonicalTemp(t), path); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
 
 // These stores contain only immutable records/config bytes. They launch no
 // daemon and do not claim native process or completed-generation authority.

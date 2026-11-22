@@ -12,6 +12,10 @@ type Client interface {
 	Connect(context.Context, deviceclient.ConnectOptions) (deviceclient.ConnectionStatus, error)
 	Status(context.Context, string) (deviceclient.ConnectionStatus, error)
 	LocalContext(context.Context, string) (deviceclient.LocalContextInfo, error)
+	ProfileMigrationSource(context.Context, string) (deviceclient.LocalContextInfo, error)
+	PreviewProfileMigration(context.Context, string) (deviceclient.ProfileMigrationPreview, error)
+	MigrateProfile(context.Context, deviceclient.ProfileMigrationOptions) (deviceclient.ProfileMigrationPreview, error)
+	UpdateInstallationSelection(context.Context, string, deviceclient.InstallationSelection, deviceclient.InstallationSelection) error
 	ListWorkspaces(context.Context, string) ([]deviceclient.Workspace, error)
 	AllowWorkspace(context.Context, string, deviceclient.WorkspaceApproval) (deviceclient.Workspace, error)
 	UpdateWorkspace(context.Context, string, string, uint64, deviceclient.WorkspaceUpdate) (deviceclient.Workspace, error)
@@ -40,6 +44,22 @@ func (sdkClient) Status(ctx context.Context, p string) (deviceclient.ConnectionS
 
 func (sdkClient) LocalContext(ctx context.Context, p string) (deviceclient.LocalContextInfo, error) {
 	return deviceclient.LocalContext(ctx, p)
+}
+
+func (sdkClient) ProfileMigrationSource(ctx context.Context, p string) (deviceclient.LocalContextInfo, error) {
+	return deviceclient.ProfileMigrationSource(ctx, p)
+}
+
+func (sdkClient) PreviewProfileMigration(ctx context.Context, p string) (deviceclient.ProfileMigrationPreview, error) {
+	return deviceclient.PreviewProfileMigration(ctx, p)
+}
+
+func (sdkClient) MigrateProfile(ctx context.Context, o deviceclient.ProfileMigrationOptions) (deviceclient.ProfileMigrationPreview, error) {
+	return deviceclient.MigrateProfile(ctx, o)
+}
+
+func (sdkClient) UpdateInstallationSelection(ctx context.Context, p string, expected, selected deviceclient.InstallationSelection) error {
+	return deviceclient.UpdateInstallationSelection(ctx, p, expected, selected)
 }
 
 func (sdkClient) ListWorkspaces(ctx context.Context, p string) ([]deviceclient.Workspace, error) {

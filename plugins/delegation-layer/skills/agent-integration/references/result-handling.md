@@ -6,6 +6,65 @@ Examples use the CLI default under the main skill's
 [root rule](../SKILL.md#3-prepare-separate-paths-and-a-finite-brief); preserve an
 explicit custom or recorded historical root on related commands.
 
+## Filesystem and model observations
+
+Filesystem and model results are dated observations, not task outcomes, process
+closure or execution authority. Native owns provider/model/effort/permission/
+budget validity and defaults. A missing catalog entry does not veto an explicit
+model/effort request; omitted choices must remain omitted until Native resolves
+them. Native task budgets stay finite. Gateway connection and workspace approval
+save routing only, without execution-policy seeds or ceilings.
+
+The local filesystem envelope has `schema_version: 1`, `command: "filesystem"`
+and either `filesystem` or a typed `failure`. The observation has its own
+`schema_version`, `operation`, `observed_at`, and the matching result: `list`,
+`read`, `inspect` (also used by Git), or `scopes`. Preserve failure `code`, fixed
+`stage` and `retryable`; a timeout/cancel is not a changed-file observation or a
+claim that a provider task ended. Malformed, oversized or nonregular request
+input exits `2`; operational/deadline failures exit `1`; success exits `0`.
+
+- Directory pages contain at most 100 entries, `version`, `next_cursor` and
+  `eof`. Continue only with the same selected scope/path and opaque cursor.
+  Mutation can require restarting observation; no task retry follows from it.
+- Preserve `name_base64` and `relative_path_base64` exactly for arbitrary Unix
+  names, including non-UTF-8/control bytes. Display text can be absent. Do not
+  regenerate selectors from a display name.
+- File chunks contain exact `data_base64`, optional valid UTF-8 `text`, offsets,
+  `eof` and `version`. Reads are at most 65536 bytes. Use `expected_version` when
+  continuing a version-bound read. Binary/hidden/hard-linked requested files
+  are supported without filename/content filters or secret scanning.
+- Special entries are metadata, not readable regular files. `not_regular_file`,
+  `outside_scope`, `permission_denied` and discovery errors stay explicit. Do
+  not cross into another approved scope to bypass same-scope containment.
+- Git `candidate` and `partial` mean structural evidence only. Markers, linked
+  files, bare layout and HEAD shape do not prove a validated repository. Native
+  runs no arbitrary Git command or external metadata traversal for this tool.
+
+Whole OS temp scopes are automatic; they are not limited to Delegate-owned
+files. Linux supplies `/tmp`; macOS supplies resolved user temp and shared
+`/tmp`/`/private/tmp`, canonically deduplicated. Keep `scope_discovery_error`
+when workspace inventory reports it. Do not replace it with a manually guessed
+path or pretend discovery completed.
+
+For models, preserve Native's complete envelope, typed failure and process exit
+separately; follow the [model status table](command-reference.md#choosing-models-and-effort).
+Cloud `get_capabilities` is advisory and does not run a model probe. Explicit
+`list_models` can inspect/record Native facts and paginates catalogs larger than
+100 models. Preserve the exact cursor, version, `catalog_complete`, `next_cursor`
+and `eof`; pagination completion differs from provider enumeration completeness.
+Neither a listed model nor successful discovery proves provider execution access.
+
+New cloud preparation uses a stable 32-character lowercase hex `request_id`
+and selection `{scope_id, relative_path}`. Preserve request/operation/task IDs
+across refresh, uncertainty or connection loss; resolve the same operation.
+Do not replace an uncertain task, switch devices, or synthesize project tokens.
+Native supports guarded successor IDs/fresh origins; Gateway
+`prepare_continuation` remains unfinished, so no cloud continuation parity is
+implied. Cloud usability for seven days depends on IdP/client refresh grants,
+not a device certificate or socket timeout. Follow the
+[cloud login guide](https://github.com/hishamkaram/delegation-layer-gateway/blob/main/docs/cloud-login.md);
+seven elapsed days of actual cloud-client behavior remain unverified.
+
 ## Task control response
 
 Task-command JSON uses `schema_version: 1`, `command`, root/task identity
@@ -183,9 +242,22 @@ admitted work keeps its original lifetime/evidence. Preparation before a planned
 installer and exact completion afterward also support same-path updates; follow
 the [upgrade contract](command-reference.md#supervisor-owner-control), including
 quiescing nonparticipating writers. Observation itself never repairs it.
+A newly completed installation handoff also prepares its inspection routing.
+A completed private record alone is historical evidence; use the returned
+state and next action. Gateway requests current readiness separately through
+Native's ordinary startup and routing owners. Historical replay cannot repair
+current state or change a newer generation, even at the same paths.
 Finish that handoff before another installation replacement. A fault involving
 an accepted target is not permission to choose another target or clear its
 records; preserve the OP and report the failure under the same upgrade contract.
+A clean shutdown acknowledgement is retained separately from daemon closure.
+Reconciliation does not resend that acknowledged request; Native still requires
+canonical closure before successor Start. Older strict readers refuse populated
+acknowledgement records and completed history. Keep a compatible build and the
+same OP; never clear those facts to retry or downgrade.
+In particular, `owner_refresh_successor_start_accepted` means refresh would
+retire a resident that may own the accepted target's Wait. Follow
+`stop_and_report`; never repeat refresh or substitute a new target.
 
 For a retained drain, a passive status can exit `0` while predecessor
 observation is unavailable: `active_work` and `migration_readiness` stay

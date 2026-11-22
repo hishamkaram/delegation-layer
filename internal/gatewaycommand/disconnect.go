@@ -14,7 +14,7 @@ import (
 )
 
 func (c invocation) disconnect(ctx context.Context, response Response) (Response, error) {
-	local, err := c.dependencies.Client.LocalContext(ctx, c.profile)
+	local, err := c.dependencies.Client.ProfileMigrationSource(ctx, c.profile)
 	if err != nil {
 		return response, err
 	}

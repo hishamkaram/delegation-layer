@@ -71,6 +71,26 @@ func ObservePrivateUpgrade(ctx context.Context, root taskdir.RootPin, op Upgrade
 	return control.ObservePrivateUpgrade(ctx, root, op)
 }
 
+func PrivateUpgradeInspectionTargetWithLock(ctx context.Context, root taskdir.RootPin, operation UpgradeOperationID) (task.SupervisorRef, bool, error) {
+	return control.PrivateUpgradeInspectionTargetWithLock(ctx, root, operation)
+}
+
+func ProbePrivateUpgradeInspectionWithLock(ctx context.Context, root taskdir.RootPin, operation UpgradeOperationID, selectPair CompatiblePairSelector, options Options) (*Client, bool, error) {
+	return control.ProbePrivateUpgradeInspectionWithLock(ctx, root, operation, selectPair, options)
+}
+
+func CheckPrivateUpgradeReadyCurrentWithLock(ctx context.Context, root taskdir.RootPin, operation UpgradeOperationID, selectPair CompatiblePairSelector, options Options) (PrivateUpgradeObservation, error) {
+	return control.CheckPrivateUpgradeReadyCurrentWithLock(ctx, root, operation, selectPair, options)
+}
+
+func PrivateSupervisorDirectoryAbsent(ctx context.Context, root taskdir.RootPin) (bool, error) {
+	return control.PrivateSupervisorDirectoryAbsent(ctx, root)
+}
+
+func ObservePrivateUpgradeAcceptedStartWithLock(ctx context.Context, root taskdir.RootPin, op UpgradeOperationID) (PrivateUpgradeObservation, bool, error) {
+	return control.ObservePrivateUpgradeAcceptedStartWithLock(ctx, root, op)
+}
+
 func BeginPrivateUpgradeWithLock(ctx context.Context, root taskdir.RootPin, mode UpgradeMode, options Options) (PrivateUpgradeObservation, error) {
 	return control.BeginPrivateUpgradeWithLock(ctx, root, mode, options)
 }

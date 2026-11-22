@@ -81,7 +81,18 @@ func writeHuman(stdout io.Writer, response Response) error {
 			return err
 		}
 	}
+	if err := writeUpgradeHuman(stdout, response.Upgrade); err != nil {
+		return err
+	}
 	return writeRootContextHuman(stdout, response.RootContext, response.NextAction)
+}
+
+func writeUpgradeHuman(stdout io.Writer, u *UpgradeObservation) error {
+	if u == nil {
+		return nil
+	}
+	_, err := fmt.Fprintf(stdout, "upgrade_phase=%s schema_from=%d schema_to=%d workspaces=%d disabled_workspaces=%d pins=%d execution_policies=%d\nsaved_executable=%s selected_executable=%s native_root=%s root_context_matches=%t capabilities_verified=%t device_identity_preserved=%t service_restarted=%t\n", u.Phase, u.Profile.FromVersion, u.Profile.ToVersion, u.Profile.Workspaces, u.Profile.DisabledWorkspaces, u.Profile.Pins, u.Profile.ExecutionPolicies, u.Native.SavedExecutable, u.Native.SelectedExecutable, u.Native.NativeRoot, u.Native.RootContextMatches, u.Native.CapabilitiesVerified, u.DeviceIdentityPreserved, u.ServiceRestarted)
+	return err
 }
 
 func writeRootContextHuman(stdout io.Writer, r *taskdir.RootContextReconciliation, next string) error {

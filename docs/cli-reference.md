@@ -42,6 +42,8 @@ input. Invalid requests keep exit `2` with scoped usage on the error stream.
 | `result save` | [Complete verified local answer export](../skills/agent-integration/references/command-reference.md#result-save) |
 | `context`, `resolve`, guarded `result read`, `origin` | [Guarded local connector contract](connector-contract.md) |
 | `gateway connect/status/doctor/serve/disconnect`, `gateway workspace`, `gateway service` | [Gateway login, workspace approvals and per-user service](gateway-connect.md) |
+| `filesystem scopes/list/read/inspect/git` | [Bounded filesystem observations](connector-contract.md#read-only-filesystem-observations) |
+| `gateway upgrade --preview/--accept-execution-policy-removal` | [Existing-profile upgrade](gateway-connect.md#native-root-and-profile) |
 | `gateway repair-context` | [Explicit root context repair](#root-context-repair) |
 | `supervisor status/ensure-owner/migrate/restart` | [Operator recovery](#supervisor-recovery) |
 | `settle ID [--kind task|inspection] --prepare/--confirm` | [Human maintenance permission](#human-maintenance-permission) |
@@ -273,7 +275,22 @@ and [provider differences](providers.md).
 
 ## Models (implemented)
 
-See [model discovery](../skills/agent-integration/references/command-reference.md#choosing-models-and-effort).
+See [model discovery](../skills/agent-integration/references/command-reference.md#choosing-models-and-effort)
+and [scoped model guards](connector-contract.md#scoped-model-discovery). Native
+owns provider/model/effort/permission/budget validation and defaults. Discovery
+is advisory; an explicit model ID need not appear in a catalog. Native budgets
+remain finite (`30m` by default, `1h` for `codex:review`). Gateway connection and
+workspace approval save routing, not execution-policy defaults.
+
+## Filesystem and guarded continuation
+
+Use [filesystem observations](connector-contract.md#read-only-filesystem-observations)
+for strict request files, bounded pages/bytes and lossless names. Use
+[guarded Native continuation](connector-contract.md#guarded-native-continuation)
+for successor IDs and fresh origins. Historical project-token SHA guards compare
+saved task bindings; they do not authorize fresh admission. Gateway
+`prepare_continuation` remains unfinished. These candidate contracts do not
+establish cloud or installed-provider acceptance.
 
 ## Capabilities
 
@@ -342,7 +359,24 @@ Replace `OP` with the exact returned identity. A proactive operation needs this
 explicit completion even when the installer leaves the same paths/version in
 place. Completion creates a fresh daemon generation. An unrelated ordinary
 `ensure-owner` cannot authorize it. Repeating an already completed OP returns
-its retained completion without another launch or readiness claim.
+its retained completion without another daemon launch or repair. Completion
+history stays immutable; a historical replay alone is not evidence that the
+current generation is ready. Gateway's explicit upgrade separately requests
+current readiness from Native. Ordinary `ensure-owner` retains its existing
+startup and inspection-routing preparation.
+
+Exact completion can advance that operation's own retained drain when Native's
+queue and canonical maintenance proofs permit it. Active work stays pending;
+it never authorizes another operation. Replaying completed A while B is current
+returns A's history without refreshing B's serving owner. Cancellation,
+transport and cleanup faults remain faults even alongside pending progress.
+
+A successfully acknowledged predecessor shutdown is retained separately from
+process closure. Reconciliation observes that same predecessor without sending
+shutdown again just because its endpoint still responds. Successor launch still
+requires Native's canonical closure proof. Older strict readers refuse populated
+acknowledgement records, including completed migration history; use a compatible
+build and preserve the operation and records.
 
 If the installation was already replaced, ordinary
 `delegate supervisor ensure-owner --json` detects a different selected pair,
@@ -378,6 +412,14 @@ that root, and preserve the operation when recovery is exhausted.
 
 `--refresh-owner` alone replaces only the serving helper when needed; it does
 not authorize a prepared installation or claim daemon execution readiness.
+Upgrade-driven refresh and missing-helper replacement through ordinary ensure
+or manual migration refuse with `owner_refresh_successor_start_accepted`
+and `stop_and_report` when a successor Start was accepted without validated
+canonical completion, including an unknown birth. The current resident may own
+successor's only Wait. Keep its operation and installation; do not retire it or
+repeat refresh. Exact completion without refresh can proceed only when the
+selected runner matches that resident. Otherwise restore the appropriate
+installation before following the retained operation's recovery guidance.
 Read `state`, `next_action`, `upgrade` and errors together: exit `0` can mean
 prepared, helper refreshed, or historical completion. Only a response that
 actually reports `owner_ready` confirms current admission preparation. Exit `3`
@@ -487,8 +529,11 @@ files. Repeated admission reuses the refreshed evidence. If the serving owner's
 installed helper was also removed, ordinary admission and `ensure-owner` use the
 existing serving-release/replacement lifecycle from an outside invocation. The
 old owner retains its daemon Wait custody; this does not cancel active work.
-Busy, uncertain or concurrent handoffs can refuse safely. Inspect that same
-root before another explicit attempt; do not replay a created or uncertain task.
+An unfinished accepted upgrade target also fences this missing-helper
+replacement, including manual migration: keep its current custodian and follow
+`owner_refresh_successor_start_accepted` / `stop_and_report`. Busy, uncertain or
+concurrent handoffs can refuse safely. Inspect that same root before another
+explicit attempt; do not replay a created or uncertain task.
 A nested invocation cannot replace this owner: perform recovery from a prepared
 persistent user context outside task-owned scope.
 
@@ -572,8 +617,12 @@ A completed `migration_phase` remains historical evidence even when current
 readiness requires repair. Completed journal entries remain historical evidence.
 If an installation handoff has finished but inspection routing still points to
 its predecessor, status reports `legacy_present` and
-`next_action: "run_supervisor_migrate"`. Run `delegate supervisor migrate --json`
-with the same root to complete that routing. Continuation and some provider
+`next_action: "run_supervisor_migrate"`. Gateway's current-readiness step and
+ordinary `ensure-owner` complete the supported current-generation routing.
+Historical completion replay does not repair it. Follow the returned guidance;
+an interrupted or older flow can still require
+`delegate supervisor migrate --json` with the same root.
+Continuation and some provider
 inspections can require this step. Admission may also finish an already prepared
 edge; status still advises explicit completion until the edge is recorded as
 complete. Follow a more specific maintenance blocker first.
@@ -591,8 +640,12 @@ become unavailable after graceful shutdown. If it was the same private endpoint
 used by the current bundled supervisor, Delegate starts that bundled daemon and
 waits for readiness before recording the completed migration. Inspection routing
 completes through its own journal; normal admission uses the recorded successor.
-A completed private handoff does not by itself prepare an inspection edge.
-Explicit migration can prepare that edge after checking the current queue and
+A completed private record alone does not prove that its inspection edge is ready.
+The installation-upgrade owner completes its current generation's edge without
+starting another daemon during that derived step. Gateway's separate readiness
+intent can first use Native's ordinary startup owner if the exact published
+installation has stopped. Explicit migration can also prepare that edge after
+checking the current queue and
 root-wide closure evidence. If the exact published current daemon has stopped,
 this path can restart it normally before those checks; it does not repeat the
 completed private handoff. A crash between these steps is resumed from the

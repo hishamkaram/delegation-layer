@@ -802,6 +802,10 @@ func finishSupervisorMigration(response Response, state supervisorMigrationState
 func supervisorMigrationFailure(response Response, err error) commandResult {
 	control := response.SupervisorControl
 	control.ReasonCode = supervisorcore.FailureReason(err)
+	var upgradeFailure *pueue.PrivateUpgradeError
+	if errors.As(err, &upgradeFailure) && upgradeFailure != nil && upgradeStartRequiresReview(upgradeFailure.ReasonCode) {
+		control.ReasonCode = upgradeFailure.ReasonCode
+	}
 	control.MigrationReadiness = "unknown"
 	control.ActiveWork = "unknown"
 	var diagnostic *supervisorcore.MaintenanceError
@@ -818,6 +822,10 @@ func supervisorMigrationFailure(response Response, err error) commandResult {
 	control.State = "unavailable"
 	control.MigrationReadiness = "unknown"
 	control.FirstBlocker = &supervisorcore.MaintenanceBlocker{Kind: "evidence", ReasonCode: "maintenance_evidence_fault", NextAction: "stop_and_report"}
+	if upgradeStartRequiresReview(control.ReasonCode) {
+		control.FirstBlocker.Kind = "upgrade"
+		control.FirstBlocker.ReasonCode = control.ReasonCode
+	}
 	control.NextAction = "stop_and_report"
 	return commandResult{response: response, code: 1, err: publicSupervisorError("Delegate could not safely migrate the legacy supervisor.", err)}
 }
@@ -909,14 +917,14 @@ func legacyActiveWork(snapshot pueue.QueueSnapshot) string {
 	return supervisorcore.QueueActivity(snapshot.Jobs)
 }
 
-func supervisorBootstrapOwner(a Arguments, deps Dependencies) (result commandResult) {
+func supervisorBootstrapOwner(parent context.Context, a Arguments, deps Dependencies) (result commandResult) {
 	response := newResponse("supervisor")
 	root, err := tasklifecycle.ResolveRoot(a.Root)
 	if err != nil {
 		return failed(response, err, 1)
 	}
 	options := supervisorControlOptions(deps)
-	ctx, cancel := supervisorcore.ControlContext(options)
+	ctx, cancel := supervisorcore.ControlContextWithParent(parent, options)
 	defer cancel()
 	store, err := openStoreContext(ctx, root, deps.storeDependencies(), true)
 	if err != nil {
