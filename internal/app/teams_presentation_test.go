@@ -76,6 +76,28 @@ func TestTeamsPresentationPreservesTypedEmptyAndFullDefinition(t *testing.T) {
 	}
 }
 
+func TestTeamsHumanPresentationOmitsUnsetMemberGuidance(t *testing.T) {
+	definition, err := contract.Decode([]byte(teamsDefinitionJSON))
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := TeamsResponse{SchemaVersion: 1, Command: "teams", Action: "show", Status: "ok", Team: &contract.Record{
+		Reference: task.TeamReference{Scope: "user", TeamID: "review"}, Revision: 1, Definition: definition,
+	}}
+	var output bytes.Buffer
+	if err = writeTeamsResponse(&output, response, false); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(output.String(), "member_unavailable=") {
+		t.Fatalf("unset guidance must remain omitted: %s", output.String())
+	}
+	response.Team.Definition.MemberUnavailable = contract.MemberUnavailableReport
+	output.Reset()
+	if err = writeTeamsResponse(&output, response, false); err != nil || !strings.Contains(output.String(), "member_unavailable=report\n") {
+		t.Fatalf("explicit report guidance lost: %s, %v", output.String(), err)
+	}
+}
+
 type teamsBrokenWriter struct{}
 
 func (teamsBrokenWriter) Write([]byte) (int, error) { return 0, io.ErrClosedPipe }

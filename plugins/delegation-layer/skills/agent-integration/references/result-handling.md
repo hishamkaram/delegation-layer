@@ -375,6 +375,67 @@ asking again, but never infer it from a rejection or silently substitute a
 destination. Keep the original failed attempt reported as failed; independent
 requests and explicitly allowed recovery paths retain their existing rules.
 
+## Unavailable Team members
+
+Apply the inspected Team's optional `member_unavailable` instruction to the
+current allocation decision. Omitted, empty or `report` preserves ordinary
+failure handling. `continue_without` permits omitting a confirmed unavailable
+Member's contribution and finishing authorized independent assignments and
+synthesis. The allocating lead owns this decision using the inspected scoped
+Team definition and revision. Fresh allocation decisions refresh discovery.
+
+First apply [task creation](#task-creation), [observation](#observe-and-collect)
+and [failure diagnosis](#failure-diagnosis). Keep each original dispatch response
+as creation evidence. A later collect response may carry a validated rejected
+outcome while admission and liveness remain unobserved.
+
+Eligible evidence is limited to the following cases.
+
+- A fresh dispatch returned `task_record: not_created` and
+  `failure.code: provider_unavailable`, and bounded diagnosis confirms the
+  selected provider's runtime is missing or incompatible. The code also covers
+  preparation I/O and configuration faults, so the code alone is insufficient.
+  Caller permission/mode errors, state-placement errors and joined operational
+  faults retain their own recovery handling. At `inspect-provider`, also require
+  `failure.inspection.class: provider_unavailable` to distinguish a provider
+  refusal from a failed Delegate inspection worker or observation.
+- A created task has a validated outcome with `publication: rejected`,
+  `outcome.verdict: rejected` and the diagnostic `provider_quota_exhausted`.
+  Preserve any `outcome.quota.not_before` as provider reset advice. A warning,
+  reset timestamp or raw error message alone cannot establish quota exhaustion.
+- A created task has a validated rejected outcome carrying the canonical
+  `provider_authentication_failed` diagnostic or the provider interpreter's
+  `authentication-unavailable` diagnostic. Keep the returned login/remediation
+  guidance visible for the user to perform in their native provider context.
+
+Eligibility describes this Member's attempted contribution. Generic
+`incomplete_output`, permission-denial text, malformed output and other untyped
+failures require diagnosis and reporting. Preserve uncertainty when a provider
+lacks structured quota or authentication evidence. A blocked automatic provider
+selection describes the selection operation, rather than one Member's account.
+
+Under `continue_without`, report the scoped Team and inspected revision, Member,
+task ID or `not_created` refusal, supported reason and any missing work or
+independent review. Explicit user requirements take precedence. Missing required
+review or dependent deliverables stay open, and a partial result must identify
+the unmet acceptance conditions. An explicit user instruction permitting a
+particular omission can supply that authority. With every contribution missing,
+report the resulting blocked or partial work accurately.
+
+Keep creation, publication and native closure separate. Unknown creation,
+uncertain submission/launch, cancellation, timeout, workspace/capture faults and
+Delegate infrastructure faults follow their existing rules. Continue observing
+created pending work through its lifecycle owner as required. A quota/auth
+rejection can follow earlier tool activity, so write tasks retain possible
+partial edits and their cleanup/capture obligations. Dependent mutations require
+the appropriate closure, workspace and output evidence.
+
+The policy authorizes omission only. A replacement assignment, provider/model
+change, login, configuration edit or retry needs separate existing authority.
+Exact-session continuations, replays and scheduled occurrences retain their
+existing single-task contracts. Restrict an availability observation to this
+decision's evidence, with fresh discovery for later decisions.
+
 ## Schedule definition and host results
 
 Use the installed build's help to check `scheduler serve/status/stop` support.

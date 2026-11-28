@@ -9,12 +9,22 @@ still resolve any explicit Team/Member target. Agents working from bounded
 briefs or assignments skip discovery unless explicitly authorized to allocate
 work. A Team grants no permission, budget or authority to invent assignments.
 
+Definitions accept optional `member_unavailable` with `report` or
+`continue_without`. Omission or an empty string means `report`. The CLI stores
+this advisory instruction for the allocating lead. Use the
+[unavailable-Member procedure](result-handling.md#unavailable-team-members)
+for eligibility and reporting. Older strict readers reject definitions that
+populate this field, so remove it using a compatible binary before downgrading.
+
 1. Keep the actual absolute workspace `--cwd` throughout discovery. Use an
    explicit `--project-root` only for an already identified non-Git project.
    Read `teams default show` and `teams list` in that same context. The default
    response already contains its full Team record; do not fetch it again.
    List includes Global and current-project Teams; never infer Local identity
    from a remote URL or silently prefer a same-named Local Team.
+   Retain the selected Team's complete inspected definition and revision for
+   this decision, including optional `member_unavailable`. Its application is
+   owned by [unavailable Team members](result-handling.md#unavailable-team-members).
 2. Follow returned `next_cursor` values unchanged with bounded list pages.
    Inspect full definitions of plausible alternatives before selecting Members,
    using each list row's `reference.scope` and `reference.team_id`. User scope uses

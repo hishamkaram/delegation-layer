@@ -74,6 +74,40 @@ remain explicit request options. Unknown fields and unsupported schema versions
 are rejected. The [definition contract](../internal/teams/contract/definition.go)
 owns validation and encoding.
 
+## Unavailable Members
+
+The optional Team field `member_unavailable` gives the allocating lead a standing
+instruction for a confirmed unavailable Member. Set it in the complete definition
+passed to `teams register` or `teams update`, for example by adding
+`"member_unavailable": "continue_without"` alongside `purpose`, `roles` and
+`members`.
+
+`report` preserves ordinary failure reporting. An omitted or empty value has the
+same meaning. `continue_without` lets the lead omit that contribution and finish
+authorized independent work, while reporting the Member, reason and missing
+work or review. Explicit requirements for a particular review or deliverable
+still need to be satisfied before claiming completion.
+
+The CLI validates and stores this advisory instruction. Its application requires
+the updated integration skill loaded by the allocating lead. Follow the
+[unavailable-Member procedure](../skills/agent-integration/references/result-handling.md#unavailable-team-members)
+for eligibility, partial edits and unresolved task ownership. That procedure
+distinguishes validated quota/authentication evidence from generic provider
+failures and Delegate faults. Replacement assignments require their own
+authorization.
+
+Policy follows the inspected scoped Team definition and revision for the current
+allocation decision. Fresh decisions refresh that inspection. Task lifecycle,
+exact-session continuation and scheduled occurrences keep their existing owners.
+The task's saved `team` context records execution provenance separately from this
+lead instruction.
+
+Existing definitions retain their canonical encoding when the field is omitted.
+Older binaries reject a Team that populates the new field, including explicit
+`report`, as an unsupported definition. Other definitions remain readable.
+Before downgrading, use the newer binary to update affected Teams with the field
+omitted. Catalog storage needs no schema migration.
+
 ## Global and Local scope
 
 | CLI scope | Project context | Availability |
