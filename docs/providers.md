@@ -46,6 +46,16 @@ Workspace-write uses accept-edits with native permission bypass.
 The native print timeout fits inside the task budget. Trust, account settings,
 and MCP configuration remain native.
 
+Use the same Delegate commands and Team selections from SSH or a desktop
+terminal. Native preparation preserves the caller's `SSH_CONNECTION`,
+`SSH_CLIENT` and `SSH_TTY` indicators when present and adds none when absent.
+These indicators are recorded with the task's launch context; credentials and
+unrelated environment values remain filtered. Antigravity selects its own
+authentication flow, so authenticate its CLI in the context used for dispatch.
+A validated login failure is reported as `authentication-unavailable`.
+Previously admitted tasks retain their recorded context; a new continuation
+uses its current caller's context.
+
 ## Codex
 
 Setup: [official quickstart](https://developers.openai.com/codex/quickstart).

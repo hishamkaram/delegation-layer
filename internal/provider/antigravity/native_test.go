@@ -245,6 +245,22 @@ func TestNativeEnvironmentReconstructsRuntimePaths(t *testing.T) {
 	}
 }
 
+func TestSSHSessionIndicatorsLeaveNonNativeEnvironmentUnchanged(t *testing.T) {
+	values := []string{"HOME=" + t.TempDir()}
+	want, err := prepareProfileEnvironment(values, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	values = append(values, testSSHConnectionEntry, testSSHClientEntry, testSSHTTYEntry)
+	got, err := prepareProfileEnvironment(values, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(got.Values, want.Values) || !slices.Equal(got.WritableRoots, want.WritableRoots) {
+		t.Fatal("native SSH session support changed the non-native environment")
+	}
+}
+
 func TestNativeEnvironmentReservesDiscoveryRootsAndRejectsRelativePaths(t *testing.T) {
 	home := t.TempDir()
 	configHome := filepath.Join(home, "config")

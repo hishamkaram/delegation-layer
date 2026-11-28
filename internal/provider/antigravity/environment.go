@@ -151,11 +151,13 @@ func nativeDiscoveryRoots(environment map[string]string) []string {
 	return roots
 }
 
-// nativeDiscoveryKey preserves nonsecret native configuration and session locations.
+// nativeDiscoveryKey preserves nonsecret native configuration and session context.
+// SSH indicators are opaque session metadata, not runtime state paths.
 func nativeDiscoveryKey(key string) bool {
 	switch key {
 	case "XDG_CONFIG_HOME", "XDG_CONFIG_DIRS", "XDG_DATA_HOME", "XDG_DATA_DIRS", "XDG_STATE_HOME", "XDG_CACHE_HOME", "XDG_RUNTIME_DIR", "DBUS_SESSION_BUS_ADDRESS",
 		"GEMINI_HOME", "GEMINI_CLI_HOME", "ANTIGRAVITY_HOME", "ANTIGRAVITY_CONFIG_HOME", "AGY_HOME", "AGY_CONFIG_HOME",
+		"SSH_CONNECTION", "SSH_CLIENT", "SSH_TTY",
 		"GOCACHE", "GOMODCACHE", "CARGO_HOME", "RUSTUP_HOME", "GRADLE_USER_HOME", "NPM_CONFIG_CACHE", "GOPATH":
 		return true
 	default:

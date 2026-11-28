@@ -11,6 +11,12 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/task"
 )
 
+const (
+	testSSHConnectionEntry = "SSH_CONNECTION=192.0.2.10 51000 198.51.100.20 22"
+	testSSHClientEntry     = "SSH_CLIENT=192.0.2.10 51000 22"
+	testSSHTTYEntry        = "SSH_TTY=opaque-ssh-session"
+)
+
 // selectedAgyEnvironment is a complete caller-selected environment for
 // workspace: its own HOME, trusted for that workspace, and a PATH holding only
 // a fixture agy executable that differs from the ambient one. It returns the
@@ -59,6 +65,48 @@ func TestFreshCandidateReadsProvidedEnvironmentNotAmbient(t *testing.T) {
 	requireSelectedAgy(t, "fresh candidate", candidate, home, cliPath, ambientHome)
 }
 
+func TestFreshNativeLaunchPreservesSSHSessionIndicators(t *testing.T) {
+	for _, mode := range []string{ModeReadOnly, ModeWorkspaceWrite} {
+		t.Run(mode, func(t *testing.T) {
+			fixture := newSuccessorFixture(t, mode)
+			fixture.request.PriorSession = nil
+			desktopValues, _, _ := selectedAgyEnvironment(t, fixture.request.CanonicalCwd)
+			desktop, err := PrepareCandidate(fixture.request, desktopValues)
+			if err != nil {
+				t.Fatal(err)
+			}
+			slices.Sort(desktopValues)
+			requireAgyLaunchEnvironment(t, desktop, desktopValues)
+
+			sshValues := append(slices.Clone(desktopValues), testSSHConnectionEntry, testSSHClientEntry, testSSHTTYEntry)
+			provided := append(slices.Clone(sshValues), "GEMINI_API_KEY=fixture-secret", "SSH_AUTH_SOCK=opaque-agent-socket", "UNRELATED_SETTING=fixture-value")
+			ssh, err := PrepareCandidate(fixture.request, provided)
+			if err != nil {
+				t.Fatal(err)
+			}
+			slices.Sort(sshValues)
+			requireAgyLaunchEnvironment(t, ssh, sshValues)
+			if !slices.Equal(ssh.WritableRoots, desktop.WritableRoots) {
+				t.Fatal("SSH session metadata changed runtime state exclusions")
+			}
+		})
+	}
+}
+
+func requireAgyLaunchEnvironment(t *testing.T, candidate commonprovider.ProfileCandidate, want []string) {
+	t.Helper()
+	if candidate.Inspection == nil || !slices.Equal(candidate.Inspection.Environment, want) {
+		t.Fatal("runtime inspection did not preserve selected launch environment")
+	}
+	prepared, err := candidate.Admit()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(prepared.Plan.Environment, want) {
+		t.Fatal("admitted plan did not preserve selected launch environment")
+	}
+}
+
 func TestPrepareDoesNotResolveExecutableFromAmbientPath(t *testing.T) {
 	fixture := newSuccessorFixture(t, ModeWorkspaceWrite)
 	environment, _, _ := selectedAgyEnvironment(t, fixture.request.CanonicalCwd)
@@ -102,7 +150,12 @@ func TestPortableExistingCandidateFallsBackToProvidedEnvironment(t *testing.T) {
 // environment of an admitted task's reconstruction.
 func TestRecordedLaunchEnvironmentResolvesExecutableFromProvidedScope(t *testing.T) {
 	fixture := newSuccessorFixture(t, ModeWorkspaceWrite)
+	fixture.meta.Environment = slices.DeleteFunc(slices.Clone(fixture.meta.Environment), func(entry string) bool {
+		key, _, _ := strings.Cut(entry, "=")
+		return key == "SSH_CONNECTION" || key == "SSH_CLIENT" || key == "SSH_TTY"
+	})
 	provided, providedHome, providedCLI := selectedAgyEnvironment(t, fixture.request.CanonicalCwd)
+	provided = append(provided, testSSHConnectionEntry, testSSHClientEntry, testSSHTTYEntry)
 	withoutPath := fixture.meta
 	withoutPath.Environment = slices.DeleteFunc(slices.Clone(fixture.meta.Environment), func(entry string) bool { return strings.HasPrefix(entry, "PATH=") })
 	for recordedName, recorded := range map[string]task.MetaRecord{"recorded": fixture.meta, "recorded without PATH": withoutPath} {
@@ -111,6 +164,7 @@ func TestRecordedLaunchEnvironmentResolvesExecutableFromProvidedScope(t *testing
 			t.Fatalf("%s: %v", recordedName, err)
 		}
 		requireRecordedLaunchWithProvidedExecutable(t, recordedName+" existing", candidate, recorded.Environment, providedCLI, providedHome)
+		requireAgyLaunchEnvironment(t, candidate, recorded.Environment)
 		if !slices.Equal(candidate.WritableRoots, recorded.EffectiveConfig.Policy.WritableRoots) {
 			t.Errorf("%s existing writable roots %q, want the recorded roots", recordedName, candidate.WritableRoots)
 		}
@@ -129,6 +183,9 @@ func TestRecordedLaunchEnvironmentResolvesExecutableFromProvidedScope(t *testing
 func TestSuccessorLaunchesUnderProvidedScopeNotRecordedEnvironment(t *testing.T) {
 	fixture := newSuccessorFixture(t, ModeWorkspaceWrite)
 	provided, providedHome, providedCLI := selectedAgyEnvironment(t, fixture.request.CanonicalCwd)
+	provided = append(provided, testSSHConnectionEntry, testSSHClientEntry, testSSHTTYEntry)
+	wantEnvironment := slices.Clone(provided)
+	slices.Sort(wantEnvironment)
 	withoutPath := fixture.meta
 	withoutPath.Environment = slices.DeleteFunc(slices.Clone(fixture.meta.Environment), func(entry string) bool { return strings.HasPrefix(entry, "PATH=") })
 	invalid := fixture.meta
@@ -142,6 +199,7 @@ func TestSuccessorLaunchesUnderProvidedScopeNotRecordedEnvironment(t *testing.T)
 			candidate.Inspection.Executable != providedCLI || candidate.Inspection.ExecutableSHA256 != "" {
 			t.Errorf("%s successor did not launch under the provided scope", name)
 		}
+		requireAgyLaunchEnvironment(t, candidate, wantEnvironment)
 	}
 }
 
