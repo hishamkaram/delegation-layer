@@ -1,6 +1,7 @@
 package tasklifecycle
 
 import (
+	"github.com/hishamkaram/delegation-layer/internal/config/policy"
 	"github.com/hishamkaram/delegation-layer/internal/resourceadmission"
 	supervisorcore "github.com/hishamkaram/delegation-layer/internal/supervisor"
 	"github.com/hishamkaram/delegation-layer/internal/task"
@@ -12,6 +13,7 @@ import (
 // DispatchRequest contains requested values and the recorded continuation binding.
 // Only journal operations grant authority; these values confer none.
 type DispatchRequest struct {
+	BudgetIntent                                  policy.BudgetIntent
 	Origin                                        *task.GatewayOrigin
 	ConnectorContext                              *task.ConnectorContext
 	ExpectedTeamSelection                         *teamcontract.Selection

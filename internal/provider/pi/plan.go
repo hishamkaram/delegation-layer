@@ -128,8 +128,11 @@ func validateOptions(request task.TaskRecord) error {
 }
 
 func validateBounds(request task.TaskRecord) error {
-	if request.BudgetNanos <= 0 || request.BriefLength <= 0 || request.BriefLength > task.MaxBriefSize {
-		return fmt.Errorf("%w: finite brief and positive budget are required", ErrUnsupportedProfile)
+	if _, err := request.ExecutionBudget(); err != nil {
+		return fmt.Errorf("%w: a valid finite or unlimited task budget is required: %w", ErrUnsupportedProfile, err)
+	}
+	if request.BriefLength <= 0 || request.BriefLength > task.MaxBriefSize {
+		return fmt.Errorf("%w: a finite brief is required", ErrUnsupportedProfile)
 	}
 	if !filepath.IsAbs(request.CanonicalCwd) || filepath.Clean(request.CanonicalCwd) != request.CanonicalCwd {
 		return fmt.Errorf("%w: workspace must be an absolute canonical path", ErrUnsupportedProfile)

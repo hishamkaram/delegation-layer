@@ -192,3 +192,14 @@ work counts as silence when the caller opts in. The interaction ready deadline
 continues to describe wall budget only. Explicit zero disables, omission inherits
 on continuation, and each successor has a fresh activity clock. Default behavior
 remains unchanged. Provider-native final result events alone do not close a turn.
+
+## Explicit execution budgets
+
+Adapters validate the task domain budget instead of treating zero nanoseconds
+as a finite duration. Unlimited tasks keep the same native invocation except
+Antigravity, whose absent native timeout maps to `--print-timeout 0s`. An
+explicit native timeout remains positive and is bounded only by a finite task
+budget. Historical Claude OAuth and isolated Codex profiles that prove
+credential validity until execution ends require finite successor budgets.
+Native turn completion and exact-session continuation retain their existing
+semantics; unlimited does not create a persistent multi-turn provider process.

@@ -21,7 +21,7 @@ func planRequest(mode string) task.TaskRecord {
 	return task.TaskRecord{
 		RootID: testRootID, TaskID: testTaskID, Provider: Provider, Mode: mode, CanonicalCwd: "/workspace",
 		BriefLength: 4, BudgetNanos: int64(time.Minute),
-		RequestedConfig: task.TaskConfig{Permission: mode, Effort: "default"},
+		RequestedConfig: task.TaskConfig{Permission: mode, Effort: "default", Budget: "1m0s"},
 	}
 }
 
@@ -80,15 +80,19 @@ func TestLegacyJSONArgumentsRetainHistoricalStartupControls(t *testing.T) {
 
 func TestJSONArgumentsRejectUnsupportedRequests(t *testing.T) {
 	cases := map[string]func(*task.TaskRecord){
-		"provider":            func(r *task.TaskRecord) { r.Provider = config.ProviderCodexExec },
-		"permission mismatch": func(r *task.TaskRecord) { r.RequestedConfig.Permission = config.ModeWorkspaceWrite },
-		"unknown mode":        func(r *task.TaskRecord) { r.Mode = "prompt"; r.RequestedConfig.Permission = "prompt" },
-		"native timeout":      func(r *task.TaskRecord) { r.RequestedConfig.NativeTimeout = "1s" },
-		"bad model":           func(r *task.TaskRecord) { r.RequestedConfig.Model = " model" },
-		"budget":              func(r *task.TaskRecord) { r.BudgetNanos = 0 },
-		"brief":               func(r *task.TaskRecord) { r.BriefLength = 0 },
-		"workspace":           func(r *task.TaskRecord) { r.CanonicalCwd = "relative" },
-		"task ID":             func(r *task.TaskRecord) { r.TaskID = "bad" },
+		"provider":             func(r *task.TaskRecord) { r.Provider = config.ProviderCodexExec },
+		"permission mismatch":  func(r *task.TaskRecord) { r.RequestedConfig.Permission = config.ModeWorkspaceWrite },
+		"unknown mode":         func(r *task.TaskRecord) { r.Mode = "prompt"; r.RequestedConfig.Permission = "prompt" },
+		"native timeout":       func(r *task.TaskRecord) { r.RequestedConfig.NativeTimeout = "1s" },
+		"bad model":            func(r *task.TaskRecord) { r.RequestedConfig.Model = " model" },
+		"budget":               func(r *task.TaskRecord) { r.BudgetNanos = 0 },
+		"unlimited with nanos": func(r *task.TaskRecord) { r.RequestedConfig.Budget = "unlimited" },
+		"malformed budget":     func(r *task.TaskRecord) { r.RequestedConfig.Budget = "soon" },
+		"noncanonical budget":  func(r *task.TaskRecord) { r.RequestedConfig.Budget = "60s" },
+		"omitted budget text":  func(r *task.TaskRecord) { r.RequestedConfig.Budget = "" },
+		"brief":                func(r *task.TaskRecord) { r.BriefLength = 0 },
+		"workspace":            func(r *task.TaskRecord) { r.CanonicalCwd = "relative" },
+		"task ID":              func(r *task.TaskRecord) { r.TaskID = "bad" },
 		"session": func(r *task.TaskRecord) {
 			r.PriorSession = &task.PriorSession{Provider: Provider, ConversationID: "latest", PredecessorTaskID: "abcdef0123456789abcdef0123456789"}
 		},
@@ -285,5 +289,21 @@ func TestLegacyRuntimeRequirementsPreserveSnapshotFlagOrder(t *testing.T) {
 	}
 	if !slices.Equal(requirements.HelpArgs, []string{"--no-extensions", "--offline"}) || !slices.Equal(requirements.RequiredFlags, want) {
 		t.Fatalf("legacy runtime requirements=%+v", requirements)
+	}
+}
+
+// The task budget is not a Pi native option, so an unlimited budget keeps the
+// finite request's exact argv, including an exact continuation.
+func TestJSONArgumentsAcceptUnlimitedBudgetWithoutNativeChange(t *testing.T) {
+	finite := planRequest(config.ModeWorkspaceWrite)
+	finite.PriorSession = &task.PriorSession{Provider: Provider, ConversationID: testUUID, PredecessorTaskID: "abcdef0123456789abcdef0123456789"}
+	unlimited := finite
+	unlimited.RequestedConfig.Budget, unlimited.BudgetNanos = "unlimited", 0
+	want, err := printArguments(finite)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := printArguments(unlimited); err != nil || !slices.Equal(got, want) {
+		t.Fatalf("unlimited argv=%q err=%v, want %q", got, err, want)
 	}
 }

@@ -14,9 +14,7 @@ func ContinuationConfig(requested, overrides task.TaskConfig) task.TaskConfig {
 	if overrides.OutputSilenceTimeout != "" {
 		requested.OutputSilenceTimeout = overrides.OutputSilenceTimeout
 	}
-	if overrides.Budget != "" {
-		requested.Budget = overrides.Budget
-	}
+	requested.Budget = overrides.Budget
 	if overrides.Model != "" {
 		requested.Model = overrides.Model
 	}
@@ -26,12 +24,12 @@ func ContinuationConfig(requested, overrides task.TaskConfig) task.TaskConfig {
 	if overrides.Budget == "" || requested.NativeTimeout == "" {
 		return requested
 	}
-	budget, err := config.ParseBudget(requested.Budget)
+	budget, err := config.ParseExecutionBudget(requested.Budget)
 	if err != nil {
 		return requested
 	}
 	nativeTimeout, err := time.ParseDuration(requested.NativeTimeout)
-	if err == nil && nativeTimeout > budget {
+	if err == nil && !budget.Encloses(nativeTimeout) {
 		requested.NativeTimeout = budget.String()
 	}
 	return requested

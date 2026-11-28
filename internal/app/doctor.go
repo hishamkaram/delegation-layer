@@ -11,6 +11,7 @@ import (
 
 	admissioncore "github.com/hishamkaram/delegation-layer/internal/admission"
 	"github.com/hishamkaram/delegation-layer/internal/config"
+	"github.com/hishamkaram/delegation-layer/internal/inspection"
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
 	"github.com/hishamkaram/delegation-layer/internal/scheduler"
 	"github.com/hishamkaram/delegation-layer/internal/supervisor/installation"
@@ -221,7 +222,11 @@ func doctorProvider(a Arguments, deps Dependencies, root string) (admissioncore.
 	if err != nil {
 		return admissioncore.PreflightResult{}, err
 	}
-	request, err := admissioncore.BuildRequest(strings.Repeat("0", 32), strings.Repeat("1", 32), a.Provider, cwd, a.Config, []byte("doctor"), nil)
+	requested := a.Config
+	// Doctor models a static inspection, never an admitted provider task. Its
+	// hypothetical request uses the existing auxiliary inspection bound.
+	requested.Budget = inspection.AdmissionTimeout.String()
+	request, err := admissioncore.BuildRequest(strings.Repeat("0", 32), strings.Repeat("1", 32), a.Provider, cwd, requested, []byte("doctor"), nil)
 	if err != nil {
 		return admissioncore.PreflightResult{}, err
 	}

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/hishamkaram/delegation-layer/internal/config"
+	"github.com/hishamkaram/delegation-layer/internal/config/policy"
 )
 
 func fixtureSeal(t *testing.T, stdout []byte) *ProviderExitRecord {
@@ -144,26 +145,30 @@ func TestNormalizeRequestedConfig(t *testing.T) {
 	valid := fixtureTask(t)
 	input := valid
 	input.Mode = ""
-	input.RequestedConfig = TaskConfig{}
+	input.RequestedConfig = TaskConfig{Budget: "30m"}
 	input.BudgetNanos = 0
 	if err := NormalizeRequestedConfig(&input); err != nil {
 		t.Fatal(err)
 	}
-	if input.CanonicalCwd != valid.CanonicalCwd || input.Mode != config.ModeReadOnly || input.BudgetNanos != int64(config.DefaultBudgetDuration) || input.RequestedConfig.Budget != "30m0s" {
+	if input.CanonicalCwd != valid.CanonicalCwd || input.Mode != config.ModeReadOnly || input.BudgetNanos != int64(30*time.Minute) || input.RequestedConfig.Budget != "30m0s" {
 		t.Fatalf("not normalized: %+v", input)
 	}
 	if err := ValidateTaskRecord(&input); err != nil {
 		t.Fatal(err)
 	}
-	review := fixtureTask(t)
-	review.Provider = config.ProviderCodexReview
-	review.RequestedConfig = TaskConfig{Permission: config.ModeReadOnly}
-	review.BudgetNanos = 0
-	if err := NormalizeRequestedConfig(&review); err != nil {
-		t.Fatal(err)
-	}
-	if review.BudgetNanos != int64(config.DefaultCodexReviewBudgetDuration) || review.RequestedConfig.Budget != "1h0m0s" {
-		t.Fatalf("codex review default was not normalized: %+v", review)
+	// New requests have no implicit budget, for Codex review or otherwise.
+	for _, provider := range []string{valid.Provider, config.ProviderCodexReview} {
+		omitted := fixtureTask(t)
+		omitted.Provider = provider
+		omitted.RequestedConfig = TaskConfig{Permission: config.ModeReadOnly}
+		omitted.BudgetNanos = 0
+		before := omitted
+		if err := NormalizeRequestedConfig(&omitted); !errors.Is(err, policy.ErrBudgetRequired) {
+			t.Fatalf("%s omitted budget error = %v, want ErrBudgetRequired", provider, err)
+		}
+		if !CompareRequests(&omitted, &before) {
+			t.Fatalf("%s failed normalization supplied a default: %+v", provider, omitted)
+		}
 	}
 	input = valid
 	input.RequestedConfig.Budget = "2s"
@@ -173,6 +178,29 @@ func TestNormalizeRequestedConfig(t *testing.T) {
 	}
 	if input != before {
 		t.Fatal("failed normalization altered the saved request")
+	}
+}
+
+// A legacy record carrying only budget_nanos is an explicit finite budget and
+// normalizes to its canonical text; it is not an omitted budget.
+func TestNormalizeRequestedConfigKeepsLegacyNanosOnlyBudget(t *testing.T) {
+	legacy := fixtureTask(t)
+	legacy.RequestedConfig.Budget = ""
+	legacy.BudgetNanos = int64(90 * time.Second)
+	if err := NormalizeRequestedConfig(&legacy); err != nil {
+		t.Fatal(err)
+	}
+	if legacy.RequestedConfig.Budget != "1m30s" || legacy.BudgetNanos != int64(90*time.Second) {
+		t.Fatalf("legacy nanos-only budget normalized to %q/%d", legacy.RequestedConfig.Budget, legacy.BudgetNanos)
+	}
+	if err := ValidateTaskRecord(&legacy); err != nil {
+		t.Fatal(err)
+	}
+	negative := fixtureTask(t)
+	negative.RequestedConfig.Budget = ""
+	negative.BudgetNanos = -1
+	if err := NormalizeRequestedConfig(&negative); !errors.Is(err, policy.ErrBudgetRequired) {
+		t.Fatalf("negative nanos-only budget error = %v, want ErrBudgetRequired", err)
 	}
 }
 

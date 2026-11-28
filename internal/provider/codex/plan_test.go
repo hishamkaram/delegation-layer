@@ -14,7 +14,7 @@ func profileRequest() task.TaskRecord {
 	return task.TaskRecord{
 		TaskID: "0123456789abcdef0123456789abcdef", Provider: Provider, Mode: Mode,
 		CanonicalCwd: "/workspace with spaces", BriefLength: 12, BudgetNanos: int64(120 * time.Second),
-		RequestedConfig: task.TaskConfig{Permission: Mode, Effort: "default"},
+		RequestedConfig: task.TaskConfig{Permission: Mode, Effort: "default", Budget: "2m0s"},
 	}
 }
 
@@ -77,7 +77,9 @@ func TestReviewArgumentsRejectUnsupportedRequests(t *testing.T) {
 			r.Mode = WorkspaceWriteMode
 			r.RequestedConfig.Permission = WorkspaceWriteMode
 		},
-		"interactive": func(r *task.TaskRecord) { r.RequestedConfig.Interactive = true },
+		"interactive":          func(r *task.TaskRecord) { r.RequestedConfig.Interactive = true },
+		"unlimited with nanos": func(r *task.TaskRecord) { r.RequestedConfig.Budget = "unlimited" },
+		"malformed budget":     func(r *task.TaskRecord) { r.RequestedConfig.Budget = "soon" },
 		"continuation": func(r *task.TaskRecord) {
 			r.PriorSession = &task.PriorSession{Provider: ReviewProvider, ConversationID: testThreadID, PredecessorTaskID: testTaskID}
 		},
@@ -210,14 +212,18 @@ func TestLegacyRuntimeRequirementsPreserveSnapshotFlagOrder(t *testing.T) {
 
 func TestExecArgumentsRejectUnsupportedRequests(t *testing.T) {
 	cases := map[string]func(*task.TaskRecord){
-		"native timeout":     func(r *task.TaskRecord) { r.RequestedConfig.NativeTimeout = "3s" },
-		"model newline":      func(r *task.TaskRecord) { r.RequestedConfig.Model = "model\nname" },
-		"effort tab":         func(r *task.TaskRecord) { r.RequestedConfig.Effort = "high\t" },
-		"oversized model":    func(r *task.TaskRecord) { r.RequestedConfig.Model = strings.Repeat("m", task.MaxControlRecordSize+1) },
-		"unbounded":          func(r *task.TaskRecord) { r.BudgetNanos = 0 },
-		"oversized":          func(r *task.TaskRecord) { r.BriefLength = task.MaxBriefSize + 1 },
-		"empty brief":        func(r *task.TaskRecord) { r.BriefLength = 0 },
-		"relative workspace": func(r *task.TaskRecord) { r.CanonicalCwd = "relative" },
+		"native timeout":       func(r *task.TaskRecord) { r.RequestedConfig.NativeTimeout = "3s" },
+		"model newline":        func(r *task.TaskRecord) { r.RequestedConfig.Model = "model\nname" },
+		"effort tab":           func(r *task.TaskRecord) { r.RequestedConfig.Effort = "high\t" },
+		"oversized model":      func(r *task.TaskRecord) { r.RequestedConfig.Model = strings.Repeat("m", task.MaxControlRecordSize+1) },
+		"unbounded":            func(r *task.TaskRecord) { r.BudgetNanos = 0 },
+		"unlimited with nanos": func(r *task.TaskRecord) { r.RequestedConfig.Budget = "unlimited" },
+		"malformed budget":     func(r *task.TaskRecord) { r.RequestedConfig.Budget = "soon" },
+		"noncanonical budget":  func(r *task.TaskRecord) { r.RequestedConfig.Budget = "120s" },
+		"omitted budget text":  func(r *task.TaskRecord) { r.RequestedConfig.Budget = "" },
+		"oversized":            func(r *task.TaskRecord) { r.BriefLength = task.MaxBriefSize + 1 },
+		"empty brief":          func(r *task.TaskRecord) { r.BriefLength = 0 },
+		"relative workspace":   func(r *task.TaskRecord) { r.CanonicalCwd = "relative" },
 		"session name": func(r *task.TaskRecord) {
 			r.PriorSession = &task.PriorSession{Provider: Provider, ConversationID: "latest"}
 		},
@@ -230,5 +236,41 @@ func TestExecArgumentsRejectUnsupportedRequests(t *testing.T) {
 				t.Fatalf("got %v, want unsupported profile", err)
 			}
 		})
+	}
+}
+
+// The task budget is not a Codex native option, so an unlimited budget keeps
+// the finite request's exact exec, continuation and review argv.
+func TestArgumentsAcceptUnlimitedBudgetWithoutNativeChange(t *testing.T) {
+	finite := profileRequest()
+	unlimited := finite
+	unlimited.RequestedConfig.Budget, unlimited.BudgetNanos = "unlimited", 0
+	requireSameExecArguments(t, "fresh", finite, unlimited)
+	prior := &task.PriorSession{Provider: Provider, ConversationID: "0199a213-81c0-7800-8aa1-bbab2a035a53", PredecessorTaskID: "abcdef0123456789abcdef0123456789"}
+	finite.PriorSession, unlimited.PriorSession = prior, prior
+	requireSameExecArguments(t, "continuation", finite, unlimited)
+
+	for _, request := range []*task.TaskRecord{&finite, &unlimited} {
+		request.Provider, request.PriorSession = ReviewProvider, nil
+		request.RequestedConfig.ReviewTarget = &task.ReviewTarget{Kind: task.ReviewTargetUncommitted}
+	}
+	want, _, err := reviewArguments(finite)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, _, err := reviewArguments(unlimited); err != nil || !slices.Equal(got, want) {
+		t.Fatalf("unlimited review argv=%q err=%v, want %q", got, err, want)
+	}
+}
+
+func requireSameExecArguments(t *testing.T, label string, finite, unlimited task.TaskRecord) {
+	t.Helper()
+	want, wantOutput, err := execArguments(finite)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, output, err := execArguments(unlimited)
+	if err != nil || !slices.Equal(got, want) || output != wantOutput {
+		t.Fatalf("%s unlimited argv=%q output=%d err=%v, want %q", label, got, output, err, want)
 	}
 }

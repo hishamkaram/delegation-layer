@@ -30,7 +30,7 @@ func guardedContinuationCLIArguments(t *testing.T, f *connectorFixture, prior, f
 	}
 	hash := sha256.Sum256([]byte(f.projectToken))
 	return []string{
-		"continue", "--task", f.request.TaskID, "--id", strings.Repeat("f", 32), "--root", f.store.Root,
+		"continue", "--budget", "1m", "--task", f.request.TaskID, "--id", strings.Repeat("f", 32), "--root", f.store.Root,
 		"--expected-root", f.rootToken, "--expected-project-sha256", hex.EncodeToString(hash[:]),
 		"--expected-spec-sha256", spec, "--expected-origin", priorFile, "--origin", freshFile, "--json",
 	}

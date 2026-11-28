@@ -84,7 +84,7 @@ func (td *TaskDir) RecordLifetimeIntentContext(ctx context.Context, facts Lifeti
 		return nil, err
 	}
 
-	_, _, spec, meta, err := td.loadAndValidatePreparedSetContext(ctx)
+	request, _, spec, meta, err := td.loadAndValidatePreparedSetContext(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -104,6 +104,10 @@ func (td *TaskDir) RecordLifetimeIntentContext(ctx context.Context, facts Lifeti
 		BootID:        facts.BootID,
 		Deadline:      facts.Deadline.UTC().Format(time.RFC3339Nano),
 		CreatedAt:     timestamp(),
+	}
+	record.Deadline, record.Unlimited, err = taskLifetimeDeadline(request, facts.Deadline)
+	if err != nil {
+		return nil, err
 	}
 	if err = task.ValidateLifetimeIntentRecord(&record); err != nil {
 		return nil, err
@@ -143,7 +147,7 @@ func (td *TaskDir) ReadLifetimeIntentContext(ctx context.Context) (*task.Lifetim
 	if err := task.ValidateLifetimeIntentRecord(&record); err != nil {
 		return nil, err
 	}
-	if err := td.matchLifetimeOwner(ctx, record.RootID, record.TaskID, record.OwnerKind, record.OwnerSHA256); err != nil {
+	if err := td.matchLifetimeOwner(ctx, record.RootID, record.TaskID, record.OwnerKind, record.OwnerSHA256, record.Unlimited); err != nil {
 		return nil, lifetimeValidationDependencyError(err)
 	}
 	return &record, nil
@@ -165,7 +169,7 @@ func (td *TaskDir) RecordLifetimeRegistrationContext(ctx context.Context, facts 
 		return nil, err
 	}
 
-	_, _, spec, meta, err := td.loadAndValidatePreparedSetContext(ctx)
+	request, _, spec, meta, err := td.loadAndValidatePreparedSetContext(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -185,6 +189,10 @@ func (td *TaskDir) RecordLifetimeRegistrationContext(ctx context.Context, facts 
 		BootID:        facts.BootID,
 		Deadline:      facts.Deadline.UTC().Format(time.RFC3339Nano),
 		CreatedAt:     timestamp(),
+	}
+	record.Deadline, record.Unlimited, err = taskLifetimeDeadline(request, facts.Deadline)
+	if err != nil {
+		return nil, err
 	}
 	record.CustodyPlacement = facts.CustodyPlacement.Clone()
 	if err = task.ValidateLifetimeRegistrationRecord(&record); err != nil {
@@ -244,7 +252,7 @@ func (td *TaskDir) ReadLifetimeRegistrationContext(ctx context.Context) (*task.L
 	if err := task.ValidateLifetimeRegistrationRecord(&record); err != nil {
 		return nil, err
 	}
-	if err := td.matchLifetimeOwner(ctx, record.RootID, record.TaskID, record.OwnerKind, record.OwnerSHA256); err != nil {
+	if err := td.matchLifetimeOwner(ctx, record.RootID, record.TaskID, record.OwnerKind, record.OwnerSHA256, record.Unlimited); err != nil {
 		return nil, lifetimeValidationDependencyError(err)
 	}
 	if err := lifetimeContextErr(ctx); err != nil {
@@ -587,10 +595,17 @@ func lifetimeValidationDependencyError(err error) error {
 	return errors.Join(task.ErrIdentityMismatch, err)
 }
 
-func (td *TaskDir) matchLifetimeOwner(ctx context.Context, root, id, ownerKind, ownerSHA string) error {
-	_, _, expectedSpec, expectedMeta, err := td.loadAndValidatePreparedSetContext(ctx)
+func (td *TaskDir) matchLifetimeOwner(ctx context.Context, root, id, ownerKind, ownerSHA string, unlimited bool) error {
+	request, _, expectedSpec, expectedMeta, err := td.loadAndValidatePreparedSetContext(ctx)
 	if err != nil {
 		return err
+	}
+	budget, err := request.ExecutionBudget()
+	if err != nil {
+		return err
+	}
+	if budget.Unlimited() != unlimited {
+		return task.ErrIdentityMismatch
 	}
 	expectedOwner, err := task.LifetimeTaskOwnerSHA256(expectedSpec, expectedMeta)
 	if err != nil {
@@ -611,4 +626,19 @@ func (td *TaskDir) matchLifetimeIdentity(root, id string) error {
 
 func lifetimeLaunchName(sequence uint64) string {
 	return fmt.Sprintf("%020d%s", sequence, lifetimeLaunchSuffix)
+}
+
+// taskLifetimeDeadline derives persisted execution mode from the task authority.
+func taskLifetimeDeadline(request *task.TaskRecord, deadline time.Time) (string, bool, error) {
+	budget, err := request.ExecutionBudget()
+	if err != nil {
+		return "", false, err
+	}
+	if budget.Unlimited() {
+		if !deadline.IsZero() {
+			return "", false, task.ErrIdentityMismatch
+		}
+		return "", true, nil
+	}
+	return deadline.UTC().Format(time.RFC3339Nano), false, nil
 }

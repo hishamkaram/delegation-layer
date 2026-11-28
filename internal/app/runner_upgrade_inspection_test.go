@@ -430,7 +430,7 @@ func requireLegacyRunnerContinuation(t *testing.T, root string, req *task.TaskRe
 	if err != nil {
 		t.Fatal(err)
 	}
-	continuation, err := tasklifecycle.BuildContinuationRequest(dispatchRequest(Arguments{}, Dependencies{ResourceChecker: fixtureResources}.withCapturedEnvironment()), root, loadedReq, loadedMeta, loadedBrief)
+	continuation, err := tasklifecycle.BuildContinuationRequest(dispatchRequest(Arguments{Config: task.TaskConfig{Budget: "1m"}}, Dependencies{ResourceChecker: fixtureResources}.withCapturedEnvironment()), root, loadedReq, loadedMeta, loadedBrief)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -786,7 +786,7 @@ func TestManagedContinuationKeepsRunnerOwnership(t *testing.T) {
 		RunnerOwnership:  task.RunnerOwnershipManaged,
 		SupervisorConfig: task.SupervisorRef{ConfigPath: filepath.Join(testsupport.CanonicalTempDir(t), "pueue.yml")},
 	}
-	arguments := Arguments{Runner: managedRunner}
+	arguments := Arguments{Runner: managedRunner, Config: task.TaskConfig{Budget: "1m"}}
 	if err := tasklifecycle.ValidateContinuationMetadata(root, supervisorAdmissionSelection(arguments, Dependencies{ResourceChecker: fixtureResources}.withCapturedEnvironment()), meta); err != nil {
 		t.Fatal(err)
 	}

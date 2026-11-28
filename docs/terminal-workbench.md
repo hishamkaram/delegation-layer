@@ -42,6 +42,8 @@ check `delegate help tui` in your installed build before using it.
 Forms use `Tab` / `Shift-Tab` to change field, `Ctrl-O` to show advanced
 options, and `Ctrl-S` to review. Review shows the exact resource, workspace,
 provider, requested model, permission and budget before `Enter` submits.
+Task dispatch, continuation and schedule forms require a positive budget duration
+or `unlimited`; leaving the budget blank is rejected.
 `Esc` returns to editing. Text inputs keep `q` as text. Long previews scroll
 with arrow keys. Tasks use an aligned table with Task ID, Provider, Admission,
 Liveness, Publication and Created columns. Rounded single-line borders frame

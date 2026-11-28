@@ -87,7 +87,7 @@ func runNativeOwnerRequest(connection *net.UnixConn, identity nativeCommandIdent
 		}
 		disconnected <- stopErr
 	}()
-	workErr, stopErr := RunSupervisedContext(ctx, identity.deadline, SupervisedOptions{Stopper: owner, Lifetime: owner}, func(scope PreflightScope) error {
+	workErr, stopErr := RunSupervisedContext(ctx, identity.deadline, SupervisedOptions{Unlimited: identity.unlimited, Stopper: owner, Lifetime: owner}, func(scope PreflightScope) error {
 		return RunScopedCommand(scope, command, CommandHooks{NullOutput: identity.nullOutput, Wait: nativeCallbackWait})
 	})
 	complete.Store(true)

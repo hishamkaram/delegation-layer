@@ -14,7 +14,7 @@ The main skill owns [root selection](../SKILL.md#3-prepare-separate-paths-and-a-
 | `models --provider ID [--cwd ABS] --json` | Discover model/effort facts; optional approved [scope guards](gateway.md#scoped-model-discovery) | Native inspection, no admitted task |
 | `filesystem scopes/list/read/inspect/git --request FILE_OR_DASH --json` | [Bounded filesystem observations](gateway.md#filesystem-observations) | None; scopes may use the fixed Native OS temp lookup |
 | `doctor [--provider ID --cwd ABS] --json` | Optional passive bundle/root/provider observations | None |
-| `preflight --provider ID --cwd ABS --json` | Check static readiness | None |
+| `preflight --provider ID --cwd ABS --budget DURATION\|unlimited --json` | Check static readiness | None |
 | `dispatch [--auto \| --provider ID] ... --json` | Admit a bounded turn; a Member may supply the destination | At most one launch attempt |
 | `status TASK --json` | Observe task state | No launch |
 | `collect TASK [--watch DURATION] --json` | Read or wait for publication | No launch |
@@ -106,7 +106,7 @@ skill/routing state; upgrade an unsupported CLI through its original installer.
 
 ```text
 delegate dispatch [--auto | --provider ID] --brief FILE \
-  --cwd ABS [--id TASK_ID] [--permission MODE] [--budget DURATION] \
+  --cwd ABS [--id TASK_ID] [--permission MODE] --budget DURATION|unlimited \
   [--model MODEL] [--effort EFFORT] [--native-timeout DURATION] \
   [--output-silence-timeout DURATION] \
   [--interactive] [--review-target TARGET] [--resume-task TASK_ID] \
@@ -122,10 +122,10 @@ delegate dispatch [--auto | --provider ID] --brief FILE \
 | `--provider ID` | Named catalog profile; mutually exclusive with `--auto`. |
 | `--id TASK_ID` | Optional 32-character lowercase hexadecimal ID; omit to allocate. |
 | `--permission MODE` | Default `read-only`; authorized `workspace-write` requests unattended commands and edits. Native access can extend beyond the workspace. |
-| `--budget DURATION` | Positive Go duration; default `30m`, or `1h` for `codex:review`. Queue time is excluded. |
+| `--budget DURATION\|unlimited` | Required on every new dispatch, continuation, preflight and schedule. Choose a positive Go duration or exactly `unlimited`; there is no implicit default. Queue time is excluded. |
 | `--model MODEL` | Exact selector for a profile advertising `model`: Codex, CCR, Claude, AGY, Pi, or OpenCode. CCR requires a configured alias. |
 | `--effort VALUE` | Advertised effort selector; omitted or `default` preserves native defaults. |
-| `--native-timeout DURATION` | Antigravity print timeout, no greater than `--budget`. |
+| `--native-timeout DURATION` | Positive Antigravity print timeout, bounded by a finite task budget. Unlimited imposes no upper bound; without a native timeout, Antigravity receives `--print-timeout 0s`. |
 | `--output-silence-timeout DURATION` | Optional provider-output silence limit. Default off; `0` explicitly disables. Positive subsecond values are preserved. Continuation inherits unless overridden. |
 | `--interactive` | Enable the profile's advertised native interaction; steering is a separate capability. See [interaction](interaction.md). |
 | `--review-target TARGET` | Required only for native [Codex review](#codex-review). |
@@ -133,6 +133,14 @@ delegate dispatch [--auto | --provider ID] --brief FILE \
 | `--cpu-guard`, `--memory-guard` | Independent fresh-admission checks, both default `true`. Set `=false` to opt out for this dispatch or continuation only. |
 | `--team-scope`, `--team`, `--member` | Supply all three to choose one explicit [Member](#using-a-member); no implicit Team or Role-only target. |
 | `--project-root ABS` | Explicit containing root for a non-Git project-scoped Member; invalid without that target or in a Git context. |
+
+An unlimited turn has no execution-expiry timer or default silence limit.
+The supervisor and guardian retain cancellation and native closure ownership.
+Control calls remain bounded to 10 seconds and startup to 30 seconds through
+worker hello; durable cleanup retains custody until its existing proofs settle.
+Unlimited does not keep the provider process alive after a completed turn.
+A new turn still uses [exact-session continuation](continuation.md). Historical
+Claude/Codex credential-validity profiles can require a finite successor budget.
 
 Without a Team target, exactly one of `--provider` and `--auto` is required.
 A bound Member may supply an omitted destination; an unbound Member still
@@ -167,7 +175,7 @@ Correct it only under the returned task-creation guidance.
 Provider silence counts positive stdout/stderr reads, including partial chunks.
 The clock starts after successful provider start, independently of queueing and
 preparation. Waiting for background work or an interactive reply also counts;
-user input does not reset provider-output activity. Wall budget still applies.
+user input does not reset provider-output activity. A finite wall budget still applies.
 `status.last_provider_output_at` is approximate nonempty capture metadata after
 provider-start evidence, not a heartbeat or watchdog authority. Native provider
 exit disarms silence before capture joins. Forced silence expiry has distinct
@@ -415,7 +423,7 @@ See [definition and host results](result-handling.md#schedule-definition-and-hos
 delegate schedule create --brief FILE --cwd ABS \
   [--auto | --provider ID] --cron 'MIN HOUR DOM MONTH DOW' \
   [--timezone ZONE] [--id SCHEDULE_ID] [--model MODEL] [--effort EFFORT] \
-  [--permission MODE] [--budget DURATION] [--native-timeout DURATION] \
+  [--permission MODE] --budget DURATION|unlimited [--native-timeout DURATION] \
   [--review-target TARGET] \
   [--team-scope user|project --team TEAM_ID --member MEMBER_ID] \
   [--project-root ABS] --json
@@ -429,7 +437,11 @@ delegate schedule policy get SCHEDULE_ID --json
 delegate schedule policy set SCHEDULE_ID --quota-hold on --quota-max-hold 6h --json
 ```
 
-- Requested provider options remain as supplied, including omissions. Creation
+- Budget is required for new definitions. Older saved definitions with an omitted
+  budget retain 30 minutes, or one hour for `codex:review`, resolved against the
+  provider selected for each new occurrence. Stored definition bytes and
+  same-task retries retain their original authority.
+- Other requested provider options remain as supplied, including omissions. Creation
   validates inputs without checking provider installation, authentication or
   readiness. It does not create a managed workspace. Interactive requests,
   continuation/session options and supervisor/runner overrides are unsupported.
@@ -882,8 +894,8 @@ to inspect recorded work, and [result handling](result-handling.md#scheduled-exe
 to collect its answer. Schedule reservation release is separate from result
 publication.
 
-Each appointment starts a fresh leader with its saved budget or the normal
-provider default. Overlap protection covers that leader. Independently admitted
+Each appointment starts a fresh leader with its saved explicit budget. Older
+omitted-budget definitions use the legacy per-provider schedule policy. Overlap protection covers that leader. Independently admitted
 Delegate workers keep their own budgets; provider-native in-session subagents do
 not acquire independent Delegate lifetimes. The workflow owns saved progress,
 worker IDs and deduplication; unknown acknowledgment is not permission to resend.
@@ -1020,11 +1032,11 @@ Use static preflight when readiness was requested, not before every task:
 ```sh
 delegate preflight \
   --provider PROVIDER_ID --cwd ABSOLUTE_WORKSPACE \
-  --permission REQUESTED_MODE --json
+  --permission REQUESTED_MODE --budget 1m --json
 ```
 
-Supply required options; the supported request options also include budget,
-model, effort, native timeout, and review target where advertised.
+Choose the budget explicitly. Other request options include model, effort,
+native timeout, and review target where advertised.
 Preflight creates no task, starts no supervisor, and launches no provider.
 A ready `verification: "preflight"` result is not live authentication or
 execution proof. Report blocked/unsupported results and follow the returned

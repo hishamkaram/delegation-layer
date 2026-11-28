@@ -10,14 +10,14 @@ import (
 func TestScheduleArgumentsPreserveRequestedValues(t *testing.T) {
 	root := t.TempDir()
 	brief := filepath.Join(root, "brief")
-	args, err := ParseArguments([]string{"--root", root, "schedule", "create", "--brief", brief, "--cwd", root, "--auto", "--cron", "0 9 * * *", "--timezone=", "--json"})
+	args, err := ParseArguments([]string{"--root", root, "schedule", "create", "--budget", "1m", "--brief", brief, "--cwd", root, "--auto", "--cron", "0 9 * * *", "--timezone=", "--json"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if args.ScheduleAction != "create" || args.ScheduleCron != "0 9 * * *" || !args.ScheduleTimezoneSet || args.ScheduleTimezone != "" || !args.Auto || !args.JSON || args.Config.Permission != "" {
 		t.Fatalf("unexpected requested schedule arguments: %+v", args)
 	}
-	args, err = ParseArguments([]string{"schedule", "create", "--cron", "0 9 * * *"})
+	args, err = ParseArguments([]string{"schedule", "create", "--budget", "1m", "--cron", "0 9 * * *"})
 	if err != nil || args.ScheduleTimezoneSet {
 		t.Fatalf("omitted timezone: args=%+v err=%v", args, err)
 	}

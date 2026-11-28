@@ -30,7 +30,7 @@ func TestSchedulePolicyAndHealthReadsArePassive(t *testing.T) {
 }
 
 func TestScheduleCreationParsesImmutableHookAndSilenceOptions(t *testing.T) {
-	args := []string{"schedule", "create", "--brief", "brief.md", "--cwd", t.TempDir(), "--cron", "* * * * *", "--provider", "claude:print", "--failure-hook", "/installed/notify", "--failure-threshold", "3", "--failure-hook-timeout", "4s", "--output-silence-timeout", "250ms"}
+	args := []string{"schedule", "create", "--budget", "1m", "--brief", "brief.md", "--cwd", t.TempDir(), "--cron", "* * * * *", "--provider", "claude:print", "--failure-hook", "/installed/notify", "--failure-threshold", "3", "--failure-hook-timeout", "4s", "--output-silence-timeout", "250ms"}
 	a, err := ParseArguments(args)
 	if err != nil || a.ScheduleHook == nil || a.ScheduleHook.Executable != "/installed/notify" || a.ScheduleHook.Threshold != 3 || a.ScheduleHook.Timeout != 4*time.Second || a.Config.OutputSilenceTimeout != "250ms" {
 		t.Fatalf("creation options lost %+v %v", a, err)

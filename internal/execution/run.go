@@ -10,6 +10,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/hishamkaram/delegation-layer/internal/config/policy"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 )
@@ -105,16 +106,14 @@ func prepareLaunchPlan(i *invocation, request *task.TaskRecord, plan Plan, opts 
 	_, startErr := i.prepareLaunchFiles(plan)
 	clock := opts.clock()
 	i.started = clock.Now()
-	deadline := i.started.Add(time.Duration(request.BudgetNanos))
-	if !opts.Deadline.IsZero() {
-		if opts.Deadline.After(deadline) {
-			// Keep the admitted deadline and arm its owner before finalizing
-			// the refusal; every finalization path requires that owner.
-			startErr = errors.Join(startErr, task.ErrIdentityMismatch)
-		} else {
-			deadline = opts.Deadline
-		}
+	budget, budgetErr := request.ExecutionBudget()
+	if budgetErr != nil {
+		return launchPlan, errors.Join(startErr, budgetErr)
 	}
+	deadline, deadlineErr := executionDeadline(budget, i.started, opts.Deadline)
+	// Retain the admitted mode and arm its owner even when refusing a
+	// conflicting enclosing deadline; finalization still needs that owner.
+	startErr = errors.Join(startErr, deadlineErr)
 	i.budget = armBudgetUntil(clock, deadline, opts)
 	silence, silenceErr := task.ParseOutputSilenceTimeout(request.RequestedConfig.OutputSilenceTimeout)
 	if silenceErr != nil {
@@ -151,6 +150,27 @@ func prepareLaunchPlan(i *invocation, request *task.TaskRecord, plan Plan, opts 
 	// The constructed command makes the refreshed plan authoritative. A
 	// refusal keeps the admitted plan available for sealing.
 	return refreshedPlan, nil
+}
+
+func executionDeadline(budget policy.ExecutionBudget, started, enclosing time.Time) (time.Time, error) {
+	if budget.Unlimited() {
+		if !enclosing.IsZero() {
+			return time.Time{}, task.ErrIdentityMismatch
+		}
+		return time.Time{}, nil
+	}
+	duration, finite := budget.Finite()
+	if !finite {
+		return time.Time{}, task.ErrIdentityMismatch
+	}
+	deadline := started.Add(duration)
+	if enclosing.IsZero() {
+		return deadline, nil
+	}
+	if enclosing.After(deadline) {
+		return deadline, task.ErrIdentityMismatch
+	}
+	return enclosing, nil
 }
 
 func finishInvocation(i *invocation, plan Plan, startErr error, opts Options) (result Result) {
@@ -217,8 +237,8 @@ func validatePlan(td *taskdir.TaskDir, permit *taskdir.StartPermit, p Plan, allo
 	if err != nil {
 		return err
 	}
-	if guard.RootID != meta.RootID || guard.TaskID != td.TaskID || guard.SpecSHA256 != meta.SpecSHA256 || guard.BudgetNanos != req.BudgetNanos {
-		return task.ErrInvalidPermit
+	if err := validateStartPermitIdentity(guard, req, meta); err != nil {
+		return err
 	}
 	return matchLaunchPlan(p, req, meta, allowRuntimeRefresh)
 }
@@ -479,4 +499,19 @@ func sealAndPublish(td *taskdir.TaskDir, i *invocation, plan Plan, startErr erro
 		opts.emit("published")
 	}
 	return out, cleanup, err
+}
+
+func validateStartPermitIdentity(guard *task.ProviderStartRecord, req *task.TaskRecord, meta *task.MetaRecord) error {
+	requestedBudget, budgetErr := req.ExecutionBudget()
+	guardBudget, guardErr := guard.ExecutionBudget()
+	if budgetErr != nil || guardErr != nil {
+		return errors.Join(budgetErr, guardErr)
+	}
+	if requestedBudget != guardBudget {
+		return task.ErrInvalidPermit
+	}
+	if guard.RootID != meta.RootID || guard.TaskID != req.TaskID || guard.SpecSHA256 != meta.SpecSHA256 {
+		return task.ErrInvalidPermit
+	}
+	return nil
 }

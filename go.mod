@@ -12,7 +12,7 @@ require (
 	github.com/go-co-op/gocron/v2 v2.23.0
 	github.com/godbus/dbus/v5 v5.2.4
 	github.com/google/uuid v1.6.0
-	github.com/hishamkaram/delegation-layer-gateway v0.0.0-20261121204548-751a59e24f17
+	github.com/hishamkaram/delegation-layer-gateway v0.2.1-0.20261128113249-4683e11e2ba9
 	github.com/jonboulle/clockwork v0.5.0
 	github.com/shirou/gopsutil/v4 v4.26.9
 	go.uber.org/goleak v1.3.0

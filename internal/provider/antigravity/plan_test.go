@@ -64,16 +64,20 @@ func TestRuntimeRequirementsAddOptionalFlagsOnlyWhenRequested(t *testing.T) {
 
 func TestPrintArgumentsRejectUnsupportedRequests(t *testing.T) {
 	cases := map[string]func(*task.TaskRecord){
-		"missing workspace":   func(r *task.TaskRecord) { r.CanonicalCwd = "" },
-		"relative workspace":  func(r *task.TaskRecord) { r.CanonicalCwd = "relative" },
-		"unclean workspace":   func(r *task.TaskRecord) { r.CanonicalCwd = "/work/../other" },
-		"permission mismatch": func(r *task.TaskRecord) { r.RequestedConfig.Permission = "read-only" },
-		"provider mismatch":   func(r *task.TaskRecord) { r.Provider = "codex:exec" },
-		"zero budget":         func(r *task.TaskRecord) { r.BudgetNanos = 0 },
-		"negative budget":     func(r *task.TaskRecord) { r.BudgetNanos = -1 },
-		"model newline":       func(r *task.TaskRecord) { r.RequestedConfig.Model = "some\nmodel" },
-		"effort tab":          func(r *task.TaskRecord) { r.RequestedConfig.Effort = "max\t" },
-		"oversized model":     func(r *task.TaskRecord) { r.RequestedConfig.Model = strings.Repeat("m", task.MaxControlRecordSize+1) },
+		"missing workspace":    func(r *task.TaskRecord) { r.CanonicalCwd = "" },
+		"relative workspace":   func(r *task.TaskRecord) { r.CanonicalCwd = "relative" },
+		"unclean workspace":    func(r *task.TaskRecord) { r.CanonicalCwd = "/work/../other" },
+		"permission mismatch":  func(r *task.TaskRecord) { r.RequestedConfig.Permission = "read-only" },
+		"provider mismatch":    func(r *task.TaskRecord) { r.Provider = "codex:exec" },
+		"zero budget":          func(r *task.TaskRecord) { r.BudgetNanos = 0 },
+		"negative budget":      func(r *task.TaskRecord) { r.BudgetNanos = -1 },
+		"unlimited with nanos": func(r *task.TaskRecord) { r.RequestedConfig.Budget = "unlimited" },
+		"malformed budget":     func(r *task.TaskRecord) { r.RequestedConfig.Budget = "soon" },
+		"noncanonical budget":  func(r *task.TaskRecord) { r.RequestedConfig.Budget = "120s" },
+		"omitted budget text":  func(r *task.TaskRecord) { r.RequestedConfig.Budget = "" },
+		"model newline":        func(r *task.TaskRecord) { r.RequestedConfig.Model = "some\nmodel" },
+		"effort tab":           func(r *task.TaskRecord) { r.RequestedConfig.Effort = "max\t" },
+		"oversized model":      func(r *task.TaskRecord) { r.RequestedConfig.Model = strings.Repeat("m", task.MaxControlRecordSize+1) },
 		"resume selector": func(r *task.TaskRecord) {
 			r.PriorSession = &task.PriorSession{Provider: Provider, ConversationID: "--last"}
 		},
@@ -94,7 +98,7 @@ func TestPrintArgumentsRejectUnsupportedRequests(t *testing.T) {
 }
 
 func argumentRequest() task.TaskRecord {
-	return task.TaskRecord{Provider: Provider, Mode: Mode, CanonicalCwd: "/workspace with spaces", BudgetNanos: int64(2 * time.Minute), RequestedConfig: task.TaskConfig{Permission: Mode}}
+	return task.TaskRecord{Provider: Provider, Mode: Mode, CanonicalCwd: "/workspace with spaces", BudgetNanos: int64(2 * time.Minute), RequestedConfig: task.TaskConfig{Permission: Mode, Budget: "2m0s"}}
 }
 
 func TestPrintArgumentsNativeTimeoutKeepsOuterBudget(t *testing.T) {
@@ -111,6 +115,43 @@ func TestPrintArgumentsNativeTimeoutKeepsOuterBudget(t *testing.T) {
 		request.RequestedConfig.NativeTimeout = value
 		if _, err = printArguments(request); !errors.Is(err, ErrUnsupportedProfile) {
 			t.Errorf("invalid timeout %q accepted: %v", value, err)
+		}
+	}
+}
+
+// agy documents --print-timeout 0 as waiting until the turn completes. An
+// unlimited budget without a native timeout maps to it, with no invented
+// finite deadline, and an exact continuation keeps its conversation.
+func TestPrintArgumentsMapUnlimitedBudgetToUnboundedPrintTimeout(t *testing.T) {
+	request := argumentRequest()
+	request.RequestedConfig.Budget, request.BudgetNanos = "unlimited", 0
+	want := []string{"--sandbox", "--mode", "accept-edits", "--add-dir", request.CanonicalCwd, "--output-format", "json", "--input-format", "text", "--disable-slash-commands", "--print-timeout", "0s"}
+	got, err := printArguments(request)
+	if err != nil || !slices.Equal(got, want) {
+		t.Fatalf("unlimited arguments = %q, %v", got, err)
+	}
+	request.PriorSession = &task.PriorSession{Provider: Provider, ConversationID: "b4fb555c-9c20-4aba-b048-6ef3512a4633"}
+	want = append(want, "--conversation", request.PriorSession.ConversationID)
+	if got, err = printArguments(request); err != nil || !slices.Equal(got, want) {
+		t.Fatalf("unlimited continuation arguments = %q, %v", got, err)
+	}
+}
+
+// An unlimited budget has no enclosing bound, so an explicit positive native
+// timeout is passed as given even beyond any finite budget; invalid timeouts
+// are still refused.
+func TestPrintArgumentsUnlimitedBudgetKeepsExplicitNativeTimeout(t *testing.T) {
+	request := argumentRequest()
+	request.RequestedConfig.Budget, request.BudgetNanos = "unlimited", 0
+	request.RequestedConfig.NativeTimeout = "1000h0m0s"
+	arguments, err := printArguments(request)
+	if err != nil || arguments[len(arguments)-2] != "--print-timeout" || arguments[len(arguments)-1] != "1000h0m0s" {
+		t.Fatalf("unlimited native timeout arguments = %q, %v", arguments, err)
+	}
+	for _, value := range []string{"0s", "-1s", "not-a-duration"} {
+		request.RequestedConfig.NativeTimeout = value
+		if arguments, err = printArguments(request); !errors.Is(err, ErrUnsupportedProfile) || arguments != nil {
+			t.Errorf("invalid timeout %q with unlimited budget produced %q, %v", value, arguments, err)
 		}
 	}
 }

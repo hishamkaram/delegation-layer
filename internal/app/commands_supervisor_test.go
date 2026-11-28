@@ -184,7 +184,7 @@ func TestBuildContinuationArgumentsPinsResolvedRoot(t *testing.T) {
 		},
 	}
 	meta := &task.MetaRecord{Environment: []string{"HOME=/task"}, RunnerExecutable: "/task/runner", RunnerOwnership: task.RunnerOwnershipManaged, SupervisorConfig: savedSupervisor}
-	arguments, err := tasklifecycle.BuildContinuationRequest(dispatchRequest(Arguments{}, Dependencies{ResourceChecker: fixtureResources}.withCapturedEnvironment()), root, predecessor, meta, []byte("brief"))
+	arguments, err := tasklifecycle.BuildContinuationRequest(dispatchRequest(Arguments{Config: task.TaskConfig{Budget: "1m"}}, Dependencies{ResourceChecker: fixtureResources}.withCapturedEnvironment()), root, predecessor, meta, []byte("brief"))
 	if err != nil {
 		t.Fatal(err)
 	}

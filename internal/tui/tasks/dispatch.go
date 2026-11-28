@@ -96,7 +96,7 @@ func (v views) continueTask(id string) ui.Action {
 	a.TaskID = id
 	fields := []ui.Field{textField("Predecessor task", "exact local predecessor; permission/session/workspace are inherited", id, func(a *app.Arguments, s string) { a.TaskID = s })}
 	fields = append(fields, briefFields()...)
-	fields = append(fields, textField("Budget", "finite successor budget", a.Config.Budget, func(a *app.Arguments, s string) { a.Config.Budget = s }))
+	fields = append(fields, textField("Budget", "required: positive duration or unlimited", a.Config.Budget, func(a *app.Arguments, s string) { a.Config.Budget = s }))
 	fields = append(fields, advanced(
 		textField("Requested model", "optional supported continuation override", a.Config.Model, func(a *app.Arguments, s string) { a.Config.Model = s }),
 		textField("Effort", "optional supported continuation override", a.Config.Effort, func(a *app.Arguments, s string) { a.Config.Effort = s }))...)

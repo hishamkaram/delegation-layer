@@ -3,6 +3,8 @@ package task
 import (
 	"errors"
 	"fmt"
+
+	"github.com/hishamkaram/delegation-layer/internal/config/policy"
 )
 
 // StopCauseAutomaticAbandonment permanently closes admission for a task that
@@ -78,22 +80,37 @@ func ValidateStopRequestRecord(r *StopRequestRecord) error {
 	if r.NumericTaskID != nil && *r.NumericTaskID < 0 {
 		return ErrIdentityMismatch
 	}
-	if r.Label != "delegate:"+r.RootID+":"+r.TaskID || r.BudgetNanos <= 0 {
+	if r.Label != "delegate:"+r.RootID+":"+r.TaskID {
 		return ErrIdentityMismatch
+	}
+	budget, err := budgetFromRecordFields(r.BudgetNanos, r.BudgetUnlimited)
+	if err != nil {
+		return fmt.Errorf("%w: stop request budget: %w", ErrIdentityMismatch, err)
 	}
 	if err := ValidateFreshSupervisorRef(r.Supervisor); err != nil {
 		return err
 	}
-	if err := validateStopDeadline(r); err != nil {
+	if err := validateStopDeadline(r, budget); err != nil {
 		return err
 	}
 	return validateTimestamp(r.RequestedAt)
 }
 
-func validateStopDeadline(r *StopRequestRecord) error {
+// ExecutionBudget decodes the task budget bound into a stop request.
+func (r *StopRequestRecord) ExecutionBudget() (policy.ExecutionBudget, error) {
+	if r == nil {
+		return policy.ExecutionBudget{}, errors.New("nil stop request")
+	}
+	return budgetFromRecordFields(r.BudgetNanos, r.BudgetUnlimited)
+}
+
+// validateStopDeadline binds the cause to its deadline. An unlimited budget
+// has no budget deadline, so it never authorizes a budget stop; user,
+// abandonment and output-silence stops remain valid.
+func validateStopDeadline(r *StopRequestRecord, budget policy.ExecutionBudget) error {
 	switch r.Cause {
 	case "budget", StopCauseOutputSilence:
-		if r.RequestID != r.Cause {
+		if r.RequestID != r.Cause || (r.Cause == "budget" && budget.Unlimited()) {
 			return ErrIdentityMismatch
 		}
 		return validateTimestamp(r.Deadline)

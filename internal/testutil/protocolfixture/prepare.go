@@ -7,12 +7,17 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"time"
 
 	"github.com/hishamkaram/delegation-layer/internal/config"
+	"github.com/hishamkaram/delegation-layer/internal/config/policy"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 )
+
+// fixtureBudget is this fixture's own explicit request budget when -budget is
+// omitted. Production admission has no implicit budget; the fixture always
+// writes an explicit one.
+const fixtureBudget = "30m"
 
 const fixtureConfig = "{\"kind\":\"finite-protocolfixture\",\"containment\":\"fixture-local\",\"approval\":\"never\"}\n"
 
@@ -22,7 +27,7 @@ const fixtureRuntimeVersion = "protocolfixture-v1"
 type prepareOptions struct {
 	root, taskID, cwd, briefFile, provider, mode string
 	priorTaskID, priorConversation               string
-	budgetDuration                               time.Duration
+	budget                                       policy.ExecutionBudget
 	checkpoints                                  *checkpointFaultInjector
 }
 
@@ -37,7 +42,7 @@ func parsePrepareArgs(args []string) (*prepareOptions, int) {
 	fs.StringVar(&o.mode, "mode", config.ModeReadOnly, "requested permission")
 	fs.StringVar(&o.priorTaskID, "prior-task-id", "", "exact predecessor task ID")
 	fs.StringVar(&o.priorConversation, "prior-conversation", "", "exact prior fake conversation")
-	budget := fs.String("budget", "30m", "finite task budget")
+	budget := fs.String("budget", fixtureBudget, "explicit task budget: a positive duration or unlimited")
 	o.checkpoints = checkpointFlags(fs)
 	if err := fs.Parse(args); err != nil || fs.NArg() != 0 {
 		return nil, 2
@@ -49,7 +54,7 @@ func parsePrepareArgs(args []string) (*prepareOptions, int) {
 		return nil, 2
 	}
 	var err error
-	o.budgetDuration, err = config.ParseBudget(*budget)
+	o.budget, err = policy.ParseExecutionBudget(*budget)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return nil, 2
@@ -139,7 +144,7 @@ func runPrepare(args []string) int {
 		return 1
 	}
 	defer closeStore(s)
-	req := &task.TaskRecord{SchemaVersion: task.SchemaVersion, RootID: s.RootID, TaskID: opts.taskID, Provider: opts.provider, Mode: opts.mode, CanonicalCwd: opts.cwd, BudgetNanos: opts.budgetDuration.Nanoseconds(), BriefSHA256: task.ComputeSHA256(brief), BriefLength: int64(len(brief))}
+	req := &task.TaskRecord{SchemaVersion: task.SchemaVersion, RootID: s.RootID, TaskID: opts.taskID, Provider: opts.provider, Mode: opts.mode, CanonicalCwd: opts.cwd, RequestedConfig: task.TaskConfig{Budget: opts.budget.String()}, BudgetNanos: opts.budget.Nanos(), BriefSHA256: task.ComputeSHA256(brief), BriefLength: int64(len(brief))}
 	if opts.priorTaskID != "" {
 		req.PriorSession = &task.PriorSession{Provider: opts.provider, ConversationID: opts.priorConversation, PredecessorTaskID: opts.priorTaskID}
 	}

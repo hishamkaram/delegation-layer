@@ -1,9 +1,11 @@
 package probe
 
 import (
+	"context"
 	"encoding/json"
 
 	"github.com/hishamkaram/delegation-layer/internal/execution"
+	"github.com/hishamkaram/delegation-layer/internal/inspection/contract"
 	"github.com/hishamkaram/delegation-layer/internal/provider"
 )
 
@@ -38,7 +40,9 @@ func Inspect(scope execution.PreflightScope, definition provider.InspectionDefin
 			return nil, nativeErr
 		}
 		defer clear(native)
-		nativeFacts, err = runProjection(scope.Context(), definition, native)
+		projectionCtx, cancelProjection := nativeProjectionContext(scope.Context())
+		defer cancelProjection()
+		nativeFacts, err = runProjection(projectionCtx, definition, native)
 		if err != nil {
 			return nil, err
 		}
@@ -47,6 +51,16 @@ func Inspect(scope execution.PreflightScope, definition provider.InspectionDefin
 		return nil, errNativeInspection
 	}
 	return encodeInspectionFacts(definition, runtimeFacts, nativeFacts)
+}
+
+// Native commands retain their task's supervision. Projection may perform a
+// network read, so unlimited execution supplies the existing finite auxiliary
+// inspection bound without adding an execution timer to the parent task.
+func nativeProjectionContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	if execution.IsUnlimitedExecutionContext(ctx) {
+		return context.WithTimeout(ctx, contract.AdmissionTimeout)
+	}
+	return ctx, func() {}
 }
 
 func encodeInspectionFacts(definition provider.InspectionDefinition, runtimeFacts *provider.RuntimeFacts, nativeFacts json.RawMessage) (json.RawMessage, error) {

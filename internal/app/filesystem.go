@@ -102,7 +102,7 @@ func projectExecutableContextFeatures(response *Response) {
 	}
 	projected := *response.Connector
 	projected.Features = slices.Clone(projected.Features)
-	for _, feature := range []string{task.WorkspaceFilesystemFeature, task.NativeExecutionOptionsFeature, task.ProjectTokenSHA256Feature, task.GuardedContinuationFeature, task.ScopedModelDiscoveryFeature, task.OriginBindingFeature} {
+	for _, feature := range []string{task.WorkspaceFilesystemFeature, task.NativeExecutionOptionsFeature, task.ProjectTokenSHA256Feature, task.GuardedContinuationFeature, task.ScopedModelDiscoveryFeature, task.OriginBindingFeature, task.ExecutionBudgetFeature} {
 		if !slices.Contains(projected.Features, feature) {
 			projected.Features = append(projected.Features, feature)
 		}

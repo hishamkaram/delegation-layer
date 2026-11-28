@@ -10,40 +10,28 @@ import (
 	"time"
 )
 
-func TestParseBudget(t *testing.T) {
-	// Default
-	d, err := ParseBudget("")
-	if err != nil || d != DefaultBudgetDuration {
-		t.Errorf("expected default budget 30m, got %v, err=%v", d, err)
+func TestExplicitExecutionBudget(t *testing.T) {
+	for _, text := range []string{"45m", "unlimited"} {
+		budget, err := ParseExecutionBudget(text)
+		if err != nil || budget.IsZero() {
+			t.Fatalf("%q: budget=%v err=%v", text, budget, err)
+		}
+		if text == "45m" {
+			if duration, finite := budget.Finite(); !finite || duration != 45*time.Minute {
+				t.Fatalf("unexpected bound: %v", budget)
+			}
+		}
+		if text == "unlimited" && !budget.Unlimited() {
+			t.Fatal("unlimited gained a deadline")
+		}
 	}
-
-	// Valid custom
-	d, err = ParseBudget("45m")
-	if err != nil || d != 45*time.Minute {
-		t.Errorf("expected 45m, got %v, err=%v", d, err)
+	if _, err := ParseExecutionBudget(""); !errors.Is(err, ErrBudgetRequired) {
+		t.Fatalf("missing budget: %v", err)
 	}
-
-	// Invalid zero/negative
-	if _, err := ParseBudget("0s"); !errors.Is(err, ErrInvalidBudget) {
-		t.Errorf("expected ErrInvalidBudget for 0s, got: %v", err)
-	}
-	if _, err := ParseBudget("-5m"); !errors.Is(err, ErrInvalidBudget) {
-		t.Errorf("expected ErrInvalidBudget for -5m, got: %v", err)
-	}
-	if _, err := ParseBudget("invalid"); !errors.Is(err, ErrInvalidBudget) {
-		t.Errorf("expected ErrInvalidBudget for invalid string, got: %v", err)
-	}
-}
-
-func TestParseBudgetForProvider(t *testing.T) {
-	if got, err := ParseBudgetForProvider(ProviderCodexReview, ""); err != nil || got != DefaultCodexReviewBudgetDuration {
-		t.Fatalf("codex review default=%v, err=%v", got, err)
-	}
-	if got, err := ParseBudgetForProvider(ProviderCodexExec, ""); err != nil || got != DefaultBudgetDuration {
-		t.Fatalf("ordinary default=%v, err=%v", got, err)
-	}
-	if got, err := ParseBudgetForProvider(ProviderCodexReview, "5m"); err != nil || got != 5*time.Minute {
-		t.Fatalf("explicit codex review budget=%v, err=%v", got, err)
+	for _, text := range []string{"0s", "-5m", "invalid"} {
+		if _, err := ParseExecutionBudget(text); !errors.Is(err, ErrInvalidBudget) {
+			t.Fatalf("%q: %v", text, err)
+		}
 	}
 }
 

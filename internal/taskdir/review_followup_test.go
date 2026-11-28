@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/hishamkaram/delegation-layer/internal/task"
 
@@ -279,7 +280,7 @@ func TestTaskNormalizationIsTransactional(t *testing.T) {
 	s := testStore(t)
 	req, _, _ := preparedInput(t, s)
 	req.Mode = ""
-	req.RequestedConfig = task.TaskConfig{}
+	req.RequestedConfig = task.TaskConfig{Budget: "1m"}
 	req.BudgetNanos = 0
 	old := *req
 	must(t, os.Remove(req.CanonicalCwd))
@@ -291,8 +292,8 @@ func TestTaskNormalizationIsTransactional(t *testing.T) {
 	}
 	must(t, os.Mkdir(req.CanonicalCwd, 0o700))
 	must(t, NormalizeTaskRecord(s.Root, req))
-	if req.Mode != "read-only" || req.RequestedConfig.Permission != req.Mode || req.BudgetNanos <= 0 {
-		t.Fatal("normalization lost defaults")
+	if req.Mode != "read-only" || req.RequestedConfig.Permission != req.Mode || req.BudgetNanos != int64(time.Minute) {
+		t.Fatal("normalization lost permission defaults or the explicit budget")
 	}
 	must(t, task.ValidateTaskRecord(req))
 }

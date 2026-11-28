@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/hishamkaram/delegation-layer/internal/config"
 	"github.com/hishamkaram/delegation-layer/internal/scheduler/contract"
 )
 
@@ -31,7 +32,7 @@ func registerScheduleFlags(fs *flag.FlagSet, a *Arguments) {
 		fs.StringVar(&a.Config.Model, "model", "", "requested model")
 		fs.StringVar(&a.Config.Effort, "effort", "", "requested effort")
 		fs.StringVar(&a.Config.Permission, "permission", "", "requested permission")
-		fs.StringVar(&a.Config.Budget, "budget", "", "requested budget")
+		fs.StringVar(&a.Config.Budget, "budget", "", "required positive duration or unlimited")
 		fs.StringVar(&a.Config.OutputSilenceTimeout, "output-silence-timeout", "", "opt-in provider output silence timeout; 0 disables")
 		fs.StringVar(&a.Config.NativeTimeout, "native-timeout", "", "requested native timeout")
 		fs.StringVar(&a.ReviewTarget, "review-target", "", "requested review target")
@@ -75,6 +76,9 @@ func validateScheduleCreateOptions(a *Arguments) error {
 		return nil
 	}
 	if err := validateContentSources(a.Brief, a.BriefBytes, false); err != nil {
+		return err
+	}
+	if _, err := config.ParseExecutionBudget(a.Config.Budget); err != nil {
 		return err
 	}
 	if a.ScheduleHook == nil {

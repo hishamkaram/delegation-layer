@@ -22,6 +22,10 @@ const WorkspaceConstrainedConnectorFeature = "workspace-constrained-connector-v1
 // PathProjectConnectorFeature fences older writers from path-bound task records.
 const PathProjectConnectorFeature = "connector-path-project-v1"
 
+// ExecutionBudgetFeature advertises explicit unlimited execution support without
+// changing root-wide compatibility requirements for historical finite tasks.
+const ExecutionBudgetFeature = "execution-budget-v1"
+
 // WorkspaceConstraint identifies a locally approved directory and a selection
 // beneath it. Token uses Native's opaque project-token representation.
 type WorkspaceConstraint struct {

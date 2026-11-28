@@ -15,7 +15,7 @@ func continuationCommand(root, taskID, runner string, supervisor *task.Superviso
 	if runner != "" {
 		command += " --runner " + shellQuote(runner)
 	}
-	return command + " continue --task " + taskID + " --json"
+	return command + " continue --task " + taskID + " --budget BUDGET --json"
 }
 
 func shellQuote(value string) string {

@@ -221,9 +221,9 @@ device and installs/starts its per-user connector service by default;
 feature does not install a scheduler service or change ordinary SSH/TUI use.
 Approve an existing ancestor once for project routing; whole OS temporary scopes
 are discovered automatically. Connection/approval save no provider, model,
-effort, permission or budget ceiling. Native owns those task choices and finite
-defaults. New scope selection needs no manual project/temp aliases. Local,
-Scheduler, SSH and TUI defaults are unchanged.
+effort, permission or budget ceiling. Native owns those task choices. Each
+new task requires an explicit positive budget duration or `unlimited`. New scope selection needs no manual project/temp aliases. Local,
+Scheduler, SSH and TUI use the same explicit task-budget contract.
 
 ## Updates
 

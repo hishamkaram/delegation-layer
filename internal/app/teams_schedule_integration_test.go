@@ -17,7 +17,7 @@ import (
 )
 
 func TestTeamsScheduleCreatePinsCatalogAndPreservesRawOmissions(t *testing.T) {
-	for _, options := range []task.TaskConfig{{}, {Model: "caller-model", Effort: "medium", Permission: "read-only", Budget: "2m"}} {
+	for _, options := range []task.TaskConfig{{Budget: "1m"}, {Model: "caller-model", Effort: "medium", Permission: "read-only", Budget: "2m"}} {
 		t.Run("model="+options.Model, func(t *testing.T) {
 			f := newTeamsScheduleFixture(t)
 			f.arguments.Config = options

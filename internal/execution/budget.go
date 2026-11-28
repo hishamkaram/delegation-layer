@@ -52,14 +52,21 @@ func armBudgetUntilContext(parent context.Context, clock Clock, deadline time.Ti
 	// requests receive caller cancellation; native owners detach bounded cleanup.
 	ctx, cancel := context.WithCancel(context.WithoutCancel(parent))
 	stopContext, stopCancel := context.WithCancel(parent)
-	if inherited, ok := parent.Deadline(); ok && inherited.Before(deadline) {
+	if inherited, ok := parent.Deadline(); ok && (deadline.IsZero() || inherited.Before(deadline)) {
 		deadline = inherited
 	}
+	if deadline.IsZero() {
+		parent = context.WithValue(parent, unlimitedExecutionKey{}, true)
+	}
 	workContext, workCancel := context.WithCancel(deadlineContext{Context: parent, deadline: deadline})
+	var timer Timer = inactiveTimer{}
+	if !deadline.IsZero() {
+		timer = clock.NewTimer(max(0, deadline.Sub(clock.Now())))
+	}
 	b := &budgetOwner{
 		clock:        clock,
 		deadline:     deadline,
-		timer:        clock.NewTimer(max(0, deadline.Sub(clock.Now()))),
+		timer:        timer,
 		cancel:       func() { cancel(); stopCancel() },
 		workContext:  workContext,
 		workCancel:   workCancel,
@@ -77,7 +84,11 @@ func armBudgetUntilContext(parent context.Context, clock Clock, deadline time.Ti
 
 func (b *budgetOwner) observe(observerContext, ctx context.Context, deadline time.Time, opts Options, ready chan<- struct{}) {
 	defer close(b.done)
-	opts.emit("timer-armed")
+	if deadline.IsZero() {
+		opts.emit("budget-unlimited")
+	} else {
+		opts.emit("timer-armed")
+	}
 	close(ready)
 	if !b.awaitExpiry(observerContext, opts) {
 		return
@@ -275,7 +286,7 @@ func (b *budgetOwner) awaitExpiry(ctx context.Context, opts Options) bool {
 			deadline := b.lastOutput.Add(b.silenceDuration)
 			if !now.Before(deadline) {
 				b.expired = true
-				if now.Before(b.deadline) {
+				if !b.wallExpired(now) {
 					b.cause = task.StopCauseOutputSilence
 				}
 				b.workCancel()
@@ -339,7 +350,7 @@ func (b *budgetOwner) wakeActivity() {
 // elapsed deadline. The caller holds mu; wall expiry wins a simultaneous tie.
 func (b *budgetOwner) observeClockExpiryLocked(opts Options) bool {
 	now := b.clock.Now()
-	wall := !now.Before(b.deadline)
+	wall := b.wallExpired(now)
 	silence := b.silenceActive && b.silenceDuration > 0 && !now.Before(b.lastOutput.Add(b.silenceDuration))
 	if !wall && !silence {
 		return false
@@ -353,4 +364,8 @@ func (b *budgetOwner) observeClockExpiryLocked(opts Options) bool {
 		opts.emit("deadline-observed")
 	}
 	return true
+}
+
+func (b *budgetOwner) wallExpired(now time.Time) bool {
+	return !b.deadline.IsZero() && !now.Before(b.deadline)
 }

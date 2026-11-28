@@ -8,6 +8,7 @@ import (
 	"reflect"
 
 	"github.com/hishamkaram/delegation-layer/internal/config"
+	"github.com/hishamkaram/delegation-layer/internal/config/policy"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 	teamcontract "github.com/hishamkaram/delegation-layer/internal/teams/contract"
@@ -111,7 +112,11 @@ func validateTeamReplay(request DispatchRequest, old *task.TaskRecord) error {
 		}
 	}
 	intent := task.TeamIntent{Provider: request.Provider, Auto: request.Auto, Config: request.Config}
-	return compareTeamIntent(intent, old.Team.Intent, old.Provider, old.BudgetNanos)
+	budget, err := old.ExecutionBudget()
+	if err != nil {
+		return err
+	}
+	return compareTeamIntent(intent, old.Team.Intent, old.Provider, budget)
 }
 
 func sameTeamTarget(requested, saved task.TeamTarget) bool {
@@ -124,13 +129,13 @@ func sameTeamTarget(requested, saved task.TeamTarget) bool {
 	return requested.Team.Project == nil || reflect.DeepEqual(requested.Team.Project, saved.Team.Project)
 }
 
-func compareTeamIntent(requested, saved task.TeamIntent, provider string, budgetNanos int64) error {
+func compareTeamIntent(requested, saved task.TeamIntent, provider string, savedBudget policy.ExecutionBudget) error {
 	if requested.Config.Budget != "" {
-		budget, err := config.ParseBudgetForProvider(provider, requested.Config.Budget)
+		budget, err := policy.ParseExecutionBudget(requested.Config.Budget)
 		if err != nil {
 			return err
 		}
-		if int64(budget) != budgetNanos {
+		if budget != savedBudget {
 			return task.ErrRequestConflict
 		}
 	}
@@ -139,8 +144,8 @@ func compareTeamIntent(requested, saved task.TeamIntent, provider string, budget
 		// Reuse task admission's duration and budget rules. Caller intent keeps
 		// omission distinct, while equivalent explicit durations compare equal.
 		normalized := task.TaskRecord{
-			Provider: provider, BudgetNanos: budgetNanos,
-			RequestedConfig: task.TaskConfig{NativeTimeout: intent.Config.NativeTimeout},
+			Provider: provider, BudgetNanos: savedBudget.Nanos(),
+			RequestedConfig: task.TaskConfig{Budget: savedBudget.String(), NativeTimeout: intent.Config.NativeTimeout},
 		}
 		if err := task.NormalizeRequestedConfig(&normalized); err != nil {
 			return err
@@ -171,7 +176,11 @@ func rebaseTeamRequest(candidate *task.TaskRecord, old *task.TaskRecord) error {
 		!reflect.DeepEqual(candidate.PriorSession, old.PriorSession) {
 		return task.ErrRequestConflict
 	}
-	if err := compareTeamIntent(candidate.Team.Intent, old.Team.Intent, old.Provider, old.BudgetNanos); err != nil {
+	budget, err := old.ExecutionBudget()
+	if err != nil {
+		return err
+	}
+	if err := compareTeamIntent(candidate.Team.Intent, old.Team.Intent, old.Provider, budget); err != nil {
 		return err
 	}
 	*candidate = *old

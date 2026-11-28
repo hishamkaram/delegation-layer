@@ -57,7 +57,7 @@ func preflightFields(cwd string) []ui.Field {
 		ui.TextField("Permission", "native permission intent", "read-only", func(a *app.Arguments, s string) { a.Config.Permission = s }),
 		ui.TextField("Model", "exact model; blank keeps provider default", "", func(a *app.Arguments, s string) { a.Config.Model = s }),
 		ui.TextField("Effort", "exact effort; blank keeps default", "", func(a *app.Arguments, s string) { a.Config.Effort = s }),
-		ui.TextField("Budget", "duration; blank uses existing default", "", func(a *app.Arguments, s string) { a.Config.Budget = s }),
+		ui.TextField("Budget", "required: positive duration or unlimited", "", func(a *app.Arguments, s string) { a.Config.Budget = s }),
 		ui.TextField("Native timeout", "optional provider-native timeout", "", func(a *app.Arguments, s string) { a.Config.NativeTimeout = s }),
 		ui.TextField("Review target", "optional uncommitted, base:BRANCH or commit:SHA", "", func(a *app.Arguments, s string) { a.ReviewTarget = s }),
 	}

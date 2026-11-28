@@ -24,7 +24,8 @@ type PreflightScope struct {
 	prepareEnvironment func(context.Context, []string) ([]string, error)
 }
 
-// Context carries the existing owner's absolute deadline, without another timer.
+// Context carries the execution owner's budget and cancellation. Unlimited
+// execution has no deadline; finite execution keeps the owner's absolute bound.
 func (s PreflightScope) Context() context.Context { return s.ctx }
 
 // PrepareEnvironment applies the caller's overlay to the already-selected
@@ -109,6 +110,22 @@ func (s PreflightScope) FinishCommand(cmd *exec.Cmd) error {
 	return err
 }
 
+// unlimitedExecutionKey marks contexts issued by the execution owner. A plain
+// unbounded context cannot authorize commands outside a supervised lifetime.
+type unlimitedExecutionKey struct{}
+
+func unlimitedExecution(ctx context.Context) bool {
+	if ctx == nil {
+		return false
+	}
+	unlimited, ok := ctx.Value(unlimitedExecutionKey{}).(bool)
+	return ok && unlimited
+}
+
+// IsUnlimitedExecutionContext recognizes an unbounded scope issued by this
+// execution owner. It never turns a plain background context into a capability.
+func IsUnlimitedExecutionContext(ctx context.Context) bool { return unlimitedExecution(ctx) }
+
 // deadlineContext exposes the timer owner's deadline. Done comes from a derived
 // cancel context driven by that owner's single expiry observer.
 type deadlineContext struct {
@@ -116,7 +133,7 @@ type deadlineContext struct {
 	deadline time.Time
 }
 
-func (c deadlineContext) Deadline() (time.Time, bool) { return c.deadline, true }
+func (c deadlineContext) Deadline() (time.Time, bool) { return c.deadline, !c.deadline.IsZero() }
 
 func (b *budgetOwner) runScoped(opts Options, work func(PreflightScope) error) error {
 	_, err := b.runScopedPlan(opts, Plan{}, func(scope PreflightScope, _ Plan) (Plan, error) {
@@ -146,6 +163,7 @@ func (b *budgetOwner) runScopedPlan(opts Options, plan Plan, work func(Preflight
 // SupervisedOptions supplies the same clock and durable stop boundary used by
 // ordinary execution. There is no process, provider, or publication capability.
 type SupervisedOptions struct {
+	Unlimited          bool
 	PrepareEnvironment func(context.Context, []string) ([]string, error)
 	Clock              Clock
 	Stopper            Stopper
@@ -169,7 +187,7 @@ func RunSupervisedContext(ctx context.Context, deadline time.Time, opts Supervis
 	if ctx == nil {
 		return errors.New("nil supervised inspection context"), nil
 	}
-	if deadline.IsZero() || work == nil || opts.Stopper == nil {
+	if deadline.IsZero() != opts.Unlimited || work == nil || opts.Stopper == nil {
 		return errors.New("invalid supervised inspection lifetime"), nil
 	}
 	executionOptions := Options{Clock: opts.Clock, Stopper: opts.Stopper, Lifetime: opts.Lifetime, PrepareEnvironment: opts.PrepareEnvironment, project: opts.Project, strictProject: opts.Project != nil}

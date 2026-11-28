@@ -2,12 +2,16 @@ package tasklifecycle
 
 import (
 	admissioncore "github.com/hishamkaram/delegation-layer/internal/admission"
+	"github.com/hishamkaram/delegation-layer/internal/config"
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
 	supervisorcore "github.com/hishamkaram/delegation-layer/internal/supervisor"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 )
 
 func BuildContinuationRequest(a DispatchRequest, root string, predecessor *task.TaskRecord, meta *task.MetaRecord, brief []byte) (DispatchRequest, error) {
+	if _, err := config.ParseExecutionBudget(a.Config.Budget); err != nil {
+		return DispatchRequest{}, err
+	}
 	continuationArgs := a
 	binding, err := admissioncore.ContinuationConnectorContext(predecessor.ConnectorContext, a.ConnectorContext)
 	if err != nil {

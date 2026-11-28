@@ -22,8 +22,9 @@ delegate gateway connect https://gateway.example.com --name mac-home
 Connection records identity and routing only. It does not select or save a
 provider, model, effort, permission mode or execution budget. Those choices and
 their defaults belong to Native for each task. `connect` and `workspace` do not
-accept execution-policy flags. Omitted choices stay omitted until Native
-applies its defaults; finite Native task budgets remain required.
+accept execution-policy flags. New preparations require an explicit positive
+budget duration or `unlimited`; other omitted choices retain Native defaults.
+Unlimited execution requires Native capability `execution-budget-v1`.
 
 Use `--name mac-home` to give the device a recognizable display name. Otherwise,
 the name defaults to the local hostname. The name can help an MCP client find

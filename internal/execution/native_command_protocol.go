@@ -20,6 +20,7 @@ import (
 const nativeCommandMode = "--native-command-owner"
 
 type nativeCommandRequest struct {
+	Unlimited        bool     `json:"unlimited,omitempty"`
 	NullOutput       bool     `json:"null_output,omitempty"`
 	ID               string   `json:"id"`
 	ExecutableBase64 string   `json:"executable_base64"`
@@ -30,6 +31,7 @@ type nativeCommandRequest struct {
 
 type nativeCommandIdentity struct {
 	nullOutput                bool
+	unlimited                 bool
 	id, executable, directory string
 	arguments                 []string
 	deadline                  time.Time
@@ -59,9 +61,9 @@ func decodeNativeCommand(request nativeCommandRequest) (nativeCommandIdentity, e
 	if err := task.ValidateTaskID(request.ID); err != nil {
 		return identity, err
 	}
-	deadline, err := time.Parse(time.RFC3339Nano, request.Deadline)
-	if err != nil || deadline.IsZero() {
-		return identity, errors.New("invalid native command deadline")
+	deadline, err := nativeCommandDeadline(request)
+	if err != nil {
+		return identity, err
 	}
 	if len(request.ArgumentsBase64) == 0 || len(request.ArgumentsBase64) > 1024 {
 		return identity, errors.New("invalid native command argument count")
@@ -74,7 +76,7 @@ func decodeNativeCommand(request nativeCommandRequest) (nativeCommandIdentity, e
 	if err != nil {
 		return identity, fmt.Errorf("decode native directory: %w", err)
 	}
-	identity = nativeCommandIdentity{nullOutput: request.NullOutput, id: request.ID, executable: string(executable), directory: string(directory), deadline: deadline, arguments: make([]string, len(request.ArgumentsBase64))}
+	identity = nativeCommandIdentity{unlimited: request.Unlimited, nullOutput: request.NullOutput, id: request.ID, executable: string(executable), directory: string(directory), deadline: deadline, arguments: make([]string, len(request.ArgumentsBase64))}
 	for index, encoded := range request.ArgumentsBase64 {
 		argument, decodeErr := base64.StdEncoding.Strict().DecodeString(encoded)
 		if decodeErr != nil {
@@ -187,4 +189,15 @@ func nativeSocketPair() (*net.UnixConn, *os.File, error) {
 		return nil, nil, errors.Join(err, child.Close())
 	}
 	return connection, child, nil
+}
+
+func nativeCommandDeadline(request nativeCommandRequest) (time.Time, error) {
+	if request.Unlimited && request.Deadline == "" {
+		return time.Time{}, nil
+	}
+	deadline, err := time.Parse(time.RFC3339Nano, request.Deadline)
+	if err != nil || deadline.IsZero() || request.Unlimited {
+		return time.Time{}, errors.New("invalid native command deadline")
+	}
+	return deadline, nil
 }

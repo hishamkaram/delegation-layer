@@ -312,7 +312,9 @@ func (c *interactiveInvocation) apply(update InteractionUpdate) error {
 	}
 	for _, event := range update.Events {
 		if event.Kind == "ready" && c.budget != nil {
-			event.Deadline = c.budget.deadline.UTC().Format(time.RFC3339Nano)
+			if !c.budget.deadline.IsZero() {
+				event.Deadline = c.budget.deadline.UTC().Format(time.RFC3339Nano)
+			}
 		}
 		if err := c.td.RecordInteraction(event); err != nil {
 			return err

@@ -260,7 +260,7 @@ a provider task.
 ## Guarded task operations
 
 ```sh
-delegate dispatch --id TASK --provider PROFILE --brief FILE --cwd ABS \
+delegate dispatch --id TASK --provider PROFILE --brief FILE --cwd ABS --budget 30m \
   --expected-root ROOT_TOKEN --expected-project PROJECT_TOKEN --origin ORIGIN_JSON --json
 delegate resolve TASK --expected-root ROOT_TOKEN --expected-project PROJECT_TOKEN \
   --expected-origin ORIGIN_JSON --json
@@ -305,13 +305,16 @@ installation for that root and use the supported upgrade handoff before replacin
 writers. This is not a new root migration or permission to mix incompatible writers.
 
 `execution_options` projects `provider`, `permission` (canonical request mode),
-exact `budget_nanoseconds` (signed 64-bit positive nanoseconds), and requested
+exact `budget_nanoseconds` (positive signed 64-bit nanoseconds for finite
+execution, zero with `budget_unlimited: true` for explicit unlimited execution), and requested
 `model` and `effort` selections. Each selection is `{kind: "explicit", value:
 "..."}` or `{kind: "native_default"}`. These report canonical requested
 configuration, not a resolved native default. There are no briefs, project
 paths or environment values in this projection. Before resuming, a connector
 must compare the spec identity. Legacy correlations also compare the retained
-requested options. A Gateway compact binding instead commits original caller
+requested options and remain finite-only. Native rejects new unlimited requests
+with a binding-less Gateway origin before task creation. A Gateway compact binding supports
+explicit unlimited intent and instead commits original caller
 intent without reconstructing it from this receipt; bodyless existing-only
 recovery still validates the exact canonical Native spec. Native owns execution
 validity and defaults. Gateway and the
@@ -374,7 +377,7 @@ The live Native root and the original origin/spec guards still apply.
 The candidate supports an explicit successor ID and fresh successor origin:
 
 ```sh
-delegate continue --root ABS --task PREDECESSOR --id SUCCESSOR --brief /absolute/brief.txt --expected-root ROOT_TOKEN --expected-project-sha256 PROJECT_TOKEN_SHA --expected-origin /absolute/private/predecessor-origin.json --expected-spec-sha256 PREDECESSOR_SPEC_SHA --origin /absolute/private/successor-origin.json --json
+delegate continue --root ABS --task PREDECESSOR --id SUCCESSOR --budget unlimited --brief /absolute/brief.txt --expected-root ROOT_TOKEN --expected-project-sha256 PROJECT_TOKEN_SHA --expected-origin /absolute/private/predecessor-origin.json --expected-spec-sha256 PREDECESSOR_SPEC_SHA --origin /absolute/private/successor-origin.json --json
 ```
 
 IDs are distinct 32-character lowercase hex values. Expected origin/spec/project

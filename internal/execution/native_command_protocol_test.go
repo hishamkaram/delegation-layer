@@ -120,3 +120,21 @@ func TestNativeCommandNaturalExitIsSeparateFromCleanupAndCancellation(t *testing
 		t.Fatal("empty completion accepted as success")
 	}
 }
+
+func TestNativeCommandUnlimitedRequiresExplicitNonconflictingMarker(t *testing.T) {
+	root := t.TempDir()
+	request := nativeTestRequest(filepath.Join(root, "command"), root, []string{"command"})
+	request.Deadline = ""
+	if err := validateNativeCommand(request); err == nil {
+		t.Fatal("absent deadline implicitly authorized unlimited work")
+	}
+	request.Unlimited = true
+	identity, err := decodeNativeCommand(request)
+	if err != nil || !identity.unlimited || !identity.deadline.IsZero() {
+		t.Fatalf("explicit unlimited identity failed: %+v, %v", identity, err)
+	}
+	request.Deadline = time.Now().Add(time.Hour).UTC().Format(time.RFC3339Nano)
+	if err = validateNativeCommand(request); err == nil {
+		t.Fatal("conflicting finite and unlimited limits were accepted")
+	}
+}

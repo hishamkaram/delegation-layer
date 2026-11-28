@@ -48,9 +48,12 @@ func openLifetimeChild(parsed runnerArguments, records lifetimeRegistrationReade
 	if err != nil {
 		return nil, err
 	}
-	deadline, err := time.Parse(time.RFC3339Nano, registration.Deadline)
-	if err != nil {
-		return nil, task.ErrEvidenceFault
+	var deadline time.Time
+	if !registration.Unlimited {
+		deadline, err = time.Parse(time.RFC3339Nano, registration.Deadline)
+		if err != nil {
+			return nil, task.ErrEvidenceFault
+		}
 	}
 	// Validate legacy cleanup coordinates before opening the scope or sending Hello.
 	// They never select the provider executable or require a new placement.

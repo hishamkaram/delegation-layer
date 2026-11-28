@@ -66,7 +66,7 @@ func newPathContinuationFixture(t *testing.T) teamDispatchFixture {
 
 func TestBuildPathContinuationInheritsConstraintWithoutOrigin(t *testing.T) {
 	fixture := newPathContinuationFixture(t)
-	successor, err := BuildContinuationRequest(DispatchRequest{}, fixture.store.Root, fixture.request, nil, fixture.brief)
+	successor, err := BuildContinuationRequest(DispatchRequest{Config: task.TaskConfig{Budget: "1m"}}, fixture.store.Root, fixture.request, nil, fixture.brief)
 	if err != nil || successor.Origin != nil || !reflect.DeepEqual(successor.ConnectorContext, fixture.request.ConnectorContext) {
 		t.Fatalf("local continuation lost binding or inherited origin: %+v, %v", successor, err)
 	}
@@ -76,7 +76,7 @@ func TestBuildPathContinuationInheritsConstraintWithoutOrigin(t *testing.T) {
 	}
 	origin := fixture.request.Origin.Clone()
 	origin.OperationID = "successor"
-	requested := DispatchRequest{Origin: origin, ConnectorContext: fixture.request.ConnectorContext.Clone()}
+	requested := DispatchRequest{Config: task.TaskConfig{Budget: "1m"}, Origin: origin, ConnectorContext: fixture.request.ConnectorContext.Clone()}
 	successor, err = BuildContinuationRequest(requested, fixture.store.Root, fixture.request, nil, fixture.brief)
 	if err != nil || !reflect.DeepEqual(successor.Origin, origin) || successor.Origin == origin {
 		t.Fatalf("new caller origin was replaced or shared: %+v, %v", successor.Origin, err)

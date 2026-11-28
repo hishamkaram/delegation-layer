@@ -13,6 +13,15 @@ const OutputSilenceCapability = "output-silence-timeout-v1"
 
 var ErrCapabilityUnsupported = errors.New("remote capability unsupported")
 
+// PrepareExecutionBudgetConfig prevents an unlimited intent from being frozen
+// for a destination that has not advertised the matching execution semantics.
+func PrepareExecutionBudgetConfig(config task.TaskConfig, capabilities []string) error {
+	if config.Budget == "unlimited" && !slices.Contains(capabilities, task.ExecutionBudgetFeature) {
+		return fmt.Errorf("%w: %s", ErrCapabilityUnsupported, task.ExecutionBudgetFeature)
+	}
+	return nil
+}
+
 // RequireCapability observes endpoint support without promoting readiness to
 // admission authority. Passive tools do not require a serving resident.
 func (c Coordinator) RequireCapability(ctx context.Context, destination Identity, capability string) error {

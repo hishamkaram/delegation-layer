@@ -34,7 +34,7 @@ func runNative(scope execution.CommandScope, definition provider.InspectionDefin
 	if err != nil || ctx == nil {
 		return nil, errNativeInspection
 	}
-	if _, finite := ctx.Deadline(); !finite || ctx.Err() != nil {
+	if _, finite := ctx.Deadline(); (!finite && !execution.IsUnlimitedExecutionContext(ctx)) || ctx.Err() != nil {
 		return nil, errNativeInspection
 	}
 	// A nil Stdin gives the child finite EOF. Every role runs in place.

@@ -251,6 +251,9 @@ func (r *lifetimeGuardianTestRecords) RecordLifetimeRegistrationContext(ctx cont
 
 		CustodyPlacement: placement,
 	}
+	if facts.Deadline.IsZero() {
+		record.Deadline, record.Unlimited = "", true
+	}
 	if err == nil || r.registrationCommitOnError {
 		stored := *record
 		stored.CustodyPlacement = placement.Clone()

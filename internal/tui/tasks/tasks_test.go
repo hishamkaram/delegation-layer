@@ -401,7 +401,7 @@ func TestContinuationFormReachesCanonicalPredecessorLookup(t *testing.T) {
 	v := views{backend: backend, base: app.Arguments{Root: root}}
 	for _, preset := range []string{"", strings.Repeat("a", 32)} {
 		action := v.continueTask(preset)
-		request := prepare(t, action, map[string]string{"Predecessor task": strings.Repeat("b", 32)})
+		request := prepare(t, action, map[string]string{"Predecessor task": strings.Repeat("b", 32), "Budget": "1m"})
 		result := backend.Continue(t.Context(), request)
 		if request.TaskID != strings.Repeat("b", 32) || result.Code != 1 || !errors.Is(result.Err, os.ErrNotExist) {
 			t.Fatalf("form failed before canonical predecessor lookup: %+v", result)

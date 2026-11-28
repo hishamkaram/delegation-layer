@@ -70,12 +70,18 @@ func (g *Guardian) Run(ctx context.Context) (resultErr error) {
 // guardian waits for the worker, because that worker may itself be waiting for
 // a provider process owned by the scope.
 func (g *Guardian) runOwned(ctx context.Context) (resultErr error) {
-	_, err := g.acquireRunOwner(ctx)
+	startupCtx, cancelStartup := g.startupContext(ctx)
+	defer cancelStartup()
+	preparationCtx := ctx
+	if g.options.Unlimited {
+		preparationCtx = startupCtx
+	}
+	_, err := g.acquireRunOwner(preparationCtx)
 	if err != nil {
 		return err
 	}
 	defer func() { resultErr = errors.Join(resultErr, g.finalizeOwnedRun(ctx)) }()
-	if err = g.refuseTerminalReplay(ctx); err != nil {
+	if err = g.refuseTerminalReplay(preparationCtx); err != nil {
 		return err
 	}
 	if g.deadlineReached() {
@@ -85,8 +91,6 @@ func (g *Guardian) runOwned(ctx context.Context) (resultErr error) {
 	// Startup persistence runs under the immutable business deadline, so a
 	// caller without a deadline never falls back to the store's short default.
 	// Owner, replay, worker, serve and finalization keep the caller's context.
-	startupCtx, cancelStartup := g.workContext(ctx)
-	defer cancelStartup()
 	bootID, scope, err := g.prepareRunScope(startupCtx)
 	if err != nil {
 		return err
@@ -95,6 +99,9 @@ func (g *Guardian) runOwned(ctx context.Context) (resultErr error) {
 	g.bootID = bootID
 	if err = g.bindAndRecordRunScope(startupCtx, bootID); err != nil {
 		return err
+	}
+	if g.startupExpired() {
+		return g.recoverWithCause(ctx, errLifetimeGuardianStartupDeadline)
 	}
 	if g.deadlineReached() {
 		return g.recoverWithCauseAndKind(ctx, errLifetimeGuardianDeadline, task.LifetimeTerminationBudget)
@@ -105,11 +112,11 @@ func (g *Guardian) runOwned(ctx context.Context) (resultErr error) {
 		return errors.Join(cause, g.recoverWithCause(ctx, cause))
 	}
 	g.codec = codec
-	receiveCtx, cancelReceive := context.WithDeadline(ctx, g.options.Deadline)
+	receiveCtx, cancelReceive := g.receiveContext(ctx)
 	defer cancelReceive()
 	reader := startLifetimeGuardianReader(codec, receiveCtx)
 
-	waitDone, err := g.startAndRecordWorker(ctx, reader, bootID)
+	waitDone, err := g.startAndRecordWorker(preparationCtx, reader, bootID)
 	if err != nil {
 		return err
 	}

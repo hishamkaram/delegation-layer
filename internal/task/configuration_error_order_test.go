@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/hishamkaram/delegation-layer/internal/config"
+	"github.com/hishamkaram/delegation-layer/internal/config/policy"
 )
 
 // The expectations below were recorded from the concrete configuration path
@@ -25,7 +26,11 @@ func TestNormalizeRequestedConfigMultiFaultErrorOrder(t *testing.T) {
 	cases := []errorOrderCase{
 		{
 			name: "budget before provider", record: TaskRecord{Provider: "Bad", Mode: "bogus", RequestedConfig: TaskConfig{Budget: "nope", NativeTimeout: "nope", Model: padded, ReviewTarget: badTarget}},
-			want: `budget must be a finite positive duration: time: invalid duration "nope"`, is: config.ErrInvalidBudget,
+			want: `budget must be a finite positive duration or "unlimited": time: invalid duration "nope"`, is: config.ErrInvalidBudget,
+		},
+		{
+			name: "omitted budget before provider", record: TaskRecord{Provider: "Bad", Mode: "bogus", RequestedConfig: TaskConfig{NativeTimeout: "nope", Model: padded, ReviewTarget: badTarget}},
+			want: `budget must be a finite positive duration or "unlimited": an explicit budget is required`, is: policy.ErrBudgetRequired,
 		},
 		{
 			name: "provider before timeout", record: TaskRecord{Provider: "Bad", Mode: "bogus", RequestedConfig: TaskConfig{Budget: "2m", NativeTimeout: "nope", Model: padded, ReviewTarget: badTarget}},
@@ -48,28 +53,34 @@ func TestNormalizeRequestedConfigMultiFaultErrorOrder(t *testing.T) {
 			want: `invalid permission mode: must be 'read-only' or 'workspace-write': "bogus"`, is: config.ErrInvalidMode,
 		},
 		{
-			name: "mode mismatch before model", record: TaskRecord{Provider: config.ProviderCodexExec, Mode: config.ModeReadOnly, RequestedConfig: TaskConfig{Permission: config.ModeWorkspaceWrite, Model: padded}},
+			name: "mode mismatch before model", record: TaskRecord{Provider: config.ProviderCodexExec, Mode: config.ModeReadOnly, RequestedConfig: TaskConfig{Permission: config.ModeWorkspaceWrite, Budget: "2m", Model: padded}},
 			want: "requested permission must match the explicit task mode",
 		},
 		{
-			name: "model before effort", record: TaskRecord{Provider: config.ProviderCodexExec, RequestedConfig: TaskConfig{Model: "a\x00", Effort: padded, ReviewTarget: badTarget}},
+			name: "model before effort", record: TaskRecord{Provider: config.ProviderCodexExec, RequestedConfig: TaskConfig{Budget: "2m", Model: "a\x00", Effort: padded, ReviewTarget: badTarget}},
 			want: "model and effort must be nonblank literal values when supplied",
 		},
 		{
-			name: "effort before review target", record: TaskRecord{Provider: config.ProviderCodexExec, RequestedConfig: TaskConfig{Effort: padded, ReviewTarget: badTarget}},
+			name: "effort before review target", record: TaskRecord{Provider: config.ProviderCodexExec, RequestedConfig: TaskConfig{Budget: "2m", Effort: padded, ReviewTarget: badTarget}},
 			want: "model and effort must be nonblank literal values when supplied",
 		},
 		{
-			name: "review target last", record: TaskRecord{Provider: config.ProviderCodexExec, RequestedConfig: TaskConfig{ReviewTarget: &ReviewTarget{Kind: ReviewTargetBase, Value: " "}}},
+			name: "review target last", record: TaskRecord{Provider: config.ProviderCodexExec, RequestedConfig: TaskConfig{Budget: "2m", ReviewTarget: &ReviewTarget{Kind: ReviewTargetBase, Value: " "}}},
 			want: "review target value must be a nonblank literal",
 		},
 		{
-			name: "codex review default budget bounds timeout", record: TaskRecord{Provider: config.ProviderCodexReview, RequestedConfig: TaskConfig{NativeTimeout: "2h", Model: padded}},
-			want: "native timeout must be positive and no greater than the task budget",
+			// Codex review once defaulted to a one-hour budget that bounded
+			// this timeout; omission is now rejected before the timeout.
+			name: "omitted codex review budget before timeout", record: TaskRecord{Provider: config.ProviderCodexReview, RequestedConfig: TaskConfig{NativeTimeout: "2h", Model: padded}},
+			want: `budget must be a finite positive duration or "unlimited": an explicit budget is required`, is: policy.ErrBudgetRequired,
+		},
+		{
+			name: "unlimited budget bounds no timeout", record: TaskRecord{Provider: config.ProviderCodexReview, RequestedConfig: TaskConfig{Budget: "unlimited", NativeTimeout: "2h", Model: padded}},
+			want: modelEffortMessage,
 		},
 		{
 			name: "zero budget before timeout", record: TaskRecord{Provider: config.ProviderCodexExec, RequestedConfig: TaskConfig{Budget: "0s", NativeTimeout: "nope"}},
-			want: "budget must be a finite positive duration", is: config.ErrInvalidBudget,
+			want: `budget must be a finite positive duration or "unlimited"`, is: config.ErrInvalidBudget,
 		},
 	}
 	for _, tc := range cases {

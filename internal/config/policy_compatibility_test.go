@@ -4,25 +4,11 @@ import (
 	"errors"
 	"path/filepath"
 	"testing"
-	"time"
 
 	"github.com/hishamkaram/delegation-layer/internal/config/policy"
 )
 
 func TestPolicyCompatibilityAliasesPreserveConstantsAndErrorIdentity(t *testing.T) {
-	durationConstants := []struct {
-		name   string
-		legacy time.Duration
-		pure   time.Duration
-	}{
-		{name: "default budget", legacy: DefaultBudgetDuration, pure: policy.DefaultBudgetDuration},
-		{name: "review budget", legacy: DefaultCodexReviewBudgetDuration, pure: policy.DefaultCodexReviewBudgetDuration},
-	}
-	for _, tc := range durationConstants {
-		if tc.legacy != tc.pure {
-			t.Errorf("legacy %s constant = %v, policy = %v", tc.name, tc.legacy, tc.pure)
-		}
-	}
 	stringConstants := []struct {
 		name   string
 		legacy string
@@ -71,36 +57,18 @@ func TestPolicyCompatibilityAliasesPreserveConstantsAndErrorIdentity(t *testing.
 	}
 }
 
-func TestBudgetCompatibilityForwardsPreserveDefaultsAndErrors(t *testing.T) {
-	cases := []struct {
-		provider string
-		budget   string
-		want     time.Duration
-		wantErr  bool
-	}{
-		{budget: "", want: DefaultBudgetDuration},
-		{provider: ProviderCodexReview, want: DefaultCodexReviewBudgetDuration},
-		{provider: ProviderCodexExec, budget: "12m", want: 12 * time.Minute},
-		{budget: "0s", wantErr: true},
-	}
-	for _, tc := range cases {
-		legacy, legacyErr := ParseBudgetForProvider(tc.provider, tc.budget)
-		pure, pureErr := policy.ParseBudgetForProvider(tc.provider, tc.budget)
-		if legacy != pure || (legacyErr == nil) != (pureErr == nil) {
-			t.Fatalf("budget results differ for provider=%q budget=%q: legacy=%v,%v policy=%v,%v", tc.provider, tc.budget, legacy, legacyErr, pure, pureErr)
+func TestExecutionBudgetForwardPreservesPolicy(t *testing.T) {
+	for _, text := range []string{"", "30s", "unlimited", "0s", "invalid"} {
+		forwarded, forwardedErr := ParseExecutionBudget(text)
+		pure, pureErr := policy.ParseExecutionBudget(text)
+		if forwarded != pure || (forwardedErr == nil) != (pureErr == nil) {
+			t.Fatalf("%q: forwarded=%v/%v pure=%v/%v", text, forwarded, forwardedErr, pure, pureErr)
 		}
-		if tc.wantErr {
-			if !errors.Is(legacyErr, ErrInvalidBudget) || !errors.Is(pureErr, policy.ErrInvalidBudget) {
-				t.Fatalf("invalid budget errors lost identity: legacy=%v policy=%v", legacyErr, pureErr)
+		for _, sentinel := range []error{policy.ErrBudgetRequired, policy.ErrInvalidBudget} {
+			if errors.Is(forwardedErr, sentinel) != errors.Is(pureErr, sentinel) {
+				t.Fatalf("%q: changed error identity", text)
 			}
-		} else if legacy != tc.want {
-			t.Fatalf("budget result = %v, want %v", legacy, tc.want)
 		}
-	}
-	legacy, legacyErr := ParseBudget("30s")
-	pure, pureErr := policy.ParseBudget("30s")
-	if legacy != pure || legacyErr != nil || pureErr != nil {
-		t.Fatalf("ParseBudget forwarding differs: legacy=%v,%v policy=%v,%v", legacy, legacyErr, pure, pureErr)
 	}
 }
 

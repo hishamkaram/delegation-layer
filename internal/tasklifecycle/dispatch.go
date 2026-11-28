@@ -78,7 +78,7 @@ func dispatchPreparedContext(ctx context.Context, request DispatchRequest, optio
 		return result
 	}
 	result.Provider = request.Provider
-	base, err := admissioncore.BuildRequest(store.RootID, result.TaskID, request.Provider, cwd, request.Config, brief, nil)
+	base, err := buildDispatchTask(store.RootID, result.TaskID, cwd, brief, request)
 	if err != nil {
 		return dispatchFailure(result, DispatchValidate, "validate-request", err)
 	}

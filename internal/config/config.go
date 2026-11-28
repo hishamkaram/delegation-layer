@@ -8,29 +8,27 @@ import (
 	"slices"
 	"strings"
 	"syscall"
-	"time"
 
 	"github.com/hishamkaram/delegation-layer/internal/config/policy"
 )
 
 const (
-	DefaultBudgetDuration            = policy.DefaultBudgetDuration
-	DefaultCodexReviewBudgetDuration = policy.DefaultCodexReviewBudgetDuration
-	DefaultMode                      = policy.DefaultMode
-	ModeReadOnly                     = policy.ModeReadOnly
-	ModeWorkspaceWrite               = policy.ModeWorkspaceWrite
-	ProviderAntigravityPrint         = policy.ProviderAntigravityPrint
-	ProviderCodexExec                = policy.ProviderCodexExec
-	ProviderCodexReview              = policy.ProviderCodexReview
-	ProviderClaudePrint              = policy.ProviderClaudePrint
-	ProviderPiJSON                   = policy.ProviderPiJSON
-	ProviderOpenCodeRun              = policy.ProviderOpenCodeRun
-	ProviderFixture                  = policy.ProviderFixture
-	MaxBriefBytes                    = policy.MaxBriefBytes
+	DefaultMode              = policy.DefaultMode
+	ModeReadOnly             = policy.ModeReadOnly
+	ModeWorkspaceWrite       = policy.ModeWorkspaceWrite
+	ProviderAntigravityPrint = policy.ProviderAntigravityPrint
+	ProviderCodexExec        = policy.ProviderCodexExec
+	ProviderCodexReview      = policy.ProviderCodexReview
+	ProviderClaudePrint      = policy.ProviderClaudePrint
+	ProviderPiJSON           = policy.ProviderPiJSON
+	ProviderOpenCodeRun      = policy.ProviderOpenCodeRun
+	ProviderFixture          = policy.ProviderFixture
+	MaxBriefBytes            = policy.MaxBriefBytes
 )
 
 var (
 	ErrInvalidBudget        = policy.ErrInvalidBudget
+	ErrBudgetRequired       = policy.ErrBudgetRequired
 	ErrInvalidMode          = policy.ErrInvalidMode
 	ErrUnsupportedProvider  = policy.ErrUnsupportedProvider
 	ErrInvalidCwd           = policy.ErrInvalidCwd
@@ -43,14 +41,9 @@ var (
 	ErrBriefEmpty           = policy.ErrBriefEmpty
 )
 
-// ParseBudget preserves the legacy configuration package entry point.
-func ParseBudget(budgetStr string) (time.Duration, error) {
-	return policy.ParseBudget(budgetStr)
-}
-
-// ParseBudgetForProvider preserves the legacy configuration package entry point.
-func ParseBudgetForProvider(provider, budgetStr string) (time.Duration, error) {
-	return policy.ParseBudgetForProvider(provider, budgetStr)
+// ParseExecutionBudget validates an explicit finite or unlimited execution budget.
+func ParseExecutionBudget(value string) (policy.ExecutionBudget, error) {
+	return policy.ParseExecutionBudget(value)
 }
 
 // ValidateMode preserves the legacy configuration package entry point.

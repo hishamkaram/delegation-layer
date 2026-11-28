@@ -30,7 +30,7 @@ func TestRunNativeProfileRefusesBeforeBinding(t *testing.T) {
 	missingSupervisor := filepath.Join(t.TempDir(), "pueue")
 	var stdout, stderr bytes.Buffer
 	code := Run([]string{
-		"dispatch", "--json", "--root", root,
+		"dispatch", "--budget", "1m", "--json", "--root", root,
 		"--pueue-config", filepath.Join(t.TempDir(), "missing.yml"),
 		"--provider", "codex:exec", "--brief", briefPath, "--cwd", filepath.Dir(briefPath),
 		"--id", strings.Repeat("a", 32), "--runner", filepath.Join(t.TempDir(), "runner"),

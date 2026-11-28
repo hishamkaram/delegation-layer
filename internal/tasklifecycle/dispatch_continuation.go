@@ -22,7 +22,7 @@ func resolveDispatchProvider(request DispatchRequest, options DispatchOptions, s
 		return request, dispatchFailure(result, DispatchProviderLookup, "select-provider", err), err
 	}
 	if !exists {
-		provider, err = admissioncore.SelectAutoProvider(options.staticAdmission(), store.Root, store.RootID, result.TaskID, cwd, request.Config, brief)
+		provider, err = admissioncore.SelectAutoProvider(options.staticAdmission(), store.Root, store.RootID, result.TaskID, cwd, request.Config, brief, request.BudgetIntent)
 	}
 	request.Provider = provider
 	if err != nil {

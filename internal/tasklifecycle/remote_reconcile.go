@@ -13,7 +13,7 @@ import (
 func ReconcileRemoteContext(ctx context.Context, request DispatchRequest, options DispatchOptions) (result DispatchResult) {
 	result.Record = RecordUnknown
 	result.TaskID = request.TaskID
-	root, cwd, brief, err := dispatchInputs(request)
+	root, cwd, brief, err := dispatchContentInputs(request)
 	if err != nil {
 		return dispatchFailure(result, DispatchValidate, "validate-request", err)
 	}
@@ -32,7 +32,13 @@ func ReconcileRemoteContext(ctx context.Context, request DispatchRequest, option
 	if err != nil {
 		return dispatchFailure(result, DispatchOpenTask, "validate-remote-receipt", errors.Join(err, td.Close()))
 	}
-	candidate, err := admissioncore.BuildRequest(store.RootID, request.TaskID, request.Provider, cwd, request.Config, brief, nil)
+	config := request.Config
+	if config.Budget == "" {
+		// Historical remote intents retain their bytes. Only this existing-only
+		// path may recover an omitted budget from the already admitted task.
+		config.Budget = saved.RequestedConfig.Budget
+	}
+	candidate, err := admissioncore.BuildRequest(store.RootID, request.TaskID, request.Provider, cwd, config, brief, nil)
 	if err != nil {
 		return dispatchFailure(result, DispatchValidate, "validate-request", errors.Join(err, td.Close()))
 	}

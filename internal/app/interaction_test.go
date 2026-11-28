@@ -17,9 +17,9 @@ import (
 func TestInteractionCommandArguments(t *testing.T) {
 	id := strings.Repeat("a", 32)
 	for _, args := range [][]string{
-		{"dispatch", "--provider", "codex:exec", "--cwd", "/workspace", "--brief", "/brief", "--interactive", "--json"},
-		{"preflight", "--provider", "claude:print", "--cwd", "/workspace", "--interactive", "--json"},
-		{"continue", "--task", id, "--interactive", "--json"},
+		{"dispatch", "--budget", "1m", "--provider", "codex:exec", "--cwd", "/workspace", "--brief", "/brief", "--interactive", "--json"},
+		{"preflight", "--budget", "1m", "--provider", "claude:print", "--cwd", "/workspace", "--interactive", "--json"},
+		{"continue", "--budget", "1m", "--task", id, "--interactive", "--json"},
 	} {
 		parsed, err := ParseArguments(args)
 		if err != nil || !parsed.Config.Interactive {

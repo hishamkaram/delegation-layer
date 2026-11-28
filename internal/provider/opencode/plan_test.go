@@ -22,7 +22,7 @@ func profileRequest(mode string) task.TaskRecord {
 	return task.TaskRecord{
 		RootID: testRootID, TaskID: testTaskID, Provider: Provider, Mode: mode,
 		CanonicalCwd: "/workspace with spaces", BriefLength: 12, BudgetNanos: int64(120 * time.Second),
-		RequestedConfig: task.TaskConfig{Permission: mode, Effort: "default"},
+		RequestedConfig: task.TaskConfig{Permission: mode, Effort: "default", Budget: "2m0s"},
 	}
 }
 
@@ -157,12 +157,16 @@ func TestRunArgumentsRejectInvalidRequests(t *testing.T) {
 		"permission mismatch": func(r *task.TaskRecord) {
 			r.RequestedConfig.Permission = ModeReadOnly
 		},
-		"native timeout": func(r *task.TaskRecord) { r.RequestedConfig.NativeTimeout = "1s" },
-		"empty budget":   func(r *task.TaskRecord) { r.BudgetNanos = 0 },
-		"empty brief":    func(r *task.TaskRecord) { r.BriefLength = 0 },
-		"relative cwd":   func(r *task.TaskRecord) { r.CanonicalCwd = "relative" },
-		"bad model":      func(r *task.TaskRecord) { r.RequestedConfig.Model = "bad\nmodel" },
-		"bad effort":     func(r *task.TaskRecord) { r.RequestedConfig.Effort = "bad\teffort" },
+		"native timeout":       func(r *task.TaskRecord) { r.RequestedConfig.NativeTimeout = "1s" },
+		"empty budget":         func(r *task.TaskRecord) { r.BudgetNanos = 0 },
+		"unlimited with nanos": func(r *task.TaskRecord) { r.RequestedConfig.Budget = "unlimited" },
+		"malformed budget":     func(r *task.TaskRecord) { r.RequestedConfig.Budget = "soon" },
+		"noncanonical budget":  func(r *task.TaskRecord) { r.RequestedConfig.Budget = "120s" },
+		"omitted budget text":  func(r *task.TaskRecord) { r.RequestedConfig.Budget = "" },
+		"empty brief":          func(r *task.TaskRecord) { r.BriefLength = 0 },
+		"relative cwd":         func(r *task.TaskRecord) { r.CanonicalCwd = "relative" },
+		"bad model":            func(r *task.TaskRecord) { r.RequestedConfig.Model = "bad\nmodel" },
+		"bad effort":           func(r *task.TaskRecord) { r.RequestedConfig.Effort = "bad\teffort" },
 		"bad continuation": func(r *task.TaskRecord) {
 			r.PriorSession = &task.PriorSession{Provider: Provider, ConversationID: "latest", PredecessorTaskID: testTaskID}
 		},
@@ -220,5 +224,24 @@ func assertOpenCodeRegistration(t *testing.T, registration commonprovider.Regist
 	}
 	if !registration.Interpreters[0].Reference().Equal(acpReferenceForMode(ModeReadOnly)) || ReferenceForMode(ModeWorkspaceWrite).Version != acpPredicateVersion {
 		t.Fatal("the current references are not the ACP predicate")
+	}
+}
+
+// The task budget is not an OpenCode native option, so an unlimited budget
+// keeps the finite request's exact argv in every launch dialect, including an
+// exact continuation.
+func TestRunArgumentsAcceptUnlimitedBudgetWithoutNativeChange(t *testing.T) {
+	finite := profileRequest(ModeWorkspaceWrite)
+	finite.PriorSession = &task.PriorSession{Provider: Provider, ConversationID: testSession, PredecessorTaskID: testTaskID}
+	unlimited := finite
+	unlimited.RequestedConfig.Budget, unlimited.BudgetNanos = "unlimited", 0
+	for _, dialect := range []launchDialect{dialectACP, dialectNativeV2, dialectNativeV1, dialectPure} {
+		want, err := runArguments(finite, dialect)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got, err := runArguments(unlimited, dialect); err != nil || !slices.Equal(got, want) {
+			t.Fatalf("dialect %d unlimited argv=%q err=%v, want %q", dialect, got, err, want)
+		}
 	}
 }

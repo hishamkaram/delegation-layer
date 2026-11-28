@@ -263,6 +263,9 @@ func preparePortableCandidate(request task.TaskRecord, predicateReference task.P
 }
 
 func prepareLegacyCandidate(request task.TaskRecord, predicateReference task.PredicateRef, scope []string, historicalProof ...*task.PolicySourceDigest) (commonprovider.ProfileCandidate, error) {
+	if _, err := legacyPolicyWindow(request); err != nil {
+		return commonprovider.ProfileCandidate{}, err
+	}
 	arguments, inputs, err := legacyPrintArguments(request)
 	if err != nil {
 		return commonprovider.ProfileCandidate{}, err
@@ -456,7 +459,7 @@ func finalizeLegacyPreparedProfile(
 }
 
 func finalizePortablePolicy(request task.TaskRecord, environment profileEnvironment, sources []task.PolicySourceDigest, now time.Time) (task.EffectiveConfig, error) {
-	if now.IsZero() || request.BudgetNanos <= 0 {
+	if _, err := request.ExecutionBudget(); now.IsZero() || err != nil {
 		return task.EffectiveConfig{}, fmt.Errorf("%w: invalid runtime inspection boundary", ErrUnsupportedProfile)
 	}
 	if err := commonprovider.ValidateOptionalExecutableSHA256(environment.RuntimeSHA256); err != nil {
@@ -488,11 +491,31 @@ func finalizePortablePolicy(request task.TaskRecord, environment profileEnvironm
 	return effective, nil
 }
 
+// legacyPolicyWindow returns the finite budget the historical OAuth policy
+// proof must outlast. That proof is a credential expiry check over the whole
+// task, so an unlimited budget cannot satisfy it; it is refused explicitly
+// rather than given an invented deadline or moved to another profile.
+func legacyPolicyWindow(request task.TaskRecord) (time.Duration, error) {
+	budget, err := request.ExecutionBudget()
+	if err != nil {
+		return 0, unsupportedNativeFacts()
+	}
+	window, finite := budget.Finite()
+	if !finite {
+		return 0, fmt.Errorf("%w: the historical Claude OAuth policy proof requires a finite task budget", ErrUnsupportedProfile)
+	}
+	return window, nil
+}
+
 func finalizePolicy(request task.TaskRecord, environment profileEnvironment, sources []task.PolicySourceDigest, definitionDigest string, data json.RawMessage, now time.Time, historicalProof ...*task.PolicySourceDigest) (task.EffectiveConfig, error) {
-	if now.IsZero() || request.BudgetNanos <= 0 || task.ValidateSHA256(definitionDigest) != nil {
+	window, err := legacyPolicyWindow(request)
+	if err != nil {
+		return task.EffectiveConfig{}, err
+	}
+	if now.IsZero() || task.ValidateSHA256(definitionDigest) != nil {
 		return task.EffectiveConfig{}, unsupportedNativeFacts()
 	}
-	facts, err := decodePolicyFacts(data, now.Add(time.Duration(request.BudgetNanos)).Add(refreshMargin))
+	facts, err := decodePolicyFacts(data, now.Add(window).Add(refreshMargin))
 	if err != nil {
 		return task.EffectiveConfig{}, err
 	}

@@ -210,8 +210,8 @@ func validateRequestProfile(request task.TaskRecord) error {
 	if request.RequestedConfig.Model != "" || (request.RequestedConfig.Effort != "" && request.RequestedConfig.Effort != "default") || request.RequestedConfig.NativeTimeout != "" {
 		return fmt.Errorf("%w: contributor proof supports continuation only", ErrUnsupportedProfile)
 	}
-	if request.BudgetNanos <= 0 {
-		return fmt.Errorf("%w: task budget must be positive", ErrUnsupportedProfile)
+	if _, err := request.ExecutionBudget(); err != nil {
+		return fmt.Errorf("%w: task execution budget: %w", ErrUnsupportedProfile, err)
 	}
 	return nil
 }

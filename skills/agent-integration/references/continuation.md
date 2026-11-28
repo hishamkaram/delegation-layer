@@ -1,6 +1,10 @@
 # Continuation and timeout recovery
 
-Each task is one provider turn. A time limit ends that turn; it does not grant
+Each task is one provider turn. Every successor requires an explicit
+`--budget DURATION|unlimited`; it does not inherit the predecessor budget.
+Returned `continue_command` guidance contains a `BUDGET` placeholder; replace it
+with the lead’s selected positive duration or `unlimited` before execution.
+A finite time limit ends that turn; it does not grant
 permission to launch the same task again. The durable task record keeps the
 exact provider session identity and the stop evidence.
 
@@ -169,7 +173,7 @@ interrupted resume offer, so handle it as pending under
 
 | Response | Action |
 |---|---|
-| `failure.code: "task_interrupted"`, `failure.next_action: "continue_task"`, and `continuation.resumable: true` (all three) | Run the `continue` above for that predecessor with the original root and a finite budget, then observe the successor. |
+| `failure.code: "task_interrupted"`, `failure.next_action: "continue_task"`, and `continuation.resumable: true` (all three) | Run the `continue` above for that predecessor with the original root and an explicit finite or unlimited budget, then observe the successor. |
 | `interrupted` with any other combination, including `failure.next_action: "stop_and_report"` or `continuation.resumable: false` | Report the reason and stop. |
 | `timed_out` with `failure.code: "task_cancelled"` (user stop and budget stop, no outcome) | `stop_and_report`; `continuation.resumable` is `false` and no `continue_command` is returned. Report it. `collect` exit `3` here is a finite watch, not success and not a reason to keep waiting. |
 | Any other operational error | It is not an interruption; apply [result handling](result-handling.md). |
@@ -182,6 +186,11 @@ interrupted task, now with `stop_and_report` and `resumable: false`. A
 committed or rejected outcome stays authoritative and is never replaced by
 `task_cancelled`. A later, explicit user request to `continue` is a separate
 action and still validated against real closure and the recorded session.
+
+Unlimited removes execution expiry, not native completion. A completed provider
+turn still ends normally; following up uses the same recorded resume mechanism.
+Historical Claude OAuth and isolated Codex profiles that validate credentials
+through the end of execution require a finite successor budget.
 
 The successor uses the predecessor's observed provider session from
 `provider.ref`. Only when `provider.ref` is genuinely absent, for any eligible
@@ -200,7 +209,7 @@ turn when the provider supports continuation, its exact session was recorded,
 and the runner/session reservation has been released. Not every rejection has
 a usable session. A normal completion without a budget stop need not expose
 `continuation.resumable` in `status` or `collect`. Use `continue` with the exact
-predecessor and a finite budget, then apply its task-creation and failure
+predecessor and an explicit finite or unlimited budget, then apply its task-creation and failure
 response as described in [result handling](result-handling.md).
 
 If the response says `stop_and_report`, stop that attempt; do not automatically

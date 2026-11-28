@@ -90,10 +90,12 @@ type Scope interface {
 // New copies this configuration; runtime transition state belongs to Guardian.
 // Nil primitive and clock hooks select the production implementations.
 type Options struct {
-	RootID    string
-	TaskID    string
-	OwnerKind string
-	Deadline  time.Time
+	RootID          string
+	TaskID          string
+	OwnerKind       string
+	Deadline        time.Time
+	Unlimited       bool
+	StartupDeadline time.Time
 
 	Records                Records
 	AcquireOwner           func(context.Context) (Owner, error)
@@ -165,6 +167,7 @@ func New(options Options) (*Guardian, error) {
 	if options.Now == nil {
 		options.Now = time.Now
 	}
+	options.StartupDeadline = resolveStartupDeadline(options)
 	if err := validateLifetimeGuardianOptions(options); err != nil {
 		return nil, err
 	}
@@ -204,7 +207,7 @@ func validateLifetimeGuardianProofs(options Options) error {
 }
 
 func validateLifetimeGuardianRuntime(options Options) error {
-	if options.Deadline.IsZero() {
+	if options.Deadline.IsZero() != options.Unlimited || options.Unlimited && options.OwnerKind != task.LifetimeOwnerTask {
 		return fmt.Errorf("%w: deadline is required", errLifetimeGuardianInvalid)
 	}
 	if options.Records == nil || options.AcquireOwner == nil || options.ReconcileOwned == nil || options.Worker == nil || options.Connection == nil {
@@ -221,4 +224,11 @@ func validateLifetimeGuardianTiming(options Options) error {
 		return fmt.Errorf("%w: user stop polling is invalid", errLifetimeGuardianInvalid)
 	}
 	return nil
+}
+
+func resolveStartupDeadline(options Options) time.Time {
+	if options.Unlimited && options.StartupDeadline.IsZero() {
+		return options.Now().Add(UnlimitedStartupTimeout)
+	}
+	return options.StartupDeadline
 }

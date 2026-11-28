@@ -5,7 +5,7 @@ guarantee or restriction. Implemented behavior belongs in the current guides.
 
 ## What Delegate is
 
-Delegate manages the lifecycle of one bounded task run by an agent CLI that
+Delegate manages the lifecycle of one supervised task run by an agent CLI that
 the user installed. Tasks may run locally or on a prepared remote destination;
 the executing installation owns admission, supervision and terminal evidence.
 The origin's remote reference records intent and observations, not a second task

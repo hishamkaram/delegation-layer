@@ -141,11 +141,13 @@ To fork current uncommitted content, the Lead follows
 [checkpoint before fork](references/workspaces.md#checkpoint-before-fork).
 A worker must not checkpoint a workspace its own turn holds.
 
-### 4. Dispatch one bounded turn
+### 4. Dispatch one supervised turn
 
 Use the [read-only task example](examples/read-only-task.md), or its
 [authorized write variation](examples/workspace-write-task.md). The
 [command reference](references/command-reference.md#dispatch) owns flags and defaults.
+Choose `--budget DURATION|unlimited` explicitly for each new turn. Never infer
+unlimited from an omitted flag or apply an automatic time budget.
 
 Capture each response and exit status once in the original invocation.
 Never dispatch again to recover output or discover the prior exit code.
@@ -186,7 +188,7 @@ inspect each summary and collect results through the normal result rules.
 ### 6. Continue a timed out or interrupted turn
 
 Read [continuation](references/continuation.md) for eligibility, cancellation
-precedence, and exact-session follow-up. Preserve the root and finite budget,
+precedence, and exact-session follow-up. Preserve the root and choose an explicit finite or unlimited budget,
 then apply [task creation](references/result-handling.md#task-creation) to the
 successor response. Never replace an uncertain or failed continuation with a
 fresh dispatch.

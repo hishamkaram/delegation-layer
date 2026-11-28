@@ -7,12 +7,13 @@ import (
 	"strings"
 
 	"github.com/hishamkaram/delegation-layer/internal/config"
+	"github.com/hishamkaram/delegation-layer/internal/config/policy"
 
 	commonprovider "github.com/hishamkaram/delegation-layer/internal/provider"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 )
 
-func SelectAutoProvider(options StaticOptions, root, rootID, taskID, cwd string, requested task.TaskConfig, brief []byte) (string, error) {
+func SelectAutoProvider(options StaticOptions, root, rootID, taskID, cwd string, requested task.TaskConfig, brief []byte, intent policy.BudgetIntent) (string, error) {
 	if requested.Permission == "" {
 		requested.Permission = config.DefaultMode
 	}
@@ -28,7 +29,13 @@ func SelectAutoProvider(options StaticOptions, root, rootID, taskID, cwd string,
 			continue
 		}
 		considered++
-		request, err := BuildRequest(rootID, taskID, description.ID, cwd, requested, brief, nil)
+		budget, err := policy.ResolveExecutionBudget(description.ID, requested.Budget, intent)
+		if err != nil {
+			return "", err
+		}
+		resolved := requested
+		resolved.Budget = budget.String()
+		request, err := BuildRequest(rootID, taskID, description.ID, cwd, resolved, brief, nil)
 		if err != nil {
 			return "", err
 		}

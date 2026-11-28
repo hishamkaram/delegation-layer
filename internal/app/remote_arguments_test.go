@@ -8,7 +8,7 @@ import (
 
 func TestRemoteDispatchArgumentsSeparateWorkspaces(t *testing.T) {
 	brief := filepath.Join(t.TempDir(), "brief.txt")
-	args := []string{"dispatch", "--device", "worker", "--provider", "claude:print", "--brief", brief, "--remote-cwd", "/srv/project", "--json"}
+	args := []string{"dispatch", "--budget", "1m", "--device", "worker", "--provider", "claude:print", "--brief", brief, "--remote-cwd", "/srv/project", "--json"}
 	parsed, err := ParseArguments(args)
 	if err != nil {
 		t.Fatal(err)

@@ -126,7 +126,7 @@ func (a *Arguments) validateRemoteDispatch(positional []string) error {
 	if err := config.ValidateMode(a.Config.Permission); err != nil {
 		return err
 	}
-	if _, err := config.ParseBudget(a.Config.Budget); err != nil {
+	if _, err := config.ParseExecutionBudget(a.Config.Budget); err != nil {
 		return err
 	}
 	if err := a.applyReviewTarget(); err != nil {

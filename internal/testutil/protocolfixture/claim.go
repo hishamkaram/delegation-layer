@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/hishamkaram/delegation-layer/internal/config"
+	"github.com/hishamkaram/delegation-layer/internal/config/policy"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 )
@@ -105,12 +105,19 @@ func consumeRunnerStart(td *taskdir.TaskDir, permit *taskdir.StartPermit, o *cla
 func prepareRunner(td *taskdir.TaskDir, o *claimOptions) (*taskdir.StartPermit, int) {
 	var nanos int64
 	if o.budget != "" {
-		duration, err := config.ParseBudget(o.budget)
+		budget, err := policy.ParseExecutionBudget(o.budget)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			return nil, 2
 		}
-		nanos = duration.Nanoseconds()
+		// PrepareStart reads zero nanoseconds as "no assertion", so an exact
+		// unlimited assertion cannot be expressed; refuse it rather than
+		// silently skipping the check.
+		if _, finite := budget.Finite(); !finite {
+			fmt.Fprintln(os.Stderr, "claim -budget asserts an exact finite budget; unlimited cannot be asserted")
+			return nil, 2
+		}
+		nanos = budget.Nanos()
 	}
 	permit, err := td.PrepareStart(nanos)
 	if err != nil {

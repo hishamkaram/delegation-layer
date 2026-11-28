@@ -15,7 +15,7 @@ func TestArgumentCompatibilityCorpus(t *testing.T) {
 		command, root, literal string
 	}{
 		{[]string{"-root", "/state with spaces", "status", id, "-json"}, "status", "/state with spaces", ""},
-		{[]string{"dispatch", "--provider", "codex:exec", "--brief", "--help", "--cwd", "/work", "--model", "-json"}, "dispatch", "", "--help"},
+		{[]string{"dispatch", "--budget", "1m", "--provider", "codex:exec", "--brief", "--help", "--cwd", "/work", "--model", "-json"}, "dispatch", "", "--help"},
 		{[]string{"schedule", "-json", "-root=/state", "history", id}, "schedule", "/state", ""},
 		{[]string{"teams", "--root", "/state", "--json", "list"}, "teams", "/state", ""},
 		{[]string{"workspace", "exec", id, "--budget", "1m", "--", "printf", "--help", "literal value"}, "workspace", "", ""},
@@ -53,7 +53,7 @@ func FuzzArgumentLiteralValues(f *testing.F) {
 		f.Add(value)
 	}
 	f.Fuzz(func(t *testing.T, value string) {
-		got, err := ParseArguments([]string{"dispatch", "--provider", "codex:exec", "--brief", "/brief", "--cwd", "/workspace", "--model", value})
+		got, err := ParseArguments([]string{"dispatch", "--budget", "1m", "--provider", "codex:exec", "--brief", "/brief", "--cwd", "/workspace", "--model", value})
 		if err != nil {
 			t.Fatalf("literal model rejected: %v", err)
 		}
@@ -107,7 +107,7 @@ func TestHelpLexingPreservesValuesAndRejectsMalformedInput(t *testing.T) {
 			t.Errorf("invalid help syntax %v accepted: %+v", argv, got)
 		}
 	}
-	got, err := ParseArguments([]string{"dispatch", "--provider", "codex:exec", "--cwd", "/work", "--brief", "--help"})
+	got, err := ParseArguments([]string{"dispatch", "--budget", "1m", "--provider", "codex:exec", "--cwd", "/work", "--brief", "--help"})
 	if err != nil || got.Command != "dispatch" || got.Brief != "--help" {
 		t.Fatalf("literal value became help: %+v %v", got, err)
 	}
@@ -155,7 +155,7 @@ func TestProgrammaticContentSourcesAreExclusive(t *testing.T) {
 		}
 		var err error
 		if command == "dispatch" {
-			args.Config.Permission = "read-only"
+			args.Config.Permission, args.Config.Budget = "read-only", "1m"
 			err = args.validateDispatch(nil)
 		} else {
 			err = args.validateInteractionArguments()

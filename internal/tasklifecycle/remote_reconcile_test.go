@@ -1,6 +1,7 @@
 package tasklifecycle
 
 import (
+	"bytes"
 	"errors"
 	"os"
 	"path/filepath"
@@ -48,5 +49,36 @@ func TestRemoteReconcileRejectsBareTaskDirectory(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(store.Root, "tasks", id, "task.json")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("created request: %v", err)
+	}
+}
+
+func TestRemoteReconcileRecoversOmittedBudgetOnlyFromSavedTask(t *testing.T) {
+	owner, saved := remoteDataUseCreationOwner(t)
+	path := filepath.Join(owner.Root, "tasks", saved.TaskID, "task.json")
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	requested := saved.RequestedConfig
+	requested.Budget = ""
+	result := ReconcileRemoteContext(t.Context(), DispatchRequest{
+		Root: owner.Root, Cwd: saved.CanonicalCwd, TaskID: saved.TaskID,
+		Provider: saved.Provider, Config: requested, BriefBytes: []byte("brief"), Remote: saved.Remote.Clone(),
+	},
+		DispatchOptions{OpenStore: func(root string, create bool) (*taskdir.Store, error) {
+			if create {
+				t.Fatal("historical reconciliation requested root creation")
+			}
+			return taskdir.OpenStore(root)
+		}})
+	if result.RecordPresence() != RecordCreated || result.Existing == nil || result.Creation != nil {
+		t.Fatalf("saved budget was not recovered: phase=%v err=%v", result.Phase, result.Err())
+	}
+	after, err := os.ReadFile(path)
+	if err != nil || !bytes.Equal(before, after) {
+		t.Fatalf("reconciliation changed historical bytes: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(owner.Root, "tasks", saved.TaskID, "provider.start")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("incomplete fixture launched: %v", err)
 	}
 }

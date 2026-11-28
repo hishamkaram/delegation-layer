@@ -55,7 +55,7 @@ class ManagedLifetimeFixture:
 
     def write_task(self, *, wait_result="success", include_wait=True,
                    termination_cause="completed", scope_empty=True,
-                   outcome="committed"):
+                   outcome="committed", unlimited=False):
         task_path = self.task / "task.json"
         meta_path = self.task / "meta.json"
         write_record(task_path, {"task": "ordinary fixture"})
@@ -70,18 +70,19 @@ class ManagedLifetimeFixture:
         owner_sha = lifetime_identity.ordinary_lifetime_owner_digest(
             evidence_files.digest(task_path), evidence_files.digest(meta_path))
         common = {"schema_version": 1, "root_id": ROOT_ID, "task_id": TASK_ID}
+        budget = {"deadline": "", "unlimited": True} if unlimited else {"deadline": "2026-10-13T00:01:00Z"}
         write_record(lifetime / "intent.json", {
             **common, "owner_kind": "task", "owner_sha256": owner_sha,
             "scope_kind": "process-group", "assurance": "cooperative",
             "scope_plan": "fixture-plan", "boot_id": "fixture-boot",
-            "deadline": "2026-10-13T00:01:00Z",
+            **budget,
             "created_at": "2026-10-13T00:00:04Z",
         })
         registration = {
             **common, "owner_kind": "task", "owner_sha256": owner_sha,
             "scope_kind": "process-group", "assurance": "cooperative",
             "scope_id": "fixture-scope", "boot_id": "fixture-boot",
-            "deadline": "2026-10-13T00:01:00Z",
+            **budget,
             "created_at": "2026-10-13T00:00:05Z",
         }
         write_record(lifetime / "registration.json", registration)
@@ -380,6 +381,43 @@ class PrivateLifetimeAuthorizationTests(unittest.TestCase):
                 fixture = self.fixture()
                 fixture.write_task(include_wait=False, outcome=queue_result)
                 self.assert_shutdown_refused(fixture.state)
+
+    def test_unlimited_task_closure_retains_wait_and_empty_scope_proof(self):
+        fixture = self.fixture()
+        fixture.write_task(unlimited=True, termination_cause="requested")
+        closure = supervisor_impl.authorize_managed_lifetime_closure(fixture.state)
+        task = closure["tasks"][TASK_ID]
+        self.assertIs(task["intent"]["unlimited"], True)
+        self.assertIs(task["registration"]["unlimited"], True)
+        self.assertEqual(task["intent"]["deadline"], "")
+        self.assertEqual(task["registration"]["deadline"], "")
+        self.assertEqual(task["worker_wait"]["result"], "success")
+        self.assertIs(task["termination"]["scope_empty"], True)
+        fixture.write_task(unlimited=True, include_wait=False)
+        self.assert_shutdown_refused(fixture.state)
+
+    def test_unlimited_closure_rejects_contradictory_or_untyped_markers(self):
+        mutations = (
+            ("intent", {"deadline": "2026-10-13T00:01:00Z"}, "unlimited"),
+            ("intent", {"unlimited": "true"}, "unlimited"),
+            ("intent", {"unlimited": 1}, "unlimited"),
+            ("intent", {"unlimited": None}, "unlimited"),
+            ("intent", {"unlimited": False}, "deadline"),
+            ("registration", {"deadline": "2026-10-13T00:01:00Z"}, "unlimited"),
+            ("registration", {"unlimited": "true"}, "unlimited"),
+            ("registration", {"unlimited": False}, "deadline"),
+            ("registration", {"unlimited": False, "deadline": "2026-10-13T00:01:00Z"}, "binding mismatch"),
+        )
+        for kind, changes, message in mutations:
+            with self.subTest(kind=kind, changes=changes):
+                fixture = self.fixture()
+                fixture.write_task(unlimited=True)
+                path = fixture.task / "lifetime" / (kind + ".json")
+                record = json.loads(path.read_text())
+                record.update(changes)
+                write_record(path, record)
+                with self.assertRaisesRegex(evidence_validation.AcceptanceFailure, message):
+                    supervisor_impl.authorize_managed_lifetime_closure(fixture.state)
 
     def test_complete_wait_with_bad_or_missing_termination_refuses_shutdown(self):
         for mutation in ("missing", "registration", "launch-set", "scope-empty"):

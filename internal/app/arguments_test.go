@@ -25,20 +25,20 @@ func TestInterspersedReadArguments(t *testing.T) {
 	}
 }
 
-func TestDispatchDefaultsAndLiteralValues(t *testing.T) {
+func TestDispatchExplicitBudgetAndLiteralValues(t *testing.T) {
 	a, err := ParseArguments([]string{
-		"dispatch", "--provider", "codex:exec", "--brief", "brief ; $(inert).md",
+		"dispatch", "--budget", "unlimited", "--provider", "codex:exec", "--brief", "brief ; $(inert).md",
 		"--cwd", "/workspace ' ; literal", "--model", "--literal-model", "--json",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	budget, err := config.ParseBudget(a.Config.Budget)
+	budget, err := config.ParseExecutionBudget(a.Config.Budget)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if budget != 30*time.Minute || a.Config.Permission != "read-only" || a.Watch != 0 {
-		t.Fatalf("wrong independent budget/watch defaults: %+v", a)
+	if !budget.Unlimited() || a.Config.Permission != "read-only" || a.Watch != 0 {
+		t.Fatalf("explicit budget or independent watch default changed: %+v", a)
 	}
 	if a.Brief != "brief ; $(inert).md" || a.Cwd != "/workspace ' ; literal" || a.Config.Model != "--literal-model" {
 		t.Fatalf("argument reparsed: %+v", a)
@@ -56,7 +56,7 @@ func TestDispatchReviewTargetArguments(t *testing.T) {
 		{value: "commit:0123456789abcdef", kind: "commit", ref: "0123456789abcdef"},
 	} {
 		a, err := ParseArguments([]string{
-			"dispatch", "--provider", "codex:review", "--brief", "/brief", "--cwd", "/workspace",
+			"dispatch", "--budget", "1m", "--provider", "codex:review", "--brief", "/brief", "--cwd", "/workspace",
 			"--review-target", test.value,
 		})
 		if err != nil || a.Config.ReviewTarget == nil || a.Config.ReviewTarget.Kind != test.kind || a.Config.ReviewTarget.Value != test.ref {
@@ -65,7 +65,7 @@ func TestDispatchReviewTargetArguments(t *testing.T) {
 	}
 	for _, value := range []string{"base:", "commit:", "uncommitted:value", "branch:main", "main"} {
 		if _, err := ParseArguments([]string{
-			"dispatch", "--provider", "codex:review", "--brief", "/brief", "--cwd", "/workspace",
+			"dispatch", "--budget", "1m", "--provider", "codex:review", "--brief", "/brief", "--cwd", "/workspace",
 			"--review-target", value,
 		}); err == nil {
 			t.Fatalf("invalid review target %q was accepted", value)
@@ -75,14 +75,14 @@ func TestDispatchReviewTargetArguments(t *testing.T) {
 
 func TestPreflightReviewTargetArguments(t *testing.T) {
 	a, err := ParseArguments([]string{
-		"preflight", "--provider", "codex:review", "--cwd", "/workspace",
+		"preflight", "--budget", "1m", "--provider", "codex:review", "--cwd", "/workspace",
 		"--review-target", "uncommitted",
 	})
 	if err != nil || a.Config.ReviewTarget == nil || a.Config.ReviewTarget.Kind != "uncommitted" {
 		t.Fatalf("preflight review target parsed as %+v: %v", a.Config.ReviewTarget, err)
 	}
 	if _, err := ParseArguments([]string{
-		"preflight", "--provider", "codex:review", "--cwd", "/workspace",
+		"preflight", "--budget", "1m", "--provider", "codex:review", "--cwd", "/workspace",
 		"--review-target", "base:",
 	}); err == nil {
 		t.Fatal("invalid preflight review target was accepted")
@@ -91,7 +91,7 @@ func TestPreflightReviewTargetArguments(t *testing.T) {
 
 func TestAutoPreflightAndContinueArguments(t *testing.T) {
 	auto, err := ParseArguments([]string{
-		"dispatch", "--auto", "--brief", "/brief", "--cwd", "/workspace", "--json",
+		"dispatch", "--budget", "1m", "--auto", "--brief", "/brief", "--cwd", "/workspace", "--json",
 	})
 	if err != nil || !auto.Auto || auto.Provider != "" {
 		t.Fatalf("automatic dispatch arguments: %+v %v", auto, err)
@@ -113,7 +113,7 @@ func TestAutoPreflightAndContinueArguments(t *testing.T) {
 
 func TestRejectedArguments(t *testing.T) {
 	id := strings.Repeat("b", 32)
-	base := []string{"dispatch", "--provider", "codex:exec", "--brief", "brief", "--cwd", "/workspace"}
+	base := []string{"dispatch", "--budget", "1m", "--provider", "codex:exec", "--brief", "brief", "--cwd", "/workspace"}
 	tests := []struct {
 		name string
 		argv []string

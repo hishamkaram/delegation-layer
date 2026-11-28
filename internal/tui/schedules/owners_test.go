@@ -46,7 +46,7 @@ func TestScheduleActionsComposeRealOwnersWithoutStartingHost(t *testing.T) {
 	}, SupervisorOptions: pueue.Options{Observer: func(pueue.CommandEvent) { supervisorCalls++ }}})}
 	section := NewSection(backend, app.Arguments{Root: root}, t.TempDir())
 	create := section.Actions[0]
-	request := prepareOwnerAction(t, create, map[string]string{"Cron": "0 */2 * * *", "Timezone": "UTC", "Auto": "true", "Brief text": "private schedule brief"})
+	request := prepareOwnerAction(t, create, map[string]string{"Task budget": "1m", "Cron": "0 */2 * * *", "Timezone": "UTC", "Auto": "true", "Brief text": "private schedule brief"})
 	feedback := create.Run(t.Context(), request)
 	if backend.last.Code != 3 || backend.last.Response.Schedule == nil || !backend.last.Response.Schedule.Saved {
 		t.Fatalf("saved definition lost pending-host exit: %+v", backend.last)
