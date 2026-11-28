@@ -56,7 +56,7 @@ func TestIssue135PublicContinuationPublishedLegacyPair(t *testing.T) {
 				t.Fatal(err)
 			}
 			expectedRuntime := f.changePublishedClient(t, change)
-			result := runCommand(Arguments{Command: "continue", Root: f.owner.root, TaskID: f.seed.TaskID}, f.deps)
+			result := runCommand(Arguments{Command: "continue", Root: f.owner.root, TaskID: f.seed.TaskID, Config: task.TaskConfig{Budget: "1m"}}, f.deps)
 			f.workErr = result.err
 			response := publicContinuationResponse(t, result)
 			f.assertDaemonUnchanged(t, daemonInfo)

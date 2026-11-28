@@ -215,7 +215,7 @@ def host_fingerprint(public: Path) -> str:
 CONTROL_EVIDENCE_CODE = r"""import json,os,stat,sys
 from pathlib import Path
 root=Path("/state/tasks")
-keys=set("schema_version root_id task_id owner_kind scope_kind assurance deadline created_at started_at requested_at replied_at observed_at budget_nanos diagnostic_nanos cause result exit_code absence_proof terminated acknowledged state action numeric_task_id status stage code".split())
+keys=set("schema_version root_id task_id owner_kind scope_kind assurance deadline unlimited created_at started_at requested_at replied_at observed_at budget_nanos budget_unlimited diagnostic_nanos cause result exit_code absence_proof terminated acknowledged state action numeric_task_id status stage code".split())
 fixed=("task.json","meta.json","submit.json","supervisor.ref.json","provider.start","provider.started.json","outcome.json","lifetime/intent.json","lifetime/registration.json","lifetime/worker.json","lifetime/worker-wait.json","lifetime/terminated.json")
 result={}
 for task in sys.argv[1:]:
@@ -482,6 +482,8 @@ class Exercise:
             initial_id,
             "--brief",
             str(initial_brief),
+            "--budget",
+            "30s",
             allow=(1,),
         )
         if not refused.get("error"):
@@ -626,7 +628,16 @@ class Exercise:
         raise AcceptanceError("remote task did not reach a terminal observation")
 
     def exercise(self) -> None:
-        task = self.dispatch("snapshot", delay=0, budget="30s", snapshot=True, gate=True)
+        task = self.dispatch("snapshot", delay=0, budget="unlimited", snapshot=True, gate=True)
+        budget = self.inside(
+            "python3", "-c",
+            "import json,sys;from pathlib import Path;"
+            "r=json.loads((Path('/state/tasks')/sys.argv[1]/'task.json').read_text());"
+            "print(int(r['requested_config']['budget']=='unlimited' and r['budget_nanos']==0))",
+            task,
+        )
+        if budget.strip() != b"1":
+            raise AcceptanceError("destination did not persist the explicit unlimited budget")
         (self.directory / "input-source" / "selected.txt").write_text(
             "changed after admission\n"
         )

@@ -15,7 +15,7 @@ The main skill owns [root selection](../SKILL.md#3-prepare-separate-paths-and-a-
 | `filesystem scopes/list/read/inspect/git --request FILE_OR_DASH --json` | [Bounded filesystem observations](gateway.md#filesystem-observations) | None; scopes may use the fixed Native OS temp lookup |
 | `doctor [--provider ID --cwd ABS] --json` | Optional passive bundle/root/provider observations | None |
 | `preflight --provider ID --cwd ABS --budget DURATION\|unlimited --json` | Check static readiness | None |
-| `dispatch [--auto \| --provider ID] ... --json` | Admit a bounded turn; a Member may supply the destination | At most one launch attempt |
+| `dispatch [--auto \| --provider ID] ... --json` | Admit one turn; a Member may supply the destination | At most one launch attempt |
 | `status TASK --json` | Observe task state | No launch |
 | `collect TASK [--watch DURATION] --json` | Read or wait for publication | No launch |
 | `wait [--any\|--all] [--watch DURATION] TASK... --json` | Passively wait for several local tasks | None |
@@ -122,11 +122,11 @@ delegate dispatch [--auto | --provider ID] --brief FILE \
 | `--provider ID` | Named catalog profile; mutually exclusive with `--auto`. |
 | `--id TASK_ID` | Optional 32-character lowercase hexadecimal ID; omit to allocate. |
 | `--permission MODE` | Default `read-only`; authorized `workspace-write` requests unattended commands and edits. Native access can extend beyond the workspace. |
-| `--budget DURATION\|unlimited` | Required on every new dispatch, continuation, preflight and schedule. Choose a positive Go duration or exactly `unlimited`; there is no implicit default. Queue time is excluded. |
+| `--budget DURATION\|unlimited` | Required for each new turn, preflight and schedule: positive Go duration or exact `unlimited`. No default; queue time excluded. |
 | `--model MODEL` | Exact selector for a profile advertising `model`: Codex, CCR, Claude, AGY, Pi, or OpenCode. CCR requires a configured alias. |
 | `--effort VALUE` | Advertised effort selector; omitted or `default` preserves native defaults. |
-| `--native-timeout DURATION` | Positive Antigravity print timeout, bounded by a finite task budget. Unlimited imposes no upper bound; without a native timeout, Antigravity receives `--print-timeout 0s`. |
-| `--output-silence-timeout DURATION` | Optional provider-output silence limit. Default off; `0` explicitly disables. Positive subsecond values are preserved. Continuation inherits unless overridden. |
+| `--native-timeout DURATION` | Positive Antigravity print timeout; see [execution budgets](continuation.md#execution-budgets). |
+| `--output-silence-timeout DURATION` | Optional provider-output silence limit; see [policy](continuation.md#output-silence-policy). |
 | `--interactive` | Enable the profile's advertised native interaction; steering is a separate capability. See [interaction](interaction.md). |
 | `--review-target TARGET` | Required only for native [Codex review](#codex-review). |
 | `--resume-task TASK_ID` | Compatibility form for exact-predecessor continuation; prefer [continue](continuation.md). |
@@ -134,13 +134,8 @@ delegate dispatch [--auto | --provider ID] --brief FILE \
 | `--team-scope`, `--team`, `--member` | Supply all three to choose one explicit [Member](#using-a-member); no implicit Team or Role-only target. |
 | `--project-root ABS` | Explicit containing root for a non-Git project-scoped Member; invalid without that target or in a Git context. |
 
-An unlimited turn has no execution-expiry timer or default silence limit.
-The supervisor and guardian retain cancellation and native closure ownership.
-Control calls remain bounded to 10 seconds and startup to 30 seconds through
-worker hello; durable cleanup retains custody until its existing proofs settle.
-Unlimited does not keep the provider process alive after a completed turn.
-A new turn still uses [exact-session continuation](continuation.md). Historical
-Claude/Codex credential-validity profiles can require a finite successor budget.
+See [execution budgets](continuation.md#execution-budgets) for unlimited
+supervision, independent operation bounds and finite-only historical profiles.
 
 Without a Team target, exactly one of `--provider` and `--auto` is required.
 A bound Member may supply an omitted destination; an unbound Member still
@@ -172,16 +167,8 @@ conflicting with managed workspaces or a predecessor returns `invalid_request`
 with `managed_workspace_runner_conflict` or `continuation_runner_conflict`.
 Correct it only under the returned task-creation guidance.
 
-Provider silence counts positive stdout/stderr reads, including partial chunks.
-The clock starts after successful provider start, independently of queueing and
-preparation. Waiting for background work or an interactive reply also counts;
-user input does not reset provider-output activity. A finite wall budget still applies.
-`status.last_provider_output_at` is approximate nonempty capture metadata after
-provider-start evidence, not a heartbeat or watchdog authority. Native provider
-exit disarms silence before capture joins. Forced silence expiry has distinct
-`idle_timed_out` evidence; use the returned continuation decision, never infer
-eligibility from the timeout label. Remote positive policies require destination
-capability support; unsupported policies are refused rather than stripped.
+See [output-silence policy](continuation.md#output-silence-policy) for activity
+clocks, observation metadata and stop evidence.
 
 ## Teams
 

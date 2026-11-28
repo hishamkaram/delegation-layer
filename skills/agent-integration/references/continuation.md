@@ -216,7 +216,35 @@ If the response says `stop_and_report`, stop that attempt; do not automatically
 retry it. A caller may make a later request after observing the predecessor.
 Native `codex:review` tasks cannot be continued.
 
+## Execution budgets
+
+An unlimited turn has no execution-expiry timer or default silence limit.
+The supervisor and guardian retain cancellation and native closure ownership.
+Control calls remain bounded to 10 seconds and startup to 30 seconds through
+worker hello; durable cleanup retains custody until its existing proofs settle.
+Unlimited does not keep the provider process alive after a completed turn.
+A new turn still uses [exact-session continuation](continuation.md). Historical
+Claude/Codex credential-validity profiles can require a finite successor budget.
+
+Antigravity’s `--native-timeout` is positive and must fit a finite task budget.
+Unlimited imposes no upper bound; omitting the native timeout maps to
+`--print-timeout 0s`.
+
 ## Output-silence policy
+
+Output silence is off by default. Opt in with a positive duration (subsecond
+values are preserved), or pass `0` to disable it.
+
+Provider silence counts positive stdout/stderr reads, including partial chunks.
+The clock starts after successful provider start, independently of queueing and
+preparation. Waiting for background work or an interactive reply also counts;
+user input does not reset provider-output activity. A finite wall budget still applies.
+`status.last_provider_output_at` is approximate nonempty capture metadata after
+provider-start evidence, not a heartbeat or watchdog authority. Native provider
+exit disarms silence before capture joins. Forced silence expiry has distinct
+`idle_timed_out` evidence; use the returned continuation decision, never infer
+eligibility from the timeout label. Remote positive policies require destination
+capability support; unsupported policies are refused rather than stripped.
 
 An eligible output-silence stop reports `idle_timed_out` distinctly from wall
 budget expiry. Follow the returned failure and continuation decision; a sealed
