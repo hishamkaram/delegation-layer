@@ -1,6 +1,6 @@
 # Delegation Layer
 
-Delegate manages bounded tasks run by the agent CLIs you already use, locally
+Delegate manages supervised tasks run by the agent CLIs you already use, locally
 or on a prepared remote machine over SSH: delegation, tracking, budgets,
 cancellation, and retrieving results with evidence. Local tasks also support
 exact-session continuation.
@@ -25,8 +25,8 @@ exact-session continuation.
 | Capability | Benefit | Status | Reference |
 | --- | --- | --- | --- |
 | Terminal workbench | Browse Tasks, Teams, Schedules and System; review explicit actions before submitting them. | Available | [TUI guide](docs/terminal-workbench.md) |
-| Supervised agent tasks | Track one bounded turn through a provider-neutral interface. | Available | [Task commands](skills/agent-integration/references/command-reference.md) |
-| Budgets and cancellation | Bound execution time, opt into output-silence limits and request an explicit stop. | Available | [Result handling](skills/agent-integration/references/result-handling.md) |
+| Supervised agent tasks | Track one supervised turn through a provider-neutral interface. | Available | [Task commands](skills/agent-integration/references/command-reference.md) |
+| Budgets and cancellation | Choose a finite or unlimited execution budget, opt into output-silence limits and request an explicit stop. | Available | [Result handling](skills/agent-integration/references/result-handling.md) |
 | Durable results | Passively wait for several tasks and collect validated evidence after each turn ends. | Available | [Results](skills/agent-integration/references/result-handling.md) |
 | Exact-session continuation | Follow up in the recorded provider conversation. | Available | [Continuation](skills/agent-integration/references/continuation.md) |
 | Native clarification | Answer questions and steer supported active turns. | Available | [Interaction](skills/agent-integration/references/interaction.md) |
@@ -34,6 +34,11 @@ exact-session continuation.
 | Remote tasks over SSH | Reconnect to the same task, inspect bounded logs, transfer selected files, and explicitly retire retained bytes. | Available | [Remote workflow](docs/remote-delegation.md) |
 | Recurring background tasks | Run immutable schedules with health, optional failure hooks and bounded opt-in quota holds. | Available | [Schedule reliability](skills/agent-integration/references/command-reference.md#schedule-reliability) |
 | Optional Teams | Discover configured Teams before deciding which work to keep or assign; choose Members using saved Roles and execution defaults. | Available through the updated integration skill | [Teams](docs/teams.md) |
+
+Each new dispatch, continuation and schedule requires an explicit `--budget`,
+either a positive duration or `unlimited`. No execution duration is selected automatically.
+Unlimited turns keep normal supervision and cancellation; following up after a
+turn ends still uses exact-session continuation.
 
 Fresh dispatches and continuations check CPU and memory pressure by default.
 Use `--cpu-guard=false` or `--memory-guard=false` for an explicit per-command

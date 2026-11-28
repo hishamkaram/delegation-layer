@@ -85,7 +85,7 @@ func TestContinueRejectsIncompatibleSuccessorBeforePrivateSupervisorRecovery(t *
 
 	result := continueTask(Arguments{
 		Root: fixture.store.Root, TaskID: predecessor.TaskID,
-		Config: task.TaskConfig{Model: "litellm-glm-5-2-successor"},
+		Config: task.TaskConfig{Budget: "1m", Model: "litellm-glm-5-2-successor"},
 	}, Dependencies{ResourceChecker: fixtureResources, InitialSupervisorExecutable: filepath.Join(t.TempDir(), "missing-pueue")})
 	if result.code != 2 || !errors.Is(result.err, commonprovider.ErrUnsupportedOption) {
 		t.Fatalf("incompatible continuation result=%+v, want unsupported model override before supervisor recovery", result)
@@ -172,7 +172,7 @@ func ccrContinuationEntryPointInvocation(t *testing.T, entryPoint string, fixtur
 	args = []string{"--root", fixture.store.Root}
 	switch entryPoint {
 	case "continue --task":
-		args = append(args, "continue", "--task", predecessor.TaskID, "--model", testCase.model, "--json")
+		args = append(args, "continue", "--budget", "1m", "--task", predecessor.TaskID, "--model", testCase.model, "--json")
 		return args, 2, "resolve-predecessor"
 	case "dispatch --resume":
 		args = append(args, "dispatch", "--provider", ccr.Provider, "--brief", briefPath, "--cwd", workspace,
@@ -298,7 +298,7 @@ func runCCRContinuationSuccessorCase(t *testing.T, fixture continuationSuccessor
 	}, owner)
 	result := continueTask(Arguments{
 		Root: fixture.store.Root, TaskID: predecessor.TaskID,
-		Config: task.TaskConfig{Model: testCase.model},
+		Config: task.TaskConfig{Budget: "1m", Model: testCase.model},
 	}, deps)
 	if result.code != 1 || !errors.Is(result.err, pueue.ErrPrivateSupervisorMigrationRequired) {
 		t.Fatalf("continuation result=%+v, want blocked supervisor recovery after admission", result)
@@ -420,7 +420,7 @@ func TestInvalidPiContinuationOptionDoesNotRecoverPrivateSupervisor(t *testing.T
 			run: func(fixture continuationSuccessorTestState, predecessor *task.TaskRecord, deps Dependencies) commandResult {
 				return continueTask(Arguments{
 					Root: fixture.store.Root, TaskID: predecessor.TaskID,
-					Config: task.TaskConfig{Effort: "--tools"},
+					Config: task.TaskConfig{Budget: "1m", Effort: "--tools"},
 				}, deps)
 			},
 		},

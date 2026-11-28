@@ -24,6 +24,7 @@ type Coordinator struct {
 	ResourceGuards resourceadmission.GuardPolicy
 	guardSupport   *verifiedGuardSupport
 	silenceSupport *Identity
+	budgetSupport  *Identity
 }
 
 // Dispatch writes send-intent before the first admitting request. A lost response
@@ -341,9 +342,24 @@ func (c Coordinator) verifySilenceSupport(ctx context.Context, destination Ident
 }
 
 func (c Coordinator) verifyAdmissionSupport(ctx context.Context, destination Identity, config task.TaskConfig) (Coordinator, error) {
-	c, err := c.verifySilenceSupport(ctx, destination, config)
+	c, err := c.verifyBudgetSupport(ctx, destination, config)
+	if err != nil {
+		return c, err
+	}
+	c, err = c.verifySilenceSupport(ctx, destination, config)
 	if err != nil {
 		return c, err
 	}
 	return c.verifyGuardSupport(ctx, destination)
+}
+
+func (c Coordinator) verifyBudgetSupport(ctx context.Context, destination Identity, config task.TaskConfig) (Coordinator, error) {
+	if config.Budget != "unlimited" || c.budgetSupport != nil && *c.budgetSupport == destination {
+		return c, nil
+	}
+	if err := c.RequireCapability(ctx, destination, task.ExecutionBudgetFeature); err != nil {
+		return c, err
+	}
+	c.budgetSupport = &destination
+	return c, nil
 }

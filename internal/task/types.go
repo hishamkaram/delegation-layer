@@ -6,6 +6,9 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"time"
+
+	"github.com/hishamkaram/delegation-layer/internal/config/policy"
 )
 
 // SchemaVersion defines the supported protocol JSON schema version.
@@ -232,15 +235,20 @@ type SupervisorReceipt struct {
 	ObservedVersion      string             `json:"observed_version"`
 }
 
-// ProviderStartRecord is stored in provider.start.
+// ProviderStartRecord is stored in provider.start. A finite budget is a
+// positive BudgetNanos with BudgetUnlimited omitted, which keeps the bytes
+// written before unlimited budgets existed. An unlimited budget writes
+// budget_nanos 0 with budget_unlimited true; readers that require a positive
+// budget_nanos or reject unknown fields fail closed on it.
 type ProviderStartRecord struct {
-	SchemaVersion int    `json:"schema_version"`
-	RootID        string `json:"root_id"`
-	TaskID        string `json:"task_id"`
-	SpecSHA256    string `json:"spec_sha256"`
-	MetaSHA256    string `json:"meta_sha256"`
-	BudgetNanos   int64  `json:"budget_nanos"`
-	CreatedAt     string `json:"created_at"`
+	SchemaVersion   int    `json:"schema_version"`
+	RootID          string `json:"root_id"`
+	TaskID          string `json:"task_id"`
+	SpecSHA256      string `json:"spec_sha256"`
+	MetaSHA256      string `json:"meta_sha256"`
+	BudgetNanos     int64  `json:"budget_nanos"`
+	BudgetUnlimited bool   `json:"budget_unlimited,omitempty"`
+	CreatedAt       string `json:"created_at"`
 }
 
 // ProviderRuntimeIdentity records the provider executable selected at the
@@ -338,21 +346,25 @@ type PublishExitRecord struct {
 	PublisherID   string `json:"publisher_id"`
 }
 
-// StopRequestRecord is stored in stop/<request_id>.request.json.
+// StopRequestRecord is stored in stop/<request_id>.request.json. Its task
+// budget uses the provider.start representation: a positive BudgetNanos, or
+// BudgetUnlimited with BudgetNanos zero. BudgetUnlimited is omitted for finite
+// budgets, preserving their earlier bytes.
 type StopRequestRecord struct {
-	NumericTaskID *int64        `json:"numeric_task_id,omitempty"`
-	MetaSHA256    string        `json:"meta_sha256,omitempty"`
-	Label         string        `json:"label,omitempty"`
-	BudgetNanos   int64         `json:"budget_nanos,omitempty"`
-	Deadline      string        `json:"deadline,omitempty"`
-	SchemaVersion int           `json:"schema_version"`
-	RootID        string        `json:"root_id"`
-	TaskID        string        `json:"task_id"`
-	SpecSHA256    string        `json:"spec_sha256"`
-	RequestID     string        `json:"request_id"`
-	Cause         string        `json:"cause"`
-	Supervisor    SupervisorRef `json:"supervisor"`
-	RequestedAt   string        `json:"requested_at"`
+	NumericTaskID   *int64        `json:"numeric_task_id,omitempty"`
+	MetaSHA256      string        `json:"meta_sha256,omitempty"`
+	Label           string        `json:"label,omitempty"`
+	BudgetNanos     int64         `json:"budget_nanos,omitempty"`
+	BudgetUnlimited bool          `json:"budget_unlimited,omitempty"`
+	Deadline        string        `json:"deadline,omitempty"`
+	SchemaVersion   int           `json:"schema_version"`
+	RootID          string        `json:"root_id"`
+	TaskID          string        `json:"task_id"`
+	SpecSHA256      string        `json:"spec_sha256"`
+	RequestID       string        `json:"request_id"`
+	Cause           string        `json:"cause"`
+	Supervisor      SupervisorRef `json:"supervisor"`
+	RequestedAt     string        `json:"requested_at"`
 }
 
 // StopReplyRecord is stored in stop/<request_id>.reply.json.
@@ -590,10 +602,38 @@ func ValidateProviderStartRecord(r *ProviderStartRecord) error {
 	if err := ValidateSHA256(r.MetaSHA256); err != nil {
 		return fmt.Errorf("provider.start meta_sha256: %w", err)
 	}
-	if r.BudgetNanos <= 0 {
-		return errors.New("budget_nanos must be positive in provider.start")
+	if _, err := r.ExecutionBudget(); err != nil {
+		return err
 	}
 	return validateTimestamp(r.CreatedAt)
+}
+
+// ExecutionBudget decodes the budget bound into provider.start.
+func (r *ProviderStartRecord) ExecutionBudget() (policy.ExecutionBudget, error) {
+	if r == nil {
+		return policy.ExecutionBudget{}, errors.New("nil provider.start record")
+	}
+	budget, err := budgetFromRecordFields(r.BudgetNanos, r.BudgetUnlimited)
+	if err != nil {
+		return policy.ExecutionBudget{}, fmt.Errorf("provider.start budget: %w", err)
+	}
+	return budget, nil
+}
+
+// budgetFromRecordFields decodes the provider.start and stop-request budget
+// representation: a positive budget_nanos, or the unlimited marker with
+// budget_nanos zero.
+func budgetFromRecordFields(nanos int64, unlimited bool) (policy.ExecutionBudget, error) {
+	if unlimited {
+		if nanos != 0 {
+			return policy.ExecutionBudget{}, fmt.Errorf("%w: unlimited budget has nonzero budget_nanos", ErrIdentityMismatch)
+		}
+		return policy.UnlimitedExecutionBudget(), nil
+	}
+	if nanos <= 0 {
+		return policy.ExecutionBudget{}, errors.New("budget_nanos must be positive for a finite budget")
+	}
+	return policy.FiniteExecutionBudget(time.Duration(nanos))
 }
 
 // ValidateProviderStartedRecord validates a provider.started.json record.

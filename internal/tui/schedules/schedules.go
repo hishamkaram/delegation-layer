@@ -108,7 +108,7 @@ func scheduleExecutionFields() []ui.Field {
 		ui.TextField("Model", "exact requested model; blank keeps provider/Team default", "", func(a *app.Arguments, s string) { a.Config.Model = s }),
 		ui.TextField("Effort", "exact provider-supported effort; blank keeps default", "", func(a *app.Arguments, s string) { a.Config.Effort = s }),
 		ui.TextField("Permission", "native permission intent; blank keeps owner default", "", func(a *app.Arguments, s string) { a.Config.Permission = s }),
-		ui.TextField("Task budget", "duration; blank uses owner default", "", func(a *app.Arguments, s string) { a.Config.Budget = s }),
+		ui.TextField("Task budget", "required: positive duration or unlimited", "", func(a *app.Arguments, s string) { a.Config.Budget = s }),
 		ui.TextField("Output silence timeout", "opt-in duration; blank disables", "", func(a *app.Arguments, s string) { a.Config.OutputSilenceTimeout = s }),
 		ui.TextField("Native timeout", "optional provider-native timeout", "", func(a *app.Arguments, s string) { a.Config.NativeTimeout = s }),
 		ui.TextField("Review target", "uncommitted, base:BRANCH or commit:SHA", "", func(a *app.Arguments, s string) { a.ReviewTarget = s }),

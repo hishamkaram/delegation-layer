@@ -33,7 +33,8 @@ The prepared Native 0.9.0 / Gateway 0.2.0 candidate is not a published release.
 Check installed help before using its new surface. Native owns execution choices
 and defaults; connection/workspace commands no longer accept provider/model/
 effort/permission/budget policy flags. Do not reconstruct an old ceiling as a
-client-side execution rule. Native budgets remain finite.
+client-side execution rule. New Native budgets are explicit positive durations
+or `unlimited`. Unlimited requires Native capability `execution-budget-v1`.
 
 A saved old-policy profile or unavailable saved executable uses the supported
 same-profile upgrade flow:

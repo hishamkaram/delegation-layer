@@ -9,7 +9,7 @@ func TestOutputSilenceArgumentsPreservePolicy(t *testing.T) {
 	for _, command := range []string{"dispatch", "continue"} {
 		for _, value := range []string{"", "0", "250ms", "2h"} {
 			t.Run(command+"/"+value, func(t *testing.T) {
-				args := []string{command}
+				args := []string{command, "--budget", "1m"}
 				if command == "dispatch" {
 					args = append(args, "--provider", "claude:print", "--brief", "brief.md", "--cwd", "/workspace")
 				} else {
@@ -32,7 +32,7 @@ func TestOutputSilenceArgumentsPreservePolicy(t *testing.T) {
 
 func TestOutputSilenceArgumentsRejectInvalidDuration(t *testing.T) {
 	for _, value := range []string{"-1s", "forever", "99999999999999999999999999h"} {
-		_, err := ParseArguments([]string{"continue", "--task", strings.Repeat("a", 32), "--output-silence-timeout", value})
+		_, err := ParseArguments([]string{"continue", "--budget", "1m", "--task", strings.Repeat("a", 32), "--output-silence-timeout", value})
 		if err == nil {
 			t.Fatalf("accepted invalid silence duration %q", value)
 		}

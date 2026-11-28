@@ -36,11 +36,21 @@ func (g *Guardian) serve(ctx context.Context, reader *lifetimeGuardianReader, wa
 	if deadlineTimer != nil {
 		defer deadlineTimer.Stop()
 	}
+	startupTimer, startupEvents := g.startupTimer()
+	if startupTimer != nil {
+		defer startupTimer.Stop()
+	}
 	stopTimer, stopEvents := lifetimeGuardianStopTimer(g.options.UserStop, g.options.StopPoll)
 	if stopTimer != nil {
 		defer stopTimer.Stop()
 	}
 	for {
+		if g.helloReceived {
+			startupEvents = nil
+			if startupTimer != nil {
+				startupTimer.Stop()
+			}
+		}
 		if result, handled := g.tryServeReadEvent(ctx, reader); handled {
 			if result.continueServing {
 				continue
@@ -50,7 +60,7 @@ func (g *Guardian) serve(ctx context.Context, reader *lifetimeGuardianReader, wa
 		if g.deadlineReached() {
 			return g.recoverForCause(ctx, errLifetimeGuardianDeadline, task.LifetimeTerminationBudget)
 		}
-		result := g.waitForServeEvent(ctx, reader, waitDone, deadlineEvents, stopEvents)
+		result := g.waitForServeEvent(ctx, reader, waitDone, deadlineEvents, stopEvents, startupEvents)
 		if result.continueServing {
 			continue
 		}
@@ -73,6 +83,7 @@ func (g *Guardian) waitForServeEvent(
 	waitDone <-chan error,
 	deadlineEvents <-chan time.Time,
 	stopEvents <-chan time.Time,
+	startupEvents <-chan time.Time,
 ) lifetimeGuardianServeResult {
 	select {
 	case event, ok := <-reader.events:
@@ -83,6 +94,8 @@ func (g *Guardian) waitForServeEvent(
 		return g.recoverForCause(ctx, errLifetimeGuardianDeadline, task.LifetimeTerminationBudget)
 	case <-stopEvents:
 		return g.handleUserStop(ctx)
+	case <-startupEvents:
+		return g.recoverForCause(ctx, errLifetimeGuardianStartupDeadline, task.LifetimeTerminationRecovery)
 	case <-ctx.Done():
 		cause := fmt.Errorf("lifetime guardian context ended: %w", ctx.Err())
 		return g.recoverForCause(ctx, cause, task.LifetimeTerminationRecovery)
@@ -171,6 +184,9 @@ func (g *Guardian) handleMessage(ctx context.Context, message lifetimeMessage) (
 func (g *Guardian) handleHello(ctx context.Context, message lifetimeMessage) error {
 	if g.helloReceived {
 		return g.reject(ctx, message, lifetimeGuardianCodeInvalidOrder)
+	}
+	if g.startupExpired() {
+		return errLifetimeGuardianStartupDeadline
 	}
 	g.helloReceived = true
 	return g.reply(ctx, message, true, "")
@@ -387,7 +403,15 @@ func receiveLifetimeGuardianMessage(ctx context.Context, codec *lifetimeCodec) (
 	}
 	deadline, bounded := ctx.Deadline()
 	if !bounded {
-		return lifetimeMessage{}, errors.New("task lifetime guardian: receive context has no deadline")
+		// Waiting for a frame is idle task lifetime. Once data begins arriving,
+		// keep the frame read bounded independently of unlimited execution.
+		if err := codec.conn.SetReadDeadline(time.Time{}); err != nil {
+			return lifetimeMessage{}, err
+		}
+		if _, err := codec.reader.Peek(1); err != nil {
+			return lifetimeMessage{}, err
+		}
+		deadline = time.Now().Add(lifetimeControlTimeout)
 	}
 	if err := codec.conn.SetReadDeadline(deadline); err != nil {
 		return lifetimeMessage{}, err
@@ -402,6 +426,9 @@ func receiveLifetimeGuardianMessage(ctx context.Context, codec *lifetimeCodec) (
 }
 
 func lifetimeGuardianDeadlineTimer(deadline time.Time) (*time.Timer, <-chan time.Time) {
+	if deadline.IsZero() {
+		return nil, nil
+	}
 	remaining := time.Until(deadline)
 	if remaining <= 0 {
 		closed := make(chan time.Time)

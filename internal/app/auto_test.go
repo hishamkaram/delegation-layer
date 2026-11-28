@@ -15,6 +15,7 @@ import (
 	admissioncore "github.com/hishamkaram/delegation-layer/internal/admission"
 
 	"github.com/hishamkaram/delegation-layer/internal/config"
+	"github.com/hishamkaram/delegation-layer/internal/config/policy"
 	"github.com/hishamkaram/delegation-layer/internal/execution"
 	"github.com/hishamkaram/delegation-layer/internal/predicate"
 	commonprovider "github.com/hishamkaram/delegation-layer/internal/provider"
@@ -86,7 +87,7 @@ func TestSelectAutoProviderUsesStaticReadinessAndDefaultPermission(t *testing.T)
 		t.Fatal(err)
 	}
 	deps := Dependencies{ResourceChecker: fixtureResources, Catalog: catalog}.withCapturedEnvironment().normalized()
-	provider, err := admissioncore.SelectAutoProvider(staticAdmissionOptions(deps), root, strings.Repeat("a", 32), strings.Repeat("b", 32), workspace, task.TaskConfig{Budget: "1m"}, []byte("brief"))
+	provider, err := admissioncore.SelectAutoProvider(staticAdmissionOptions(deps), root, strings.Repeat("a", 32), strings.Repeat("b", 32), workspace, task.TaskConfig{Budget: "1m"}, []byte("brief"), policy.ExplicitBudget)
 	if err != nil || provider != "zulu:run" {
 		t.Fatalf("auto provider=%q err=%v calls=%v", provider, err, calls)
 	}
@@ -189,7 +190,7 @@ func TestTimeoutContinuationFromTaskSurfacesMalformedStopEvidence(t *testing.T) 
 func TestContinuationCommandPreservesCustomRunner(t *testing.T) {
 	taskID := strings.Repeat("a", 32)
 	got := continuationCommand("/tmp/state", taskID, "/tmp/custom runner", nil)
-	want := "delegate --root '/tmp/state' --runner '/tmp/custom runner' continue --task " + taskID + " --json"
+	want := "delegate --root '/tmp/state' --runner '/tmp/custom runner' continue --task " + taskID + " --budget BUDGET --json"
 	if got != want {
 		t.Fatalf("continuation command = %q, want %q", got, want)
 	}
@@ -199,7 +200,7 @@ func TestContinuationCommandPreservesExternalSupervisor(t *testing.T) {
 	taskID := strings.Repeat("b", 32)
 	supervisor := &task.SupervisorRef{ConfigPath: "/tmp/external pueue.yml"}
 	got := continuationCommand("/tmp/state", taskID, "", supervisor)
-	want := "delegate --root '/tmp/state' --pueue-config '/tmp/external pueue.yml' continue --task " + taskID + " --json"
+	want := "delegate --root '/tmp/state' --pueue-config '/tmp/external pueue.yml' continue --task " + taskID + " --budget BUDGET --json"
 	if got != want {
 		t.Fatalf("continuation command = %q, want %q", got, want)
 	}

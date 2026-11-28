@@ -279,7 +279,8 @@ See [model discovery](../skills/agent-integration/references/command-reference.m
 and [scoped model guards](connector-contract.md#scoped-model-discovery). Native
 owns provider/model/effort/permission/budget validation and defaults. Discovery
 is advisory; an explicit model ID need not appear in a catalog. Native budgets
-remain finite (`30m` by default, `1h` for `codex:review`). Gateway connection and
+must be chosen explicitly as a positive duration or `unlimited`; there is no
+new-task budget default. Gateway connection and
 workspace approval save routing, not execution-policy defaults.
 
 ## Filesystem and guarded continuation

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"time"
 
+	"github.com/hishamkaram/delegation-layer/internal/config/policy"
 	"github.com/hishamkaram/delegation-layer/internal/guardian"
 	"github.com/hishamkaram/delegation-layer/internal/scheduler/contract"
 	schedulerruntime "github.com/hishamkaram/delegation-layer/internal/scheduler/runtime"
@@ -46,7 +47,11 @@ func (tasks schedulerTasks) Dispatch(request schedulerruntime.DispatchRequest) (
 	options := dispatchOptions(tasks.dependencies, false)
 	options.OpenStore = tasks.openStore
 	options.Creation.Admission.Supervisor.Routing = tasks.routing
-	dispatched := tasklifecycle.Dispatch(dispatchRequest(arguments, tasks.dependencies), options)
+	intent := dispatchRequest(arguments, tasks.dependencies)
+	if definition.Request.Config.Budget == "" {
+		intent.BudgetIntent = policy.LegacyScheduleBudget
+	}
+	dispatched := tasklifecycle.Dispatch(intent, options)
 	projected := dispatchCommandResult(dispatched)
 	attempt := schedulerAdmissionFailure(projected.err, projected.response.TaskRecord)
 	if cleanupErr := schedulerTaskCleanupError(projected.err); errors.Is(cleanupErr, schedulerruntime.ErrTaskCleanupUnresolved) {

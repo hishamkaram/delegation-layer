@@ -489,3 +489,39 @@ func requireStableRoundTrip(t *testing.T, fixture successorFixture, meta task.Me
 	}
 	return first
 }
+
+// A native predecessor continues under an unlimited successor budget with the
+// same resume argv as a finite successor; a historical isolated predecessor
+// is refused explicitly instead of switching the successor's profile.
+func TestSuccessorCandidateBudgetIntentFollowsPredecessorProfile(t *testing.T) {
+	fixture := newSuccessorFixture(t, Mode)
+	unlimited := fixture.request
+	unlimited.RequestedConfig.Budget, unlimited.BudgetNanos = "unlimited", 0
+	finiteCandidate, err := PrepareSuccessorCandidate(fixture.request, fixture.meta, fixture.providedEnv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	unlimitedCandidate, err := PrepareSuccessorCandidate(unlimited, fixture.meta, fixture.providedEnv)
+	if err != nil {
+		t.Fatalf("native successor refused an unlimited budget: %v", err)
+	}
+	want, err := finiteCandidate.Admit()
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := unlimitedCandidate.Admit()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(got.Plan.Arguments, want.Plan.Arguments) || !slices.Contains(got.Plan.Arguments, testThreadID) || !got.Plan.Predicate.Equal(want.Plan.Predicate) {
+		t.Fatalf("unlimited successor argv=%q predicate=%+v, want %q", got.Plan.Arguments, got.Plan.Predicate, want.Plan.Arguments)
+	}
+
+	historical := task.MetaRecord{Predicate: historicalRuntimeReferenceForMode(Mode)}
+	if commonprovider.HasNativeProfile(historical) {
+		t.Fatal("fixture predecessor unexpectedly uses the native profile")
+	}
+	if _, err = PrepareSuccessorCandidate(unlimited, historical, fixture.providedEnv); !errors.Is(err, ErrUnsupportedProfile) || !strings.Contains(err.Error(), "requires a finite task budget") {
+		t.Fatalf("historical successor with unlimited budget error = %v", err)
+	}
+}

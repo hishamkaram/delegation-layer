@@ -27,7 +27,7 @@ func scheduleCreateArgs(t *testing.T) Arguments {
 	if err := os.WriteFile(brief, []byte("requested brief"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	return Arguments{Root: filepath.Join(parent, "state"), Cwd: cwd, Brief: brief, Auto: true, ScheduleCron: "0 9 * * *"}
+	return Arguments{Config: task.TaskConfig{Budget: "1m"}, Root: filepath.Join(parent, "state"), Cwd: cwd, Brief: brief, Auto: true, ScheduleCron: "0 9 * * *"}
 }
 
 func TestScheduleCreateInputPreservesRequestedChoices(t *testing.T) {
@@ -74,7 +74,7 @@ func TestScheduleCreateInputOmissionsAndExplicitID(t *testing.T) {
 		t.Fatal("explicit ID invoked generator")
 		return "", nil
 	})
-	if err != nil || input.ID != scheduleTestID || clockCalls != 1 || input.TimezoneSet || input.Request.Config != (task.TaskConfig{}) || !input.Request.Auto {
+	if err != nil || input.ID != scheduleTestID || clockCalls != 1 || input.TimezoneSet || input.Request.Config != (task.TaskConfig{Budget: "1m"}) || !input.Request.Auto {
 		t.Fatalf("input=%+v clock=%d err=%v", input, clockCalls, err)
 	}
 }
@@ -92,6 +92,7 @@ func TestScheduleCreateInputRejectsInvalidRequests(t *testing.T) {
 		{"both selections", func(a *Arguments) { a.Provider = "codex:exec" }},
 		{"neither selection", func(a *Arguments) { a.Auto = false }},
 		{"invalid permission", func(a *Arguments) { a.Config.Permission = "not-a-mode" }},
+		{"missing budget", func(a *Arguments) { a.Config.Budget = "" }},
 		{"invalid native timeout", func(a *Arguments) { a.Config.Budget, a.Config.NativeTimeout = "1m", "2m" }},
 		{"invalid review target", func(a *Arguments) { a.ReviewTarget = "base:" }},
 		{"invalid ID", func(a *Arguments) { a.ScheduleID = "bad" }},

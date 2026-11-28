@@ -353,7 +353,7 @@ type outputUpgradeEntryPoint struct {
 func outputUpgradeEntryPoints() []outputUpgradeEntryPoint {
 	return []outputUpgradeEntryPoint{
 		{name: "continue --task", run: func(f *outputUpgradeFixture) commandResult {
-			return continueTask(Arguments{Root: f.root, TaskID: outputUpgradePredecessorID, PueueConfig: f.supervisor.Binding().ConfigPath}, f.deps)
+			return continueTask(Arguments{Config: task.TaskConfig{Budget: "1m"}, Root: f.root, TaskID: outputUpgradePredecessorID, PueueConfig: f.supervisor.Binding().ConfigPath}, f.deps)
 		}},
 		{name: "dispatch --resume-task", run: func(f *outputUpgradeFixture) commandResult {
 			return dispatch(Arguments{

@@ -222,7 +222,7 @@ func registerCommandFlags(fs *flag.FlagSet, a *Arguments, watch *string) {
 		fs.StringVar(&a.Provider, "provider", "", "provider profile")
 		fs.StringVar(&a.Cwd, "cwd", "", "absolute working directory")
 		fs.StringVar(&a.Config.Permission, "permission", config.DefaultMode, "permission intent")
-		fs.StringVar(&a.Config.Budget, "budget", "", "finite execution budget")
+		fs.StringVar(&a.Config.Budget, "budget", "", "required execution budget: positive duration or unlimited")
 		fs.StringVar(&a.Config.NativeTimeout, "native-timeout", "", "optional provider-native timeout")
 		fs.StringVar(&a.Config.Model, "model", "", "requested model")
 		fs.StringVar(&a.Config.Effort, "effort", "", "requested effort")
@@ -424,7 +424,7 @@ func (a *Arguments) validatePreflight(positional []string) error {
 	if err := config.ValidateMode(a.Config.Permission); err != nil {
 		return err
 	}
-	if _, err := config.ParseBudget(a.Config.Budget); err != nil {
+	if _, err := config.ParseExecutionBudget(a.Config.Budget); err != nil {
 		return err
 	}
 	return a.applyReviewTarget()
@@ -452,7 +452,7 @@ func (a *Arguments) validateContinue(positional []string) error {
 	if err := a.validateContinuationIdentity(); err != nil {
 		return err
 	}
-	_, err := config.ParseBudget(a.Config.Budget)
+	_, err := config.ParseExecutionBudget(a.Config.Budget)
 	return err
 }
 
@@ -520,7 +520,7 @@ func (a *Arguments) validateDispatch(positional []string) error {
 	if err := config.ValidateMode(a.Config.Permission); err != nil {
 		return err
 	}
-	if _, err := config.ParseBudget(a.Config.Budget); err != nil {
+	if _, err := config.ParseExecutionBudget(a.Config.Budget); err != nil {
 		return err
 	}
 	if err := a.applyReviewTarget(); err != nil {
@@ -666,7 +666,7 @@ func registerAdmissionFlags(fs *flag.FlagSet, a *Arguments) {
 		fs.StringVar(&a.TaskID, "task", "", "predecessor task ID")
 		fs.StringVar(&a.SuccessorTaskID, "id", "", "stable successor task ID")
 		fs.StringVar(&a.Brief, "brief", "", "optional follow-up brief file")
-		fs.StringVar(&a.Config.Budget, "budget", "", "finite continuation budget")
+		fs.StringVar(&a.Config.Budget, "budget", "", "required continuation budget: positive duration or unlimited")
 		fs.StringVar(&a.Config.Model, "model", "", "continuation model override")
 		fs.StringVar(&a.Config.Effort, "effort", "", "continuation effort override")
 		return
@@ -677,7 +677,7 @@ func registerAdmissionFlags(fs *flag.FlagSet, a *Arguments) {
 	fs.StringVar(&a.Brief, "brief", "", "brief file")
 	fs.StringVar(&a.Cwd, "cwd", "", "absolute working directory")
 	fs.StringVar(&a.Config.Permission, "permission", config.DefaultMode, "permission intent")
-	fs.StringVar(&a.Config.Budget, "budget", "", "finite execution budget")
+	fs.StringVar(&a.Config.Budget, "budget", "", "required execution budget: positive duration or unlimited")
 	fs.StringVar(&a.Config.NativeTimeout, "native-timeout", "", "optional agy timeout within the task budget")
 	fs.StringVar(&a.Config.Model, "model", "", "requested model")
 	fs.StringVar(&a.Config.Effort, "effort", "", "requested effort")

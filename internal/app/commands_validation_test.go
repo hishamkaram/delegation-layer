@@ -25,7 +25,7 @@ func TestDispatchExistingIDConflictStopsBeforeAdmission(t *testing.T) {
 
 	var stdout, stderr bytes.Buffer
 	code := Run([]string{
-		"dispatch", "--json", "--root", store.Root, "--id", req.TaskID,
+		"dispatch", "--budget", "1m", "--json", "--root", store.Root, "--id", req.TaskID,
 		"--pueue-config", filepath.Join(t.TempDir(), "missing.yml"),
 		"--provider", req.Provider, "--brief", briefPath, "--cwd", req.CanonicalCwd,
 		"--runner", filepath.Join(t.TempDir(), "runner"),
@@ -54,7 +54,7 @@ func TestDispatchValidationFailureKeepsExplicitTaskPresenceUnknown(t *testing.T)
 
 	var stdout, stderr bytes.Buffer
 	code := Run([]string{
-		"dispatch", "--json", "--root", store.Root, "--id", req.TaskID,
+		"dispatch", "--budget", "1m", "--json", "--root", store.Root, "--id", req.TaskID,
 		"--provider", req.Provider, "--brief", filepath.Join(t.TempDir(), "missing.md"),
 		"--cwd", req.CanonicalCwd,
 	}, &stdout, &stderr, Dependencies{ResourceChecker: fixtureResources})

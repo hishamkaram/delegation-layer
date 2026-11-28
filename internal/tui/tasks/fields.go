@@ -57,7 +57,7 @@ func advanced(fields ...ui.Field) []ui.Field {
 func executionFields(defaults app.Arguments) []ui.Field {
 	primary := []ui.Field{
 		textField("Permission", "native permission intent, not an independent sandbox", defaults.Config.Permission, func(a *app.Arguments, s string) { a.Config.Permission = s }),
-		textField("Budget", "existing task budget duration", defaults.Config.Budget, func(a *app.Arguments, s string) { a.Config.Budget = s }),
+		textField("Budget", "required: positive duration or unlimited", defaults.Config.Budget, func(a *app.Arguments, s string) { a.Config.Budget = s }),
 	}
 	primary = append(primary, advanced(
 		textField("Requested model", "exact native ID; discovery is advisory", defaults.Config.Model, func(a *app.Arguments, s string) { a.Config.Model = s }),

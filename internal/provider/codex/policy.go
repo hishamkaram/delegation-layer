@@ -15,6 +15,10 @@ import (
 )
 
 func effectivePolicy(request task.TaskRecord, environment profileEnvironment, now time.Time, managed func() ([]task.PolicySourceDigest, error), runtimeSHA256 string) (task.EffectiveConfig, error) {
+	window, err := historicalAuthWindow(request)
+	if err != nil {
+		return task.EffectiveConfig{}, err
+	}
 	sources, err := managed()
 	if err != nil {
 		return task.EffectiveConfig{}, err
@@ -28,12 +32,28 @@ func effectivePolicy(request task.TaskRecord, environment profileEnvironment, no
 		return task.EffectiveConfig{}, err
 	}
 	sources = append(sources, local...)
-	auth, err := personalAuthSource(environment.CodexHome, now, time.Duration(request.BudgetNanos))
+	auth, err := personalAuthSource(environment.CodexHome, now, window)
 	if err != nil {
 		return task.EffectiveConfig{}, err
 	}
 	sources = append(sources, auth)
 	return sealPolicy(request, environment, sources, runtimeSHA256)
+}
+
+// historicalAuthWindow returns the finite budget across which the historical
+// isolated profile proves that native file authentication will not refresh.
+// An unlimited budget has no such window, so it is refused explicitly rather
+// than given an invented deadline or moved to the native profile.
+func historicalAuthWindow(request task.TaskRecord) (time.Duration, error) {
+	budget, err := request.ExecutionBudget()
+	if err != nil {
+		return 0, fmt.Errorf("%w: a valid finite or unlimited task budget is required: %w", ErrUnsupportedProfile, err)
+	}
+	window, finite := budget.Finite()
+	if !finite {
+		return 0, fmt.Errorf("%w: the historical Codex file-authentication profile requires a finite task budget", ErrUnsupportedProfile)
+	}
+	return window, nil
 }
 
 func emptyConfigSources(paths []string) ([]task.PolicySourceDigest, error) {

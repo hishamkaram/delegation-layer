@@ -133,7 +133,7 @@ func TestPolicyDigestBindsFactsWithoutObservationTime(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	request := task.TaskRecord{CanonicalCwd: "/workspace", BudgetNanos: int64(time.Minute)}
+	request := task.TaskRecord{CanonicalCwd: "/workspace", RequestedConfig: task.TaskConfig{Budget: "1m0s"}, BudgetNanos: int64(time.Minute)}
 	environment := profileEnvironment{WritableRoots: []string{"/home/test/.claude"}, RuntimeSHA256: strings.Repeat("c", 64)}
 	digest := strings.Repeat("a", 64)
 	first, err := finalizePolicy(request, environment, nil, digest, facts, now)
@@ -159,7 +159,7 @@ func TestPolicyDigestPreservesHistoricalProofAcrossRuntimeRefresh(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	request := task.TaskRecord{CanonicalCwd: "/workspace", BudgetNanos: int64(time.Minute)}
+	request := task.TaskRecord{CanonicalCwd: "/workspace", RequestedConfig: task.TaskConfig{Budget: "1m0s"}, BudgetNanos: int64(time.Minute)}
 	environment := profileEnvironment{WritableRoots: []string{"/home/test/.claude"}, RuntimeSHA256: strings.Repeat("c", 64)}
 	old, err := finalizePolicy(request, environment, nil, strings.Repeat("a", 64), facts, now)
 	if err != nil {
@@ -193,7 +193,7 @@ func TestWorkspaceWritePolicyUsesNativeWriteMode(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	request := task.TaskRecord{CanonicalCwd: "/workspace", Mode: WorkspaceWriteMode, RequestedConfig: task.TaskConfig{Permission: WorkspaceWriteMode}, BudgetNanos: int64(time.Minute)}
+	request := task.TaskRecord{CanonicalCwd: "/workspace", Mode: WorkspaceWriteMode, RequestedConfig: task.TaskConfig{Permission: WorkspaceWriteMode, Budget: "1m0s"}, BudgetNanos: int64(time.Minute)}
 	environment := profileEnvironment{WritableRoots: []string{"/home/test/.claude"}, RuntimeSHA256: strings.Repeat("c", 64)}
 	effective, err := finalizePolicy(request, environment, nil, strings.Repeat("a", 64), facts, now)
 	if err != nil {

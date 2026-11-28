@@ -28,6 +28,9 @@ func prepareScheduleCreate(a Arguments, now func() time.Time, newID func() (stri
 	if err := validateScheduleCreateShape(a); err != nil {
 		return schedulecommand.CreateInput{}, err
 	}
+	if _, err := config.ParseExecutionBudget(a.Config.Budget); err != nil {
+		return schedulecommand.CreateInput{}, schedulecommand.InvalidInput(err)
+	}
 	if err := a.applyReviewTarget(); err != nil {
 		return schedulecommand.CreateInput{}, schedulecommand.InvalidInput(err)
 	}

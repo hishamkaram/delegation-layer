@@ -138,7 +138,7 @@ func TestDispatchUnsupportedOptionRefusesBeforeSupervisorBinding(t *testing.T) {
 	}
 	var stdout, stderr bytes.Buffer
 	code := Run([]string{
-		"dispatch", "--json", "--root", root, "--provider", "antigravity:print", "--brief", brief,
+		"dispatch", "--budget", "1m", "--json", "--root", root, "--provider", "antigravity:print", "--brief", brief,
 		"--cwd", workspace, "--permission", "workspace-write", "--model", "explicit-model", "--pueue-config", filepath.Join(t.TempDir(), "missing.yml"),
 	}, &stdout, &stderr, Dependencies{ResourceChecker: fixtureResources, Catalog: catalog, InitialSupervisorExecutable: filepath.Join(t.TempDir(), "missing-pueue")})
 	if code != 2 {

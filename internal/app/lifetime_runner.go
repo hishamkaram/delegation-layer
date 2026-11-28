@@ -29,6 +29,7 @@ import (
 const lifetimeChildFD = 3
 
 type lifetimeGuardianRunState struct {
+	unlimited bool
 	ownerKind string
 	records   guardian.Records
 	// closure reads the same journal family for the post-run custody release.
@@ -43,6 +44,7 @@ type lifetimeGuardianRunState struct {
 	reconcileOwned    func(context.Context) error
 	userStop          func() (bool, error)
 	deadline          time.Time
+	startupDeadline   time.Time
 	closeOwner        func() error
 }
 
@@ -79,8 +81,13 @@ func loadLifetimeGuardianRunState(store *taskdir.Store, parsed runnerArguments) 
 	if preparedErr != nil {
 		return lifetimeGuardianRunState{}, errors.Join(preparedErr, td.Close())
 	}
-	if req.BudgetNanos <= 0 {
-		return lifetimeGuardianRunState{}, errors.Join(task.ErrEvidenceFault, td.Close())
+	budget, err := req.ExecutionBudget()
+	if err != nil {
+		return lifetimeGuardianRunState{}, errors.Join(err, td.Close())
+	}
+	state.unlimited = budget.Unlimited()
+	if state.unlimited {
+		state.startupDeadline = time.Now().Add(guardian.UnlimitedStartupTimeout)
 	}
 	state.records = td
 	state.closure = td
@@ -94,7 +101,9 @@ func loadLifetimeGuardianRunState(store *taskdir.Store, parsed runnerArguments) 
 	state.userStop = func() (bool, error) {
 		return td.UserStopRequested()
 	}
-	state.deadline = time.Now().Add(time.Duration(req.BudgetNanos))
+	if duration, finite := budget.Finite(); finite {
+		state.deadline = time.Now().Add(duration)
+	}
 	state.closeOwner = td.Close
 	return state, nil
 }
@@ -143,7 +152,11 @@ func runLifetimeGuardianMode(parsed runnerArguments, deps Dependencies) (resultE
 		return err
 	}
 	defer func() { resultErr = errors.Join(resultErr, state.closeOwner()) }()
-	environmentContext, finishEnvironment := context.WithDeadline(context.Background(), state.deadline)
+	environmentDeadline := state.deadline
+	if state.unlimited {
+		environmentDeadline = state.startupDeadline
+	}
+	environmentContext, finishEnvironment := context.WithDeadline(context.Background(), environmentDeadline)
 	err = prepareLifetimeWorkerEnvironment(environmentContext, store, worker, deps.Environment)
 	finishEnvironment()
 	if err != nil {
@@ -152,16 +165,18 @@ func runLifetimeGuardianMode(parsed runnerArguments, deps Dependencies) (resultE
 
 	var inheritedCloseErr error
 	lifetimeOwner, err := guardian.New(guardian.Options{
-		RootID:         store.RootID,
-		TaskID:         parsed.TaskID,
-		OwnerKind:      state.ownerKind,
-		Deadline:       state.deadline,
-		Records:        state.records,
-		AcquireOwner:   state.acquireOwner,
-		ReconcileOwned: state.reconcileOwned,
-		UserStop:       state.userStop,
-		Worker:         worker,
-		Connection:     parentConnection,
+		RootID:          store.RootID,
+		TaskID:          parsed.TaskID,
+		OwnerKind:       state.ownerKind,
+		Deadline:        state.deadline,
+		Unlimited:       state.unlimited,
+		StartupDeadline: state.startupDeadline,
+		Records:         state.records,
+		AcquireOwner:    state.acquireOwner,
+		ReconcileOwned:  state.reconcileOwned,
+		UserStop:        state.userStop,
+		Worker:          worker,
+		Connection:      parentConnection,
 		StartWorker: func(cmd *exec.Cmd) error {
 			startErr := cmd.Start()
 			closeErr := childFile.Close()

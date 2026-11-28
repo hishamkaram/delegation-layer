@@ -8,7 +8,7 @@ import (
 
 func TestManagedWorkspaceDispatchArguments(t *testing.T) {
 	id := strings.Repeat("a", 32)
-	base := []string{"dispatch", "--provider", "codex:exec", "--brief", "/brief"}
+	base := []string{"dispatch", "--budget", "1m", "--provider", "codex:exec", "--brief", "/brief"}
 	for _, extra := range [][]string{
 		{"--cwd", "/source", "--isolation", "git-worktree", "--base", "HEAD", "--workspace-budget", "8m"},
 		{"--workspace", id},

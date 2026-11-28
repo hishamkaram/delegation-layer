@@ -18,6 +18,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/hishamkaram/delegation-layer/internal/config/policy"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/task/randomid"
 	"golang.org/x/sys/unix"
@@ -2327,6 +2328,7 @@ type ConnectorExecutionOptions struct {
 	Provider          string                      `json:"provider"`
 	Permission        string                      `json:"permission"`
 	BudgetNanoseconds int64                       `json:"budget_nanoseconds"`
+	BudgetUnlimited   bool                        `json:"budget_unlimited,omitempty"`
 	Model             ConnectorRequestedSelection `json:"model"`
 	Effort            ConnectorRequestedSelection `json:"effort"`
 }
@@ -2339,7 +2341,7 @@ func connectorRequestedSelection(value string) ConnectorRequestedSelection {
 }
 
 func connectorExecutionOptions(request task.TaskRecord) ConnectorExecutionOptions {
-	return ConnectorExecutionOptions{Provider: request.Provider, Permission: request.Mode, BudgetNanoseconds: request.BudgetNanos, Model: connectorRequestedSelection(request.RequestedConfig.Model), Effort: connectorRequestedSelection(request.RequestedConfig.Effort)}
+	return ConnectorExecutionOptions{Provider: request.Provider, Permission: request.Mode, BudgetNanoseconds: request.BudgetNanos, BudgetUnlimited: request.RequestedConfig.Budget == policy.UnlimitedBudget, Model: connectorRequestedSelection(request.RequestedConfig.Model), Effort: connectorRequestedSelection(request.RequestedConfig.Effort)}
 }
 
 // ReadCommittedResultOutcomeContext uses the canonical publication/seal

@@ -499,7 +499,14 @@ cooperative private sessions with platform-specific process identities. The live
 owner tracks descendants; ownerless cooperative recovery cannot simply assume
 the scope is empty. Native portability claims require native-host checks.
 
-Provider work retains its immutable deadline. Already-started stop/finalization
+The immutable task request owns a finite or unlimited execution budget.
+`budget_nanos` is derived, with zero reserved for explicit unlimited execution.
+Unlimited tasks do not arm wall-expiry timers. Control RPCs retain a ten-second
+bound; a separate thirty-second startup deadline covers preparation through
+worker hello and is removed from idle execution after the handshake.
+Native inspection commands keep the selected task budget. Projection network
+reads under unlimited execution use the existing finite auxiliary inspection
+bound. Finite provider work retains its immutable deadline. Already-started stop/finalization
 uses a separate bounded cleanup phase; it cannot renew the provider budget.
 Each durable transition is recovered by its existing owner after interruption.
 
@@ -838,7 +845,8 @@ the journal's lock. Delivery is reserved durably before writing a native frame;
 uncertain delivery is not automatically replayed.
 
 Native completion closes input. The closed interaction journal is sealed with
-the streams, while the guardian retains cancellation and the original deadline.
+the streams, while the guardian retains cancellation and the original budget
+policy. Unlimited interaction has no wall deadline.
 Delivery acknowledgement is not task success. A later conversational turn still
 uses a separate linked task. See the
 [interaction reference](../skills/agent-integration/references/interaction.md).

@@ -3,12 +3,14 @@ package guardian
 import (
 	"context"
 	"errors"
+	"fmt"
+	"time"
 
 	"github.com/hishamkaram/delegation-layer/internal/task"
 )
 
 func (g *Guardian) deadlineReached() bool {
-	return !g.options.Now().Before(g.options.Deadline)
+	return !g.options.Deadline.IsZero() && !g.options.Now().Before(g.options.Deadline)
 }
 
 func (g *Guardian) recoverForCause(ctx context.Context, cause error, terminationCause string) lifetimeGuardianServeResult {
@@ -45,6 +47,9 @@ func (g *Guardian) workContext(parent context.Context) (context.Context, context
 	if parent == nil {
 		return nil, func() {}
 	}
+	if g.options.Unlimited {
+		return context.WithTimeout(parent, lifetimeControlTimeout)
+	}
 	return context.WithDeadline(parent, g.options.Deadline)
 }
 
@@ -63,4 +68,38 @@ func (g *Guardian) terminationContext(parent context.Context, cause string) (con
 		return g.workContext(parent)
 	}
 	return g.cleanupContext(parent)
+}
+
+// UnlimitedStartupTimeout bounds preparation when execution has no deadline.
+const UnlimitedStartupTimeout = 30 * time.Second
+
+var errLifetimeGuardianStartupDeadline = fmt.Errorf("task lifetime guardian: startup deadline reached: %w", context.DeadlineExceeded)
+
+func (g *Guardian) startupExpired() bool {
+	return g.options.Unlimited && !g.options.Now().Before(g.options.StartupDeadline)
+}
+
+func (g *Guardian) startupTimer() (*time.Timer, <-chan time.Time) {
+	if !g.options.Unlimited || g.helloReceived {
+		return nil, nil
+	}
+	return lifetimeGuardianDeadlineTimer(g.options.StartupDeadline)
+}
+
+func (g *Guardian) startupContext(parent context.Context) (context.Context, context.CancelFunc) {
+	if g.options.Unlimited {
+		deadline := g.options.StartupDeadline
+		if deadline.IsZero() {
+			deadline = g.options.Now().Add(UnlimitedStartupTimeout)
+		}
+		return context.WithDeadline(parent, deadline)
+	}
+	return g.workContext(parent)
+}
+
+func (g *Guardian) receiveContext(parent context.Context) (context.Context, context.CancelFunc) {
+	if g.options.Unlimited {
+		return context.WithCancel(parent)
+	}
+	return context.WithDeadline(parent, g.options.Deadline)
 }

@@ -236,7 +236,7 @@ func TestLocalAdmissionGuardOverridesReachNativeChecker(t *testing.T) {
 				arguments = Arguments{
 					Root: fixture.root, TaskID: fixture.predecessorID,
 					PueueConfig: fixture.supervisor.Binding().ConfigPath, Runner: fixture.runner,
-					ResourceGuards: policy, Config: task.TaskConfig{Interactive: true},
+					ResourceGuards: policy, Config: task.TaskConfig{Interactive: true, Budget: "1m"},
 				}
 				result = continueTask(arguments, fixture.deps)
 			} else {

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import datetime
 import posixpath
 from scripts.acceptance.evidence.digests import sha
@@ -15,6 +16,17 @@ from scripts.acceptance.evidence.validation import _exact_keys
 from scripts.acceptance.evidence.validation import _hex_digest
 from scripts.acceptance.evidence.validation import require
 from scripts.acceptance.lifetime.identity import _lifetime_token
+
+
+def _lifetime_deadline(record: Mapping[str, object], owner_kind: str,
+                       label: str) -> tuple[datetime, int] | None:
+    unlimited = record.get("unlimited", False)
+    require(type(unlimited) is bool, label + " unlimited marker must be boolean")
+    if unlimited:
+        require(owner_kind == "task" and record.get("deadline") == "",
+                label + " unlimited execution requires a task owner and no deadline")
+        return None
+    return _canonical_timestamp(record.get("deadline"), label + " deadline")
 
 
 def _validate_lifetime_intent(
@@ -32,7 +44,7 @@ def _validate_lifetime_intent(
     _exact_keys(intent, {
         "schema_version", "root_id", "task_id", "owner_kind", "owner_sha256",
         "scope_kind", "assurance", "scope_plan", "boot_id", "deadline", "created_at",
-    }, label=f"{evidence} lifetime intent for {task}")
+    }, {"unlimited"}, label=f"{evidence} lifetime intent for {task}")
     require(type(intent.get("schema_version")) is int and intent["schema_version"] == 1 and
             intent.get("root_id") == root and intent.get("task_id") == task and
             intent.get("owner_kind") == owner_kind and
@@ -44,8 +56,8 @@ def _validate_lifetime_intent(
             not ((scope_kind == "cgroup-v2" and assurance == "exact") or
                  (scope_kind == "process-group" and assurance == "cooperative"))):
         raise AcceptanceFailure(f"{evidence} lifetime intent scope is invalid for {task}")
-    intent_deadline = _canonical_timestamp(
-        intent.get("deadline"), f"{evidence} lifetime intent deadline for {task}")
+    intent_deadline = _lifetime_deadline(
+        intent, owner_kind, f"{evidence} lifetime intent for {task}")
     require(_lifetime_token(intent.get("scope_plan")) and
             _lifetime_token(intent.get("boot_id")) and
             (expected_deadline is None or intent.get("deadline") == expected_deadline) and
@@ -107,7 +119,8 @@ def _validate_lifetime_registration(
     _exact_keys(registration, {
         "schema_version", "root_id", "task_id", "owner_kind", "owner_sha256",
         "scope_kind", "assurance", "scope_id", "boot_id", "deadline", "created_at",
-    }, {"custody_placement"}, label=f"{evidence} lifetime registration for {task}")
+    }, {"custody_placement", "unlimited"}, label=f"{evidence} lifetime registration for {task}")
+    _lifetime_deadline(registration, owner_kind, f"{evidence} lifetime registration for {task}")
     if "custody_placement" in registration:
         # The generic Go control-store record carries a placement for any owner kind.
         validate_custody_placement(
@@ -121,6 +134,7 @@ def _validate_lifetime_registration(
             registration.get("assurance") == assurance and
             registration.get("boot_id") == intent.get("boot_id") and
             registration.get("deadline") == intent.get("deadline") and
+            registration.get("unlimited", False) == intent.get("unlimited", False) and
             _lifetime_token(registration.get("scope_id")),
             f"{evidence} lifetime registration binding mismatch for {task}")
     registration_created = _canonical_timestamp(

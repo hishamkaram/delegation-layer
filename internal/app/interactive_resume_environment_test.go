@@ -213,7 +213,7 @@ func dispatchInteractivePiResume(fixture *interactivePiResumeFixture) commandRes
 			TaskID:      fixture.predecessorID,
 			PueueConfig: fixture.supervisor.Binding().ConfigPath,
 			Runner:      fixture.runner,
-			Config:      task.TaskConfig{Interactive: true},
+			Config:      task.TaskConfig{Interactive: true, Budget: "1m"},
 		}, fixture.deps)
 	}
 	return dispatch(Arguments{

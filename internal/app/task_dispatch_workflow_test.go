@@ -23,7 +23,7 @@ import (
 
 func TestDispatchWorkflowMissingStorePortRefusesBeforeState(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "state")
-	request := tasklifecycle.DispatchRequest{Root: root, Cwd: t.TempDir(), BriefBytes: []byte("brief")}
+	request := tasklifecycle.DispatchRequest{Root: root, Cwd: t.TempDir(), BriefBytes: []byte("brief"), Config: task.TaskConfig{Budget: "1m"}}
 	result := tasklifecycle.Dispatch(request, tasklifecycle.DispatchOptions{})
 	if !errors.Is(result.Err(), task.ErrEvidenceFault) || result.Phase != tasklifecycle.DispatchOpenState {
 		t.Fatalf("missing store owner did not stop dispatch: %+v", result)

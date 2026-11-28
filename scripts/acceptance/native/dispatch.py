@@ -39,15 +39,13 @@ def task_command_prefix(owner) -> list[object]:
 def dispatch_argv(owner, task_id: str, brief: Path,
                   predecessor: str | None = None,
                   budget: str | None = None) -> list[object]:
-    """Build one dispatch; an omitted budget uses the provider case's contract."""
+    """Build one dispatch with the budget selected by the caller or provider case."""
     acceptance = owner
     requested = case_task_budget(acceptance.provider).requested if budget is None else budget
     argv = acceptance.task_command_prefix()
     argv.extend(["dispatch", "--provider", acceptance.provider,
                  "--brief", brief, "--cwd", acceptance.workspace, "--id", task_id,
-                 "--permission", acceptance.mode])
-    if requested is not None:
-        argv.extend(["--budget", requested])
+                 "--permission", acceptance.mode, "--budget", requested])
     argv.append("--json")
     model = getattr(acceptance.args, "model", None)
     effort = getattr(acceptance.args, "effort", None)
@@ -67,12 +65,11 @@ def dispatch_request(owner, name: str, brief: Path, predecessor: str | None,
                      budget: str | None) -> TaskRequest:
     """Bind the role, brief and the owner inputs dispatch_argv reads, before any launch.
 
-    A dispatch that omits ``--budget`` binds the canonical provider default it relies on.
+    The request and argv use the same explicit budget selected by the case.
     """
     acceptance = owner
     if budget is None:
-        case = case_task_budget(acceptance.provider)
-        budget = case.canonical if case.requested is None else case.requested
+        budget = case_task_budget(acceptance.provider).requested
     return TaskRequest(
         role=name, brief_sha256=digest(brief), budget=budget, predecessor_task_id=predecessor,
         provider=acceptance.provider, permission=acceptance.mode,

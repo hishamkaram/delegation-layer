@@ -1,6 +1,10 @@
 # Continuation and timeout recovery
 
-Each task is one provider turn. A time limit ends that turn; it does not grant
+Each task is one provider turn. Every successor requires an explicit
+`--budget DURATION|unlimited`; it does not inherit the predecessor budget.
+Returned `continue_command` guidance contains a `BUDGET` placeholder; replace it
+with the lead’s selected positive duration or `unlimited` before execution.
+A finite time limit ends that turn; it does not grant
 permission to launch the same task again. The durable task record keeps the
 exact provider session identity and the stop evidence.
 
@@ -169,7 +173,7 @@ interrupted resume offer, so handle it as pending under
 
 | Response | Action |
 |---|---|
-| `failure.code: "task_interrupted"`, `failure.next_action: "continue_task"`, and `continuation.resumable: true` (all three) | Run the `continue` above for that predecessor with the original root and a finite budget, then observe the successor. |
+| `failure.code: "task_interrupted"`, `failure.next_action: "continue_task"`, and `continuation.resumable: true` (all three) | Run the `continue` above for that predecessor with the original root and an explicit finite or unlimited budget, then observe the successor. |
 | `interrupted` with any other combination, including `failure.next_action: "stop_and_report"` or `continuation.resumable: false` | Report the reason and stop. |
 | `timed_out` with `failure.code: "task_cancelled"` (user stop and budget stop, no outcome) | `stop_and_report`; `continuation.resumable` is `false` and no `continue_command` is returned. Report it. `collect` exit `3` here is a finite watch, not success and not a reason to keep waiting. |
 | Any other operational error | It is not an interruption; apply [result handling](result-handling.md). |
@@ -182,6 +186,11 @@ interrupted task, now with `stop_and_report` and `resumable: false`. A
 committed or rejected outcome stays authoritative and is never replaced by
 `task_cancelled`. A later, explicit user request to `continue` is a separate
 action and still validated against real closure and the recorded session.
+
+Unlimited removes execution expiry, not native completion. A completed provider
+turn still ends normally; following up uses the same recorded resume mechanism.
+Historical Claude OAuth and isolated Codex profiles that validate credentials
+through the end of execution require a finite successor budget.
 
 The successor uses the predecessor's observed provider session from
 `provider.ref`. Only when `provider.ref` is genuinely absent, for any eligible
@@ -200,14 +209,42 @@ turn when the provider supports continuation, its exact session was recorded,
 and the runner/session reservation has been released. Not every rejection has
 a usable session. A normal completion without a budget stop need not expose
 `continuation.resumable` in `status` or `collect`. Use `continue` with the exact
-predecessor and a finite budget, then apply its task-creation and failure
+predecessor and an explicit finite or unlimited budget, then apply its task-creation and failure
 response as described in [result handling](result-handling.md).
 
 If the response says `stop_and_report`, stop that attempt; do not automatically
 retry it. A caller may make a later request after observing the predecessor.
 Native `codex:review` tasks cannot be continued.
 
+## Execution budgets
+
+An unlimited turn has no execution-expiry timer or default silence limit.
+The supervisor and guardian retain cancellation and native closure ownership.
+Control calls remain bounded to 10 seconds and startup to 30 seconds through
+worker hello; durable cleanup retains custody until its existing proofs settle.
+Unlimited does not keep the provider process alive after a completed turn.
+A new turn still uses [exact-session continuation](continuation.md). Historical
+Claude/Codex credential-validity profiles can require a finite successor budget.
+
+Antigravity’s `--native-timeout` is positive and must fit a finite task budget.
+Unlimited imposes no upper bound; omitting the native timeout maps to
+`--print-timeout 0s`.
+
 ## Output-silence policy
+
+Output silence is off by default. Opt in with a positive duration (subsecond
+values are preserved), or pass `0` to disable it.
+
+Provider silence counts positive stdout/stderr reads, including partial chunks.
+The clock starts after successful provider start, independently of queueing and
+preparation. Waiting for background work or an interactive reply also counts;
+user input does not reset provider-output activity. A finite wall budget still applies.
+`status.last_provider_output_at` is approximate nonempty capture metadata after
+provider-start evidence, not a heartbeat or watchdog authority. Native provider
+exit disarms silence before capture joins. Forced silence expiry has distinct
+`idle_timed_out` evidence; use the returned continuation decision, never infer
+eligibility from the timeout label. Remote positive policies require destination
+capability support; unsupported policies are refused rather than stripped.
 
 An eligible output-silence stop reports `idle_timed_out` distinctly from wall
 budget expiry. Follow the returned failure and continuation decision; a sealed

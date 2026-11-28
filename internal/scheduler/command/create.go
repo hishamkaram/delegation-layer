@@ -5,11 +5,15 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/hishamkaram/delegation-layer/internal/config/policy"
 	"github.com/hishamkaram/delegation-layer/internal/scheduler/contract"
 	"github.com/hishamkaram/delegation-layer/internal/scheduler/recurrence"
 )
 
 func BuildDefinition(input CreateInput) (contract.Definition, []Warning, error) {
+	if _, err := policy.ParseExecutionBudget(input.Request.Config.Budget); err != nil {
+		return contract.Definition{}, nil, InvalidInput(err)
+	}
 	zone, err := recurrence.ResolveTimezone(input.Timezone)
 	if err != nil {
 		return contract.Definition{}, nil, err

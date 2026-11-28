@@ -6,11 +6,13 @@ import (
 	"testing"
 
 	"github.com/hishamkaram/delegation-layer/internal/config"
+	"github.com/hishamkaram/delegation-layer/internal/config/policy"
 )
 
 const (
 	timeoutBoundsMessage = "native timeout must be positive and no greater than the task budget"
 	modelEffortMessage   = "model and effort must be nonblank literal values when supplied"
+	invalidBudgetMessage = `budget must be a finite positive duration or "unlimited"`
 )
 
 func TestValidateRequestedOptionsAcceptsOmittedAndLiteralValues(t *testing.T) {
@@ -23,6 +25,8 @@ func TestValidateRequestedOptionsAcceptsOmittedAndLiteralValues(t *testing.T) {
 		{name: "read only", config: TaskConfig{Permission: config.ModeReadOnly}},
 		{name: "workspace write", config: TaskConfig{Permission: config.ModeWorkspaceWrite}},
 		{name: "budget alone", config: TaskConfig{Budget: "90m"}},
+		{name: "unlimited budget", config: TaskConfig{Budget: "unlimited"}},
+		{name: "unlimited budget encloses any timeout", config: TaskConfig{Budget: "unlimited", NativeTimeout: "1000h"}},
 		{name: "timeout without budget", config: TaskConfig{NativeTimeout: "1s"}},
 		{name: "timeout below budget", config: TaskConfig{Budget: "2m", NativeTimeout: "119s"}},
 		{name: "timeout equals budget", config: TaskConfig{Budget: "2m", NativeTimeout: "2m"}},
@@ -51,9 +55,11 @@ func TestValidateRequestedOptionsRejectsInvalidSuppliedValues(t *testing.T) {
 		is     error
 	}{
 		{name: "unknown permission", config: TaskConfig{Permission: "bogus"}, want: `invalid permission mode: must be 'read-only' or 'workspace-write': "bogus"`, is: config.ErrInvalidMode},
-		{name: "malformed budget", config: TaskConfig{Budget: "soon"}, want: `budget must be a finite positive duration: time: invalid duration "soon"`, is: config.ErrInvalidBudget},
-		{name: "zero budget", config: TaskConfig{Budget: "0s"}, want: "budget must be a finite positive duration", is: config.ErrInvalidBudget},
-		{name: "negative budget", config: TaskConfig{Budget: "-1m"}, want: "budget must be a finite positive duration", is: config.ErrInvalidBudget},
+		{name: "malformed budget", config: TaskConfig{Budget: "soon"}, want: `budget must be a finite positive duration or "unlimited": time: invalid duration "soon"`, is: config.ErrInvalidBudget},
+		{name: "zero budget", config: TaskConfig{Budget: "0s"}, want: invalidBudgetMessage, is: config.ErrInvalidBudget},
+		{name: "negative budget", config: TaskConfig{Budget: "-1m"}, want: invalidBudgetMessage, is: config.ErrInvalidBudget},
+		{name: "unlimited spelled with case", config: TaskConfig{Budget: "Unlimited"}, want: `budget must be a finite positive duration or "unlimited": time: invalid duration "Unlimited"`, is: config.ErrInvalidBudget},
+		{name: "padded unlimited", config: TaskConfig{Budget: " unlimited"}, want: `budget must be a finite positive duration or "unlimited": time: invalid duration " unlimited"`, is: config.ErrInvalidBudget},
 		{name: "malformed timeout without budget", config: TaskConfig{NativeTimeout: "soon"}, want: timeoutBoundsMessage},
 		{name: "zero timeout without budget", config: TaskConfig{NativeTimeout: "0s"}, want: timeoutBoundsMessage},
 		{name: "negative timeout without budget", config: TaskConfig{NativeTimeout: "-1s"}, want: timeoutBoundsMessage},
@@ -82,7 +88,12 @@ func TestValidateRequestedOptionsRejectsInvalidSuppliedValues(t *testing.T) {
 				t.Fatalf("error %v lost sentinel %v", err, tc.is)
 			}
 			assertTaskConfigUnchanged(t, tc.config, before)
-			concrete := TaskRecord{Provider: config.ProviderCodexExec, RequestedConfig: tc.config}
+			// Concrete normalization requires a budget; supply one only where
+			// the case omits it so the case's own fault is compared.
+			concrete := TaskRecord{Provider: config.ProviderCodexExec, RequestedConfig: cloneTaskConfig(tc.config)}
+			if concrete.RequestedConfig.Budget == "" {
+				concrete.RequestedConfig.Budget = "2m"
+			}
 			if concreteErr := NormalizeRequestedConfig(&concrete); concreteErr == nil || concreteErr.Error() != tc.want {
 				t.Fatalf("concrete normalization disagrees with the supplied-option check: %v, want %q", concreteErr, tc.want)
 			}
@@ -132,25 +143,34 @@ func TestValidateRequestedOptionsLeavesDefaultsToConcreteNormalization(t *testin
 			t.Fatalf("validation supplied a default: %+v", request)
 		}
 	})
-	t.Run("provider default budget still bounds the timeout", requireProviderDefaultBoundsTimeout)
+	t.Run("concrete normalization has no provider default budget", requireExplicitBudgetForConcreteNormalization)
 	t.Run("semantic equality is accepted but concrete normalization stays canonical", requireConcreteNormalizationStaysCanonical)
 }
 
-func requireProviderDefaultBoundsTimeout(t *testing.T) {
+// Supplied-option validation accepts an omitted budget, but concrete
+// normalization of a new request applies no provider default, including the
+// former one-hour Codex review default, and leaves the request unchanged.
+func requireExplicitBudgetForConcreteNormalization(t *testing.T) {
 	request := TaskConfig{NativeTimeout: "40m"}
 	if err := ValidateRequestedOptions(request); err != nil {
-		t.Fatalf("budget-free timeout rejected before a provider default exists: %v", err)
+		t.Fatalf("budget-free timeout rejected before the caller supplies a budget: %v", err)
 	}
-	exec := TaskRecord{Provider: config.ProviderCodexExec, RequestedConfig: request}
-	if err := NormalizeRequestedConfig(&exec); err == nil || err.Error() != timeoutBoundsMessage {
-		t.Fatalf("30m default budget did not bound 40m timeout: %v", err)
+	for _, provider := range []string{config.ProviderCodexExec, config.ProviderCodexReview} {
+		record := TaskRecord{Provider: provider, RequestedConfig: request}
+		before := record
+		if err := NormalizeRequestedConfig(&record); !errors.Is(err, policy.ErrBudgetRequired) {
+			t.Fatalf("%s omitted budget error = %v, want ErrBudgetRequired", provider, err)
+		}
+		if !reflect.DeepEqual(record, before) {
+			t.Fatalf("%s failed normalization supplied a default: %+v", provider, record)
+		}
 	}
-	review := TaskRecord{Provider: config.ProviderCodexReview, RequestedConfig: request}
-	if err := NormalizeRequestedConfig(&review); err != nil {
-		t.Fatalf("1h review default did not admit 40m timeout: %v", err)
+	unlimited := TaskRecord{Provider: config.ProviderCodexReview, RequestedConfig: TaskConfig{Budget: "unlimited", NativeTimeout: "40m"}}
+	if err := NormalizeRequestedConfig(&unlimited); err != nil {
+		t.Fatalf("explicit unlimited budget rejected: %v", err)
 	}
-	if review.RequestedConfig.Budget != "1h0m0s" || review.BudgetNanos != int64(config.DefaultCodexReviewBudgetDuration) {
-		t.Fatalf("codex review default budget not retained: %+v", review)
+	if unlimited.RequestedConfig.Budget != "unlimited" || unlimited.BudgetNanos != 0 || unlimited.RequestedConfig.NativeTimeout != "40m0s" {
+		t.Fatalf("explicit unlimited budget not retained: %+v", unlimited)
 	}
 }
 

@@ -107,7 +107,7 @@ func validateCommandScope(scope CommandScope, cmd *exec.Cmd) (context.Context, e
 		return nil, errInvalidCommandScope
 	}
 	deadline, finite := ctx.Deadline()
-	if !finite || deadline.IsZero() || ctx.Err() != nil {
+	if ((!finite || deadline.IsZero()) && !unlimitedExecution(ctx)) || ctx.Err() != nil {
 		return nil, errInvalidCommandScope
 	}
 	return ctx, nil

@@ -160,3 +160,19 @@ func TestNativeCommandNullOutputReportsOnlyProvenCallbackExit(t *testing.T) {
 		})
 	}
 }
+
+func TestNativeCommandDedicatedOwnerSupportsUnlimitedExecution(t *testing.T) {
+	executable, err := os.Executable()
+	require(t, err)
+	budget := armBudgetUntil(realClock{}, time.Time{}, Options{})
+	t.Cleanup(func() { budget.complete(Options{}); require(t, budget.await()) })
+	command := exec.Command(executable, "-test.run=^TestNativeCommandExitHelper$")
+	command.Dir = t.TempDir()
+	command.Env = append(os.Environ(), "DELEGATE_NATIVE_COMMAND_TEST=success")
+	var output bytes.Buffer
+	command.Stdout = &output
+	require(t, RunIsolatedCommand(budget.workContext, executable, command))
+	if output.String() != "preserved output\n" {
+		t.Fatalf("unlimited native command lost captured output: %q", output.String())
+	}
+}

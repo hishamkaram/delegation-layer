@@ -16,12 +16,13 @@ import (
 )
 
 func scheduleCreateArgv(a Arguments) []string {
-	return []string{"--root", a.Root, "schedule", "create", "--brief", a.Brief, "--cwd", a.Cwd, "--auto", "--cron", a.ScheduleCron, "--timezone", "UTC", "--id", scheduleTestID, "--json"}
+	return []string{"--root", a.Root, "schedule", "create", "--brief", a.Brief, "--budget", a.Config.Budget, "--cwd", a.Cwd, "--auto", "--cron", a.ScheduleCron, "--timezone", "UTC", "--id", scheduleTestID, "--json"}
 }
 
 func TestScheduleCreatePersistsRequestedDefinition(t *testing.T) {
 	a := scheduleCreateArgs(t)
-	argv := append(scheduleCreateArgv(a), "--model", "model-exact", "--effort", "high", "--budget", "60m")
+	a.Config.Budget = "60m"
+	argv := append(scheduleCreateArgv(a), "--model", "model-exact", "--effort", "high")
 	var stdout, stderr bytes.Buffer
 	providerCalls, supervisorCalls := 0, 0
 	deps := Dependencies{PrepareCandidate: func(task.TaskRecord, []string) (commonprovider.ProfileCandidate, error) {
@@ -97,7 +98,7 @@ func TestScheduleCreateRejectsInputsWithoutInitializing(t *testing.T) {
 func TestScheduleCreateOmittedTimezoneSnapshotsNativeDefault(t *testing.T) {
 	t.Setenv("TZ", "")
 	a := scheduleCreateArgs(t)
-	argv := []string{"--root", a.Root, "schedule", "create", "--brief", a.Brief, "--cwd", a.Cwd, "--auto", "--cron", a.ScheduleCron, "--id", scheduleTestID, "--json"}
+	argv := []string{"--root", a.Root, "schedule", "create", "--brief", a.Brief, "--budget", a.Config.Budget, "--cwd", a.Cwd, "--auto", "--cron", a.ScheduleCron, "--id", scheduleTestID, "--json"}
 	var stdout, stderr bytes.Buffer
 	if code := Run(argv, &stdout, &stderr, Dependencies{}); code != 3 {
 		t.Fatalf("create code=%d output=%q stderr=%q", code, stdout.String(), stderr.String())

@@ -5,6 +5,11 @@ The destination owns admission, native supervision, execution budget, cancellati
 and sealed outcomes. The origin retains immutable intent and dated observations;
 its connectivity or downloaded files cannot change the destination's outcome.
 
+Every new remote task requires an explicit positive budget duration or
+`unlimited`. Unlimited requires destination capability `execution-budget-v1`
+before an admitting send; finite tasks remain compatible with older peers.
+Already-sent intents keep their existing-only reconciliation path and bytes.
+
 ## Prepare a destination
 
 Install Delegate and its runner/supervisor on the destination. Install and

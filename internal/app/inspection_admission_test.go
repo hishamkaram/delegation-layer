@@ -28,7 +28,7 @@ func TestInspectionDeadlineIsOperationalDispatchFailure(t *testing.T) {
 	writeAppTestFile(t, briefPath, []byte("inspection brief"))
 	var stdout, stderr bytes.Buffer
 	code := Run([]string{
-		"dispatch", "--json", "--root", store.Root,
+		"dispatch", "--budget", "1m", "--json", "--root", store.Root,
 		"--provider", request.Provider, "--brief", briefPath,
 		"--cwd", request.CanonicalCwd, "--id", request.TaskID,
 	}, &stdout, &stderr, Dependencies{

@@ -272,6 +272,13 @@ func (td *TaskDir) interactionDeadlineOpen(req *task.TaskRecord, state task.Inte
 	if err != nil {
 		return err
 	}
+	budget, err := req.ExecutionBudget()
+	if err != nil {
+		return err
+	}
+	if budget.Unlimited() && state.Deadline == "" {
+		return nil
+	}
 	deadline := when.Add(time.Duration(req.BudgetNanos - started.DiagnosticNanos))
 	if state.Deadline != "" {
 		deadline, err = time.Parse(time.RFC3339Nano, state.Deadline)

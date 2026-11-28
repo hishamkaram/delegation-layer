@@ -425,6 +425,14 @@ func (td *TaskDir) validateStartGuard(req *task.TaskRecord, specHash, metaHash s
 		if err = task.ValidateProviderStartRecord(&start); err != nil {
 			return err
 		}
+		requestedBudget, budgetErr := req.ExecutionBudget()
+		startBudget, startErr := start.ExecutionBudget()
+		if budgetErr != nil || startErr != nil {
+			return errors.Join(budgetErr, startErr)
+		}
+		if requestedBudget != startBudget {
+			return task.ErrIdentityMismatch
+		}
 		if start.RootID != td.store.RootID || start.TaskID != td.TaskID || start.SpecSHA256 != specHash || start.MetaSHA256 != metaHash || start.BudgetNanos != req.BudgetNanos {
 			return task.ErrIdentityMismatch
 		}
@@ -549,7 +557,11 @@ func (td *TaskDir) PrepareStart(budget int64) (_ *StartPermit, resultErr error) 
 	if err = td.initializeRaw(); err != nil {
 		return nil, err
 	}
-	rec := task.ProviderStartRecord{SchemaVersion: task.SchemaVersion, RootID: td.store.RootID, TaskID: td.TaskID, SpecSHA256: specHash, MetaSHA256: metaHash, BudgetNanos: budget, CreatedAt: timestamp()}
+	executionBudget, err := req.ExecutionBudget()
+	if err != nil {
+		return nil, err
+	}
+	rec := task.ProviderStartRecord{SchemaVersion: task.SchemaVersion, RootID: td.store.RootID, TaskID: td.TaskID, SpecSHA256: specHash, MetaSHA256: metaHash, BudgetNanos: budget, BudgetUnlimited: executionBudget.Unlimited(), CreatedAt: timestamp()}
 	if err = task.ValidateProviderStartRecord(&rec); err != nil {
 		return nil, err
 	}

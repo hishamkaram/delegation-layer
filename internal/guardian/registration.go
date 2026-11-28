@@ -135,6 +135,10 @@ func (g *Guardian) registrationNamesScope(registration *task.LifetimeRegistratio
 		return false
 	}
 	ref := g.scope.Reference()
+	deadline := ""
+	if !g.options.Unlimited {
+		deadline = g.options.Deadline.UTC().Format(time.RFC3339Nano)
+	}
 	return registration.RootID == g.options.RootID &&
 		registration.TaskID == g.options.TaskID &&
 		registration.OwnerKind == g.options.OwnerKind &&
@@ -142,7 +146,7 @@ func (g *Guardian) registrationNamesScope(registration *task.LifetimeRegistratio
 		registration.Assurance == string(ref.Assurance()) &&
 		registration.ScopeID == ref.Identifier() &&
 		registration.BootID == bootID &&
-		registration.Deadline == g.options.Deadline.UTC().Format(time.RFC3339Nano)
+		registration.Unlimited == g.options.Unlimited && registration.Deadline == deadline
 }
 
 func sameLifetimeCustodyPlacement(first, second *task.LifetimeCustodyPlacement) bool {

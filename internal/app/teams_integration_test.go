@@ -109,7 +109,7 @@ func TestTeamsPersistedInspectionAndReplayIgnoreDeletedCatalog(t *testing.T) {
 	}
 	deps := Dependencies{TeamCatalogPath: path, ResourceChecker: fixtureResources, SupervisorOptions: pueue.Options{Observer: func(pueue.CommandEvent) { t.Fatal("terminal observation launched supervisor") }}}
 	assertTeamTerminalInspection(t, store, request, deps)
-	replay := dispatch(Arguments{Root: store.Root, TaskID: request.TaskID, Cwd: request.CanonicalCwd, BriefBytes: []byte("brief"), TeamScope: "user", TeamID: target.Team.TeamID, MemberID: target.MemberID, Config: task.TaskConfig{Permission: config.ModeReadOnly}}, deps)
+	replay := dispatch(Arguments{Root: store.Root, TaskID: request.TaskID, Cwd: request.CanonicalCwd, BriefBytes: []byte("brief"), TeamScope: "user", TeamID: target.Team.TeamID, MemberID: target.MemberID, Config: task.TaskConfig{Permission: config.ModeReadOnly, Budget: "1m"}}, deps)
 	if replay.code != 0 || replay.err != nil || replay.response.Publication != "committed" || !reflect.DeepEqual(replay.response.Team, request.Team) {
 		t.Fatalf("replay read deleted catalog or changed settings: %+v", replay)
 	}

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/hishamkaram/delegation-layer/internal/config"
+	"github.com/hishamkaram/delegation-layer/internal/inspection"
 
 	"github.com/hishamkaram/delegation-layer/internal/app/remotecommands"
 	"github.com/hishamkaram/delegation-layer/internal/remote"
@@ -93,7 +94,7 @@ func (a remoteLocalAdapter) Read(ctx context.Context, root string, expected *tas
 func (a remoteLocalAdapter) Probe(ctx context.Context, pin taskdir.RootPin, request remote.Request, response remote.Response) remote.Response {
 	deps := a.deps
 	deps.remoteRootPin = &pin
-	return remoteCommandEnvelope(response, preflightContext(ctx, Arguments{Command: "preflight", Root: response.Identity.Root, Provider: request.Provider, Cwd: request.Cwd, Config: task.TaskConfig{Permission: "read-only"}}, deps))
+	return remoteCommandEnvelope(response, preflightContext(ctx, Arguments{Command: "preflight", Root: response.Identity.Root, Provider: request.Provider, Cwd: request.Cwd, Config: task.TaskConfig{Permission: "read-only", Budget: inspection.AdmissionTimeout.String()}}, deps))
 }
 
 func (a remoteLocalAdapter) Admit(ctx context.Context, pin taskdir.RootPin, request remote.Request, binding *task.RemoteBinding, response remote.Response) remote.Response {

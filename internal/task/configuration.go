@@ -14,6 +14,9 @@ import (
 
 // NormalizeRequestedConfig applies pure request defaults before immutable hashing.
 // It leaves identity, brief, and execution-directory handling to the storage boundary.
+// The budget has no default: RequestedConfig.Budget must be supplied, except
+// that a legacy record carrying only a positive BudgetNanos is normalized to
+// the equivalent canonical text.
 func NormalizeRequestedConfig(r *TaskRecord) error {
 	if r == nil {
 		return errors.New("nil task record")
@@ -42,27 +45,51 @@ func normalizeRequestedConfig(r *TaskRecord) error {
 	if r.RequestedConfig.Budget == "" && r.BudgetNanos > 0 {
 		r.RequestedConfig.Budget = time.Duration(r.BudgetNanos).String()
 	}
-	duration, err := policy.ParseBudgetForProvider(r.Provider, r.RequestedConfig.Budget)
+	budget, err := policy.ParseExecutionBudget(r.RequestedConfig.Budget)
 	if err != nil {
 		return err
 	}
-	if r.BudgetNanos != 0 && r.BudgetNanos != int64(duration) {
+	if r.BudgetNanos != 0 && r.BudgetNanos != budget.Nanos() {
 		return errors.New("requested budget does not match budget_nanos")
 	}
-	r.BudgetNanos = int64(duration)
-	r.RequestedConfig.Budget = duration.String()
+	r.BudgetNanos = budget.Nanos()
+	r.RequestedConfig.Budget = budget.String()
 	r.RequestedConfig.OutputSilenceTimeout, err = NormalizeOutputSilenceTimeout(r.RequestedConfig.OutputSilenceTimeout)
 	if err != nil {
 		return err
 	}
-	r.RequestedConfig.NativeTimeout, err = normalizedNativeTimeout(r.Provider, r.RequestedConfig.NativeTimeout, r.BudgetNanos)
+	r.RequestedConfig.NativeTimeout, err = normalizedNativeTimeout(r.Provider, r.RequestedConfig.NativeTimeout, budget)
 	if err != nil {
 		return err
 	}
-	return validateRequestedConfig(r.Provider, r.RequestedConfig, r.Mode, r.BudgetNanos)
+	_, err = validateRequestedConfig(r.RequestedConfig, r.Mode, r.BudgetNanos)
+	return err
 }
 
-func normalizedNativeTimeout(provider, value string, budget int64) (string, error) {
+// ExecutionBudget returns the budget of a normalized request.
+// RequestedConfig.Budget is the authority; BudgetNanos is its derived durable
+// projection, zero for unlimited, and must agree with it.
+func (r *TaskRecord) ExecutionBudget() (policy.ExecutionBudget, error) {
+	if r == nil {
+		return policy.ExecutionBudget{}, errors.New("nil task record")
+	}
+	return savedExecutionBudget(r.RequestedConfig.Budget, r.BudgetNanos)
+}
+
+// savedExecutionBudget requires canonical budget text and its derived
+// nanosecond projection, as written by NormalizeRequestedConfig.
+func savedExecutionBudget(text string, nanos int64) (policy.ExecutionBudget, error) {
+	budget, err := policy.ParseExecutionBudget(text)
+	if err != nil {
+		return policy.ExecutionBudget{}, err
+	}
+	if text != budget.String() || nanos != budget.Nanos() {
+		return policy.ExecutionBudget{}, errors.New("requested budget must be normalized and match budget_nanos")
+	}
+	return budget, nil
+}
+
+func normalizedNativeTimeout(provider, value string, budget policy.ExecutionBudget) (string, error) {
 	if value == "" {
 		return "", nil
 	}
@@ -73,13 +100,13 @@ func normalizedNativeTimeout(provider, value string, budget int64) (string, erro
 	if err != nil {
 		return "", err
 	}
-	if err := checkNativeTimeoutBudget(duration, time.Duration(budget)); err != nil {
+	if err := checkNativeTimeoutBudget(duration, budget); err != nil {
 		return "", err
 	}
 	return duration.String(), nil
 }
 
-func validateNativeTimeout(provider string, request TaskConfig, budget int64) error {
+func validateNativeTimeout(provider string, request TaskConfig, budget policy.ExecutionBudget) error {
 	normalized, err := normalizedNativeTimeout(provider, request.NativeTimeout, budget)
 	if err != nil {
 		return err
@@ -90,29 +117,29 @@ func validateNativeTimeout(provider string, request TaskConfig, budget int64) er
 	return nil
 }
 
-func validateRequestedConfig(provider string, request TaskConfig, mode string, budget int64) error {
+func validateRequestedConfig(request TaskConfig, mode string, budgetNanos int64) (policy.ExecutionBudget, error) {
 	if normalized, err := NormalizeOutputSilenceTimeout(request.OutputSilenceTimeout); err != nil {
-		return err
+		return policy.ExecutionBudget{}, err
 	} else if normalized != request.OutputSilenceTimeout {
-		return errors.New("output silence timeout must be normalized")
+		return policy.ExecutionBudget{}, errors.New("output silence timeout must be normalized")
 	}
 	if mode == "" || request.Permission == "" || request.Permission != mode {
-		return errors.New("requested permission must match the explicit task mode")
+		return policy.ExecutionBudget{}, errors.New("requested permission must match the explicit task mode")
 	}
 	if err := policy.ValidateMode(mode); err != nil {
-		return err
+		return policy.ExecutionBudget{}, err
 	}
-	duration, err := policy.ParseBudgetForProvider(provider, request.Budget)
+	budget, err := savedExecutionBudget(request.Budget, budgetNanos)
 	if err != nil {
-		return err
-	}
-	if request.Budget != duration.String() || int64(duration) != budget {
-		return errors.New("requested budget must be normalized and match budget_nanos")
+		return policy.ExecutionBudget{}, err
 	}
 	if err := validateModelEffort(request.Model, request.Effort); err != nil {
-		return err
+		return policy.ExecutionBudget{}, err
 	}
-	return ValidateReviewTarget(request.ReviewTarget)
+	if err := ValidateReviewTarget(request.ReviewTarget); err != nil {
+		return policy.ExecutionBudget{}, err
+	}
+	return budget, nil
 }
 
 // ValidateReviewTarget checks the persisted shape without deciding which
@@ -152,10 +179,14 @@ func validateTaskConfiguration(r *TaskRecord) error {
 	if err := policy.ValidateProvider(r.Provider); err != nil {
 		return err
 	}
-	if err := validateRequestedConfig(r.Provider, r.RequestedConfig, r.Mode, r.BudgetNanos); err != nil {
+	budget, err := validateRequestedConfig(r.RequestedConfig, r.Mode, r.BudgetNanos)
+	if err != nil {
 		return err
 	}
-	if err := validateNativeTimeout(r.Provider, r.RequestedConfig, r.BudgetNanos); err != nil {
+	if budget.Unlimited() && r.Origin != nil && r.Origin.Binding == "" {
+		return fmt.Errorf("%w: unlimited execution requires a compact Gateway origin binding", policy.ErrInvalidBudget)
+	}
+	if err := validateNativeTimeout(r.Provider, r.RequestedConfig, budget); err != nil {
 		return err
 	}
 	// Saved evidence outlives the execution directory. Fresh execution authority
@@ -411,14 +442,16 @@ func validateMetaConfiguration(r *MetaRecord) error {
 	if err := ValidatePredicateRef(r.Predicate); err != nil {
 		return err
 	}
-	duration, err := policy.ParseBudgetForProvider(r.Predicate.Adapter, r.RequestedConfig.Budget)
+	// meta.json has no nanosecond projection; its budget text is checked
+	// against the projection it derives.
+	budget, err := policy.ParseExecutionBudget(r.RequestedConfig.Budget)
 	if err != nil {
 		return err
 	}
-	if err := validateRequestedConfig(r.Predicate.Adapter, r.RequestedConfig, r.Predicate.Mode, int64(duration)); err != nil {
+	if _, err := validateRequestedConfig(r.RequestedConfig, r.Predicate.Mode, budget.Nanos()); err != nil {
 		return err
 	}
-	if err := validateNativeTimeout(r.Predicate.Adapter, r.RequestedConfig, int64(duration)); err != nil {
+	if err := validateNativeTimeout(r.Predicate.Adapter, r.RequestedConfig, budget); err != nil {
 		return err
 	}
 	if !nonblank(r.Containment) || !nonblank(r.Approval) || r.Containment != r.EffectiveConfig.Containment || r.Approval != r.EffectiveConfig.Approval {

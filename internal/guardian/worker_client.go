@@ -39,8 +39,10 @@ type WorkerClient struct {
 }
 
 // NewWorkerClient completes the worker hello before permitting command launches.
+// The caller validates the lifetime registration; a zero deadline borrows its
+// explicit unlimited execution mode, with each control call independently bounded.
 func NewWorkerClient(conn io.ReadWriteCloser, scope CommandScope, taskID string, deadline time.Time, launchGateFactory LaunchGateFactory) (*WorkerClient, error) {
-	if scope == nil || launchGateFactory == nil || task.ValidateTaskID(taskID) != nil || deadline.IsZero() {
+	if scope == nil || launchGateFactory == nil || task.ValidateTaskID(taskID) != nil {
 		return nil, task.ErrEvidenceFault
 	}
 	codec, err := newLifetimeCodec(conn)
@@ -252,8 +254,11 @@ func (c *WorkerClient) message(kind string, sequence uint64, pid int) lifetimeMe
 // the immutable task or inspection deadline. controlCall owns the finite
 // stop fallback after work can no longer continue.
 func (c *WorkerClient) call(parent context.Context, message lifetimeMessage) error {
-	if c == nil || c.codec == nil || c.deadline.IsZero() || parent == nil {
+	if c == nil || c.codec == nil || parent == nil {
 		return task.ErrEvidenceFault
+	}
+	if c.deadline.IsZero() {
+		return c.controlCall(parent, message)
 	}
 	ctx, cancel := context.WithDeadline(parent, c.deadline)
 	defer cancel()

@@ -13,8 +13,9 @@ filesystem, models and origin contracts described in the
 [connector contract](https://github.com/hishamkaram/delegation-layer/blob/main/docs/connector-contract.md).
 Native alone validates provider/model/effort/permission/budget choices. Connection
 and workspace approval save routing, not policy seeds or execution ceilings.
-Omissions retain Native defaults; budgets stay positive and finite (`30m`, or
-`1h` for `codex:review`). Model catalogs and capability options are advisory.
+New preparation requires an explicit positive budget duration or `unlimited`.
+Unlimited requires Native capability `execution-budget-v1`. Other omissions
+retain Native defaults. Model catalogs and capability options are advisory.
 
 For historical task controls, `--expected-project-sha256` compares SHA256 of the
 exact saved token bytes instead of requiring the vanished project's raw token.
@@ -25,7 +26,7 @@ Guarded Native continuation accepts a distinct stable successor ID and fresh
 successor origin:
 
 ```sh
-delegate continue --root ABS --task PREDECESSOR --id SUCCESSOR --brief /absolute/brief.txt --expected-root ROOT_TOKEN --expected-project-sha256 PROJECT_TOKEN_SHA --expected-origin /absolute/private/predecessor-origin.json --expected-spec-sha256 PREDECESSOR_SPEC_SHA --origin /absolute/private/successor-origin.json --json
+delegate continue --root ABS --task PREDECESSOR --budget 10m --id SUCCESSOR --brief /absolute/brief.txt --expected-root ROOT_TOKEN --expected-project-sha256 PROJECT_TOKEN_SHA --expected-origin /absolute/private/predecessor-origin.json --expected-spec-sha256 PREDECESSOR_SPEC_SHA --origin /absolute/private/successor-origin.json --json
 ```
 
 Keep successor ID and both immutable origins across uncertainty. Native inherits

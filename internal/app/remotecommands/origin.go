@@ -317,6 +317,9 @@ func (c Client) prepareRemoteIntent(ctx context.Context, a originRequest, store 
 	if err != nil {
 		return remote.Intent{}, nil, err
 	}
+	if err = remote.PrepareExecutionBudgetConfig(a.Config, response.Capabilities); err != nil {
+		return remote.Intent{}, nil, err
+	}
 
 	outputs, err := remoteOutputPaths(a.OutputManifest)
 	if err != nil {

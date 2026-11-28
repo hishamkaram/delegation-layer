@@ -313,7 +313,7 @@ func separateDirectories(t *testing.T) (string, string) {
 }
 
 func testRequest(workspace string) task.TaskRecord {
-	return task.TaskRecord{SchemaVersion: task.SchemaVersion, RootID: testRootID, TaskID: testTaskID, Provider: Provider, Mode: Mode, CanonicalCwd: workspace, RequestedConfig: task.TaskConfig{Permission: Mode}, BudgetNanos: int64(time.Minute), BriefSHA256: strings.Repeat("a", 64), BriefLength: 1}
+	return task.TaskRecord{SchemaVersion: task.SchemaVersion, RootID: testRootID, TaskID: testTaskID, Provider: Provider, Mode: Mode, CanonicalCwd: workspace, RequestedConfig: task.TaskConfig{Permission: Mode, Budget: "1m0s"}, BudgetNanos: int64(time.Minute), BriefSHA256: strings.Repeat("a", 64), BriefLength: 1}
 }
 
 func prepareTestProfile(t *testing.T, request task.TaskRecord, runtimeDir string) commonprovider.PreparedProfile {

@@ -122,7 +122,7 @@ func TestPreflightPlacementRejectionRetainsOwnerIdentity(t *testing.T) {
 		return candidate, err
 	})
 	deps := Dependencies{Catalog: catalog, Environment: []string{}}.normalized()
-	requested := task.TaskConfig{Permission: config.ModeReadOnly}
+	requested := task.TaskConfig{Permission: config.ModeReadOnly, Budget: "1m"}
 	request, err := admissioncore.BuildRequest(strings.Repeat("0", 32), strings.Repeat("1", 32), "fixture:preflight", cwd, requested, []byte("preflight"), nil)
 	if err != nil {
 		t.Fatal(err)

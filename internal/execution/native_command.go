@@ -71,7 +71,7 @@ func runIsolatedCommand(ctx context.Context, ownerExecutable string, command *ex
 	if !invocation.launched {
 		return runErr
 	}
-	deadline, parseErr := time.Parse(time.RFC3339Nano, invocation.request.Deadline)
+	deadline, parseErr := nativeCommandDeadline(invocation.request)
 	if parseErr != nil {
 		return errors.Join(runErr, parseErr)
 	}
@@ -80,6 +80,9 @@ func runIsolatedCommand(ctx context.Context, ownerExecutable string, command *ex
 }
 
 func readNativeCompletion(connection *net.UnixConn, deadline time.Time) (nativeCommandResult, error) {
+	if deadline.IsZero() {
+		deadline = time.Now()
+	}
 	// A peer failure must remain finite even if an unrelated faulty process
 	// retains a descriptor. Three native cleanup phases each own at most 10s.
 	if err := connection.SetReadDeadline(deadline.Add(30 * time.Second)); err != nil {
@@ -103,7 +106,7 @@ func prepareNativeInvocation(ctx context.Context, ownerExecutable string, comman
 		return nil, errors.New("native command requires context and command")
 	}
 	deadline, finite := ctx.Deadline()
-	if !finite || ctx.Err() != nil {
+	if (!finite && !unlimitedExecution(ctx)) || ctx.Err() != nil {
 		return nil, errors.Join(errors.New("native command requires an active finite deadline"), ctx.Err())
 	}
 	if err := validateNativeProcess(ownerExecutable, command); err != nil {
@@ -118,6 +121,9 @@ func prepareNativeInvocation(ctx context.Context, ownerExecutable string, comman
 		arguments[index] = base64.StdEncoding.EncodeToString([]byte(argument))
 	}
 	request := nativeCommandRequest{ID: id, ExecutableBase64: base64.StdEncoding.EncodeToString([]byte(command.Path)), ArgumentsBase64: arguments, DirectoryBase64: base64.StdEncoding.EncodeToString([]byte(command.Dir)), Deadline: deadline.UTC().Format(time.RFC3339Nano)}
+	if !finite {
+		request.Unlimited, request.Deadline = true, ""
+	}
 	if err = validateNativeCommand(request); err != nil {
 		return nil, err
 	}
@@ -162,9 +168,12 @@ func (invocation *nativeInvocation) started() error {
 	if closeErr != nil {
 		return errors.Join(closeErr, invocation.connection.CloseWrite())
 	}
-	deadline, err := time.Parse(time.RFC3339Nano, invocation.request.Deadline)
+	deadline, err := nativeCommandDeadline(invocation.request)
 	if err != nil {
 		return errors.Join(err, invocation.connection.CloseWrite())
+	}
+	if deadline.IsZero() {
+		deadline = time.Now().Add(10 * time.Second)
 	}
 	if err := invocation.connection.SetWriteDeadline(deadline); err != nil {
 		return errors.Join(err, invocation.connection.CloseWrite())

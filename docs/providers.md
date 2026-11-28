@@ -43,8 +43,10 @@ Setup: [official CLI guide](https://antigravity.google/docs/getting-started?tab=
 
 Read-only selects native `--sandbox --mode plan` without a bypass.
 Workspace-write uses accept-edits with native permission bypass.
-The native print timeout fits inside the task budget. Trust, account settings,
-and MCP configuration remain native.
+An explicit native print timeout fits inside a finite task budget. With an
+unlimited budget and no native timeout, Delegate passes `--print-timeout 0s`
+to wait until the turn completes. Trust, account settings and MCP configuration
+remain native.
 
 ## Codex
 

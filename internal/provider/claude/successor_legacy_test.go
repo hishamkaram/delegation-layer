@@ -99,7 +99,7 @@ func TestLegacySuccessorDerivesFreshPolicyProofWhileReconstructionRetainsIt(t *t
 	// The new task's own budget and the refresh margin bound the caller's
 	// credential expiry; the predecessor's proof cannot extend it.
 	longer := request
-	longer.BudgetNanos = int64(2 * time.Hour)
+	longer.RequestedConfig.Budget, longer.BudgetNanos = "2h0m0s", int64(2*time.Hour)
 	for name, historical := range map[string][]*task.PolicySourceDigest{"successor": nil, "with recorded proof": {legacyPolicyProof(predecessor)}} {
 		if _, err = callerB.finalize(t, longer, now, historical...); !errors.Is(err, ErrUnsupportedProfile) {
 			t.Fatalf("%s accepted a credential expiring within its budget: %v", name, err)
@@ -109,5 +109,55 @@ func TestLegacySuccessorDerivesFreshPolicyProofWhileReconstructionRetainsIt(t *t
 	expiring.expiresIn = time.Duration(request.BudgetNanos) + refreshMargin
 	if _, err = expiring.finalize(t, request, now); !errors.Is(err, ErrUnsupportedProfile) {
 		t.Fatalf("successor accepted a credential expiring within the refresh margin: %v", err)
+	}
+}
+
+// The legacy OAuth policy proof checks credential expiry across the whole
+// task, so an unlimited successor of a legacy record is refused before any
+// executable lookup, and finalization refuses it even for a far expiry. It is
+// never given an invented deadline or moved to another profile.
+func TestLegacyPolicyRefusesUnlimitedBudget(t *testing.T) {
+	now := time.Unix(2_000_000_000, 0)
+	request := profileRequest()
+	caller := legacyPolicyFixture{cli: commonprovider.CLIInfo{Path: "/caller/claude", SHA256: strings.Repeat("a", 64)}, definitionSHA256: strings.Repeat("1", 64), expiresIn: time.Hour}
+	admitted, err := caller.finalize(t, request, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	predecessor := task.MetaRecord{EffectiveConfig: admitted.Effective, Predicate: admitted.Plan.Predicate}
+	if !hasLegacyNativePolicy(predecessor) {
+		t.Fatal("fixture predecessor carries no legacy policy proof")
+	}
+	unlimited := request
+	unlimited.RequestedConfig.Budget, unlimited.BudgetNanos = "unlimited", 0
+	unlimited.PriorSession = &task.PriorSession{Provider: Provider, ConversationID: "d3d3d3d3-d3d3-53d3-a3d3-d3d3d3d3d3d3", PredecessorTaskID: "abcdef0123456789abcdef0123456789"}
+	if _, err = PrepareSuccessorCandidate(unlimited, predecessor, nil); !errors.Is(err, ErrUnsupportedProfile) || !strings.Contains(err.Error(), "requires a finite task budget") {
+		t.Fatalf("legacy successor with unlimited budget error = %v", err)
+	}
+	caller.expiresIn = 100 * 365 * 24 * time.Hour
+	if _, err = caller.finalize(t, unlimited, now); !errors.Is(err, ErrUnsupportedProfile) || !strings.Contains(err.Error(), "requires a finite task budget") {
+		t.Fatalf("legacy finalization with unlimited budget error = %v", err)
+	}
+}
+
+// The portable profile records no credential window, so it accepts an
+// unlimited budget and seals the same effective policy as a finite one.
+func TestPortablePolicyAcceptsUnlimitedBudget(t *testing.T) {
+	now := time.Unix(2_000_000_000, 0)
+	finite := profileRequest()
+	unlimited := finite
+	unlimited.RequestedConfig.Budget, unlimited.BudgetNanos = "unlimited", 0
+	environment := profileEnvironment{RuntimeSHA256: strings.Repeat("c", 64), WritableRoots: []string{"/home/fixture/.claude"}}
+	want, err := finalizePortablePolicy(finite, environment, nil, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := finalizePortablePolicy(unlimited, environment, nil, now)
+	if err != nil || got.Digest != want.Digest {
+		t.Fatalf("portable unlimited policy = %+v, %v; want digest %s", got, err, want.Digest)
+	}
+	unlimited.BudgetNanos = 1
+	if _, err = finalizePortablePolicy(unlimited, environment, nil, now); !errors.Is(err, ErrUnsupportedProfile) {
+		t.Fatalf("inconsistent budget reached portable policy: %v", err)
 	}
 }

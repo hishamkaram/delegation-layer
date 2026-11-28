@@ -1,4 +1,4 @@
-"""Finite budget acceptance scenarios."""
+"""Explicit execution budget acceptance scenarios."""
 
 from scripts.acceptance.evidence.files import read_json
 from scripts.acceptance.hermetic.contract import CASE_TIMEOUT
@@ -22,6 +22,9 @@ import time
 
 
 def run_b01_invalid_budget(case):
+    _, response = case.dispatch_without_admission(omit_budget=True, expected=(2,))
+    require_true("explicit budget" in response.get("error", ""),
+                 "omitted budget did not require an explicit choice")
     for invalid in ("0s", "-1s", "999999999999999999999999h"):
         _, response = case.dispatch_without_admission(budget=invalid, expected=(2,))
         require_true(response.get("error"), "invalid budget lacked diagnostic")
@@ -63,7 +66,7 @@ def run_b01_raw_argv(case):
 
 
 def run_b01_valid(case):
-    process = case.start_dispatch(omit_budget=True)
+    process = case.start_dispatch(budget="unlimited")
     entry = wait_entry(case, "add")
     case.root_id, _ = label_parts(add_entry_label(entry))
     case.set_status("queued")
@@ -71,11 +74,11 @@ def run_b01_valid(case):
     process.wait(CASE_TIMEOUT, expected=(0,))
     response = process.json()
     require_true(response.get("admission") == "admitted",
-                 "omitted budget dispatch was not admitted")
+                 "explicit unlimited dispatch was not admitted")
     task = read_json(case.task_dir() / "task.json", MAX_CONTROL_BYTES)
-    require_true(task.get("budget_nanos") == 30 * 60 * 1_000_000_000 and
-                 task.get("requested_config", {}).get("budget") == "30m0s",
-                 "omitted budget was not persisted as the 30m default")
+    require_true(task.get("budget_nanos") == 0 and
+                 task.get("requested_config", {}).get("budget") == "unlimited",
+                 "explicit unlimited budget was not persisted")
     started = time.monotonic()
     _, pending = case.run_command("default-watch", "collect", expected=(3,))
     require_true(time.monotonic() - started < 1.0 and pending.get("pending") is not None,

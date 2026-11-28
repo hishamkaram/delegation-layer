@@ -22,6 +22,12 @@ This document establishes the normative operational invariants for the delegatio
 - **No Shared Mutability**: Original task records, identities, and results remain immutable and sealed. Launch count and execution metadata are preserved per task.
 
 ## 3. Supervision, Deadlines, and Forbidden Signals
+- **Execution Budget Authority**: The immutable task request owns an explicit
+  finite or unlimited budget. Fresh admissions never apply a time default.
+  Nanoseconds and lifetime/start/stop mode markers derive from that request.
+  Unlimited removes execution expiry, not cancellation, native completion,
+  at-most-once launch or the requirement to prove closure. Historical omitted
+  schedules retain their legacy per-provider policy without rewriting records.
 - **Explicit Lifetime Owners**: Pueue owns scheduling and worker-row state. The
   application lifetime state machine is the sole owner of native-lifetime
   transition policy; the live guardian and recovery paths enter that same
@@ -73,7 +79,7 @@ This document establishes the normative operational invariants for the delegatio
 - Nonzero `exec.Cmd.WaitDelay` is prohibited because its timeout mechanism
   defaults to process termination.
 - **Controlled Subprocess Execution**: Subprocesses are spawned using `exec.Command` with argv slices, explicit working directory, no shell reparsing, and owned standard library pipe handling.
-- **Wall-Clock Deadlines and Cancellation**: Tasks enforce a finite positive wall-clock execution deadline. Expiry and a durable user cancellation route through the guardian, which terminates its registered scope and records empty-scope proof before the task may be reported ended. A canceller may mutate the Pueue row directly only while it holds the task's lifetime-owner lease, which proves that no guardian can own or launch the provider concurrently. Pueue stop requests remain scheduling evidence, not native termination authority. Token or dollar ceilings and raw argv are rejected before admission.
+- **Wall-Clock Deadlines and Cancellation**: Every new task explicitly selects a finite positive wall-clock budget or unlimited execution. Unlimited execution has no wall-clock expiry and remains supervised. Finite expiry and a durable user cancellation route through the guardian, which terminates its registered scope and records empty-scope proof before the task may be reported ended. A canceller may mutate the Pueue row directly only while it holds the task's lifetime-owner lease, which proves that no guardian can own or launch the provider concurrently. Pueue stop requests remain scheduling evidence, not native termination authority. Token or dollar ceilings and raw argv are rejected before admission.
 - **Bounded Event Loop**: The runner owns a bounded, explicit set of goroutines for stdout/stderr capture, Wait, and supervisor deadline observation. The root runner is decoupled from caller/dispatcher context cancellation.
 
 ## 4. Supervisor Admission Ordering

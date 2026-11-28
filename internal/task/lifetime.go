@@ -58,6 +58,9 @@ type LifetimeWorkerWaitResult string
 
 // LifetimeIntentRecord reserves the immutable scope plan before native scope
 // creation. A registration may be created only after this record exists.
+// Deadline is a timestamp unless Unlimited marks a task owner with an
+// unlimited budget; then Deadline is empty. Unlimited is omitted otherwise,
+// preserving the bytes of every bounded record.
 type LifetimeIntentRecord struct {
 	SchemaVersion int    `json:"schema_version"`
 	RootID        string `json:"root_id"`
@@ -69,13 +72,15 @@ type LifetimeIntentRecord struct {
 	ScopePlan     string `json:"scope_plan"`
 	BootID        string `json:"boot_id"`
 	Deadline      string `json:"deadline"`
+	Unlimited     bool   `json:"unlimited,omitempty"`
 	CreatedAt     string `json:"created_at"`
 }
 
 // LifetimeRegistrationRecord binds one task to the platform scope that owns
 // its native command descendants. The scope is registered before any native
 // command may start. A nil CustodyPlacement is a registration that predates
-// custody placement and keeps its exact legacy canonical bytes.
+// custody placement and keeps its exact legacy canonical bytes. Deadline and
+// Unlimited follow the LifetimeIntentRecord rule.
 type LifetimeRegistrationRecord struct {
 	SchemaVersion int    `json:"schema_version"`
 	RootID        string `json:"root_id"`
@@ -87,6 +92,7 @@ type LifetimeRegistrationRecord struct {
 	ScopeID       string `json:"scope_id"`
 	BootID        string `json:"boot_id"`
 	Deadline      string `json:"deadline"`
+	Unlimited     bool   `json:"unlimited,omitempty"`
 	CreatedAt     string `json:"created_at"`
 
 	CustodyPlacement *LifetimeCustodyPlacement `json:"custody_placement,omitempty"`
@@ -168,7 +174,7 @@ func ValidateLifetimeRegistrationRecord(r *LifetimeRegistrationRecord) error {
 	if !validLifetimeToken(r.ScopeID) || !validLifetimeToken(r.BootID) {
 		return ErrIdentityMismatch
 	}
-	if err := validateTimestamp(r.Deadline); err != nil {
+	if err := validateLifetimeDeadline(r.OwnerKind, r.Deadline, r.Unlimited); err != nil {
 		return err
 	}
 	if err := validateTimestamp(r.CreatedAt); err != nil {
@@ -196,7 +202,7 @@ func ValidateLifetimeIntentRecord(r *LifetimeIntentRecord) error {
 	if !validLifetimeToken(r.ScopePlan) || !validLifetimeToken(r.BootID) {
 		return ErrIdentityMismatch
 	}
-	if err := validateTimestamp(r.Deadline); err != nil {
+	if err := validateLifetimeDeadline(r.OwnerKind, r.Deadline, r.Unlimited); err != nil {
 		return err
 	}
 	return validateTimestamp(r.CreatedAt)
@@ -345,7 +351,8 @@ func LifetimeIntentMatchesRegistration(intent *LifetimeIntentRecord, registratio
 		intent.ScopeKind == registration.ScopeKind &&
 		intent.Assurance == registration.Assurance &&
 		intent.BootID == registration.BootID &&
-		intent.Deadline == registration.Deadline
+		intent.Deadline == registration.Deadline &&
+		intent.Unlimited == registration.Unlimited
 }
 
 func ValidateLifetimeTerminationRecord(r *LifetimeTerminationRecord) error {
@@ -370,6 +377,19 @@ func ValidateLifetimeTerminationRecord(r *LifetimeTerminationRecord) error {
 		return ErrIdentityMismatch
 	}
 	return validateTimestamp(r.ObservedAt)
+}
+
+// validateLifetimeDeadline requires a bounded deadline, or no deadline with
+// the unlimited marker. Only a task owner can be unlimited: inspection and
+// workspace owners keep their own finite budgets.
+func validateLifetimeDeadline(ownerKind, deadline string, unlimited bool) error {
+	if !unlimited {
+		return validateTimestamp(deadline)
+	}
+	if ownerKind != LifetimeOwnerTask || deadline != "" {
+		return fmt.Errorf("%w: unlimited lifetime requires a task owner and no deadline", ErrIdentityMismatch)
+	}
+	return nil
 }
 
 func validLifetimeToken(value string) bool {

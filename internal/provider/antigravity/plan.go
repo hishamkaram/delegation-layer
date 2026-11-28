@@ -63,8 +63,8 @@ func validatePrintOptions(request task.TaskRecord) error {
 }
 
 func validatePrintBounds(request task.TaskRecord) error {
-	if request.BudgetNanos <= 0 {
-		return fmt.Errorf("%w: print timeout must be positive", ErrUnsupportedProfile)
+	if _, err := request.ExecutionBudget(); err != nil {
+		return fmt.Errorf("%w: a valid finite or unlimited task budget is required: %w", ErrUnsupportedProfile, err)
 	}
 	return nil
 }
@@ -126,12 +126,28 @@ func validNativeOptionText(value string) bool {
 	return true
 }
 
+// unboundedPrintTimeout is agy's documented --print-timeout value that waits
+// until the turn completes (agy 1.5.19 help: "0 waits until the turn
+// completes (default 0s)"). An unlimited task budget with no native timeout
+// maps to it; the guardian still owns stopping the scope.
+const unboundedPrintTimeout = "0s"
+
+// printTimeout maps the task budget to agy's print timeout. A finite budget
+// bounds the turn and any native timeout; an unlimited budget has no
+// enclosing bound, so an explicit positive native timeout is used as given.
 func printTimeout(request task.TaskRecord) (string, error) {
+	budget, err := request.ExecutionBudget()
+	if err != nil {
+		return "", fmt.Errorf("%w: a valid finite or unlimited task budget is required: %w", ErrUnsupportedProfile, err)
+	}
 	if request.RequestedConfig.NativeTimeout == "" {
-		return time.Duration(request.BudgetNanos).String(), nil
+		if duration, finite := budget.Finite(); finite {
+			return duration.String(), nil
+		}
+		return unboundedPrintTimeout, nil
 	}
 	duration, err := time.ParseDuration(request.RequestedConfig.NativeTimeout)
-	if err != nil || duration <= 0 || int64(duration) > request.BudgetNanos {
+	if err != nil || duration <= 0 || !budget.Encloses(duration) {
 		return "", fmt.Errorf("%w: native timeout must fit within the task budget", ErrUnsupportedProfile)
 	}
 	return duration.String(), nil

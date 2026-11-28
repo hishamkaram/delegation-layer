@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/hishamkaram/delegation-layer/internal/config"
+	"github.com/hishamkaram/delegation-layer/internal/task"
 	"golang.org/x/sys/unix"
 )
 
@@ -66,7 +67,7 @@ func TestEmptyBriefHasSharedInputIdentity(t *testing.T) {
 	if data, err := ReadBrief(path); len(data) != 0 || !errors.Is(err, config.ErrBriefEmpty) {
 		t.Fatalf("empty file bytes=%q err=%v; want empty-brief identity", data, err)
 	}
-	request := DispatchRequest{Root: filepath.Join(t.TempDir(), "state"), Cwd: t.TempDir(), BriefBytes: []byte{}}
+	request := DispatchRequest{Config: task.TaskConfig{Budget: "1m"}, Root: filepath.Join(t.TempDir(), "state"), Cwd: t.TempDir(), BriefBytes: []byte{}}
 	if _, _, _, err := dispatchInputs(request); !errors.Is(err, config.ErrBriefEmpty) {
 		t.Fatalf("empty supplied brief err=%v; want empty-brief identity", err)
 	}

@@ -12,6 +12,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/hishamkaram/delegation-layer/internal/config/policy"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"golang.org/x/sys/unix"
 )
@@ -978,12 +979,26 @@ func TestConnectorInventoryReceiptsPreserveFrozenProjectIdentity(t *testing.T) {
 	_, err = store.OriginReopenContext(t.Context(), "gateway", "recovery", "generation", inventory.CompletenessReceipt, root)
 	must(t, err)
 	want := make(map[string]ConnectorReceipt)
-	for range 2 {
+	for _, budget := range []string{"1m", "unlimited"} {
 		request, meta, brief := preparedInput(t, store)
+		request.RequestedConfig.Budget, request.BudgetNanos = budget, 0
+		must(t, task.NormalizeRequestedConfig(request))
+		meta.RequestedConfig = request.RequestedConfig
 		project, observeErr := ObserveProjectContext(t.Context(), request.CanonicalCwd)
 		must(t, observeErr)
 		request.Origin = &task.GatewayOrigin{GatewayID: "gateway", AdmissionGeneration: "generation", OperationID: request.TaskID, PrincipalRef: "principal", GatewayRequestSHA256: strings.Repeat("a", 64)}
 		request.ConnectorContext = &task.ConnectorContext{RootToken: root, Project: project}
+		if budget == "unlimited" {
+			rejected, createErr := store.CreateTaskContext(t.Context(), request.TaskID, request, brief, meta)
+			if rejected != nil || !errors.Is(createErr, policy.ErrInvalidBudget) {
+				t.Fatalf("legacy unlimited task was not rejected: %v", createErr)
+			}
+			if _, statErr := os.Stat(filepath.Join(store.Root, "tasks", request.TaskID)); !errors.Is(statErr, os.ErrNotExist) {
+				t.Fatalf("legacy unlimited request created task authority: %v", statErr)
+			}
+			// Native carries the compact commitment opaquely; Gateway owns its format.
+			request.Origin.Binding = "opaque-compact-unlimited-fixture"
+		}
 		td, createErr := store.CreateTaskContext(t.Context(), request.TaskID, request, brief, meta)
 		must(t, createErr)
 		must(t, td.Close())
@@ -991,7 +1006,7 @@ func TestConnectorInventoryReceiptsPreserveFrozenProjectIdentity(t *testing.T) {
 		must(t, readErr)
 		projectToken, tokenErr := ProjectToken(project)
 		must(t, tokenErr)
-		want[request.TaskID] = ConnectorReceipt{RootToken: root, ProjectToken: projectToken, TaskID: request.TaskID, Origin: *request.Origin, SpecSHA256: task.ComputeSHA256(data), BriefSHA256: task.ComputeSHA256(brief), ExecutionOptions: ConnectorExecutionOptions{Provider: "fixture:test", Permission: "read-only", BudgetNanoseconds: request.BudgetNanos, Model: ConnectorRequestedSelection{Kind: ConnectorSelectionNativeDefault}, Effort: ConnectorRequestedSelection{Kind: ConnectorSelectionNativeDefault}}}
+		want[request.TaskID] = ConnectorReceipt{RootToken: root, ProjectToken: projectToken, TaskID: request.TaskID, Origin: *request.Origin, SpecSHA256: task.ComputeSHA256(data), BriefSHA256: task.ComputeSHA256(brief), ExecutionOptions: ConnectorExecutionOptions{Provider: "fixture:test", Permission: "read-only", BudgetNanoseconds: request.BudgetNanos, BudgetUnlimited: budget == "unlimited", Model: ConnectorRequestedSelection{Kind: ConnectorSelectionNativeDefault}, Effort: ConnectorRequestedSelection{Kind: ConnectorSelectionNativeDefault}}}
 		// Neither absent nor replaced paths may change recorded attribution.
 		must(t, os.Remove(request.CanonicalCwd))
 		if len(want) == 2 {

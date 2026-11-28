@@ -12,7 +12,8 @@ Filesystem and model results are dated observations, not task outcomes, process
 closure or execution authority. Native owns provider/model/effort/permission/
 budget validity and defaults. A missing catalog entry does not veto an explicit
 model/effort request; omitted choices must remain omitted until Native resolves
-them. Native task budgets stay finite. Gateway connection and workspace approval
+them. Each new Native task requires an explicit positive budget duration or
+`unlimited`; there is no automatic budget. Gateway connection and workspace approval
 save routing only, without execution-policy seeds or ceilings.
 
 The local filesystem envelope has `schema_version: 1`, `command: "filesystem"`

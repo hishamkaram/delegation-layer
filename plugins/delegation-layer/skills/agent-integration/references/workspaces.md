@@ -103,7 +103,8 @@ have different next actions; an accepted action can have no helper ID yet.
 The workspace helper budget defaults to 5 minutes, is persisted with the
 workspace or operation, and can be overridden by the corresponding budget
 flag. This auxiliary budget is separate from and does not renew the provider
-task budget. The existing `codex:review` default remains 1 hour.
+task budget. Every new provider turn separately requires an explicit positive
+duration or `unlimited`; there is no `codex:review` execution default.
 
 `continue --task PREDECESSOR_ID` inherits the predecessor's managed workspace,
 working directory, and provider session, while creating a new task ID. The new

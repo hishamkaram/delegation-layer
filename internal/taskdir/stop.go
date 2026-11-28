@@ -210,7 +210,11 @@ func (td *TaskDir) newStopRequestContext(ctx context.Context, id, cause string, 
 	} else if !task.RecordAbsent(err) {
 		return nil, err
 	}
-	r := &task.StopRequestRecord{SchemaVersion: task.SchemaVersion, RootID: td.store.RootID, TaskID: td.TaskID, SpecSHA256: spec, MetaSHA256: hash, Label: label, Supervisor: supervisor, RequestID: id, Cause: cause, BudgetNanos: req.BudgetNanos, RequestedAt: timestamp()}
+	budget, err := req.ExecutionBudget()
+	if err != nil {
+		return nil, err
+	}
+	r := &task.StopRequestRecord{SchemaVersion: task.SchemaVersion, RootID: td.store.RootID, TaskID: td.TaskID, SpecSHA256: spec, MetaSHA256: hash, Label: label, Supervisor: supervisor, RequestID: id, Cause: cause, BudgetNanos: req.BudgetNanos, BudgetUnlimited: budget.Unlimited(), RequestedAt: timestamp()}
 	receipt, receiptErr := td.ReadSupervisorReceipt()
 	if receiptErr == nil {
 		numeric := receipt.NumericTaskID
@@ -248,7 +252,10 @@ func (td *TaskDir) ReadStopRequest(id string) (*task.StopRequestRecord, error) {
 	if err != nil {
 		return nil, err
 	}
-	if r.RequestID != id || r.RootID != td.store.RootID || r.TaskID != td.TaskID || r.SpecSHA256 != spec || r.MetaSHA256 != hash || r.Supervisor != meta.SupervisorConfig || r.BudgetNanos != req.BudgetNanos {
+	if err = matchStopExecutionBudget(req, &r); err != nil {
+		return nil, err
+	}
+	if r.RequestID != id || r.RootID != td.store.RootID || r.TaskID != td.TaskID || r.SpecSHA256 != spec || r.MetaSHA256 != hash || r.Supervisor != meta.SupervisorConfig {
 		return nil, task.ErrIdentityMismatch
 	}
 	if r.NumericTaskID != nil {
@@ -667,4 +674,16 @@ func newStopObservationRecord(request *task.StopRequestRecord, digest string, re
 		return task.StopObservedRecord{}, err
 	}
 	return r, nil
+}
+
+func matchStopExecutionBudget(request *task.TaskRecord, stop *task.StopRequestRecord) error {
+	requested, requestErr := request.ExecutionBudget()
+	recorded, stopErr := stop.ExecutionBudget()
+	if requestErr != nil || stopErr != nil {
+		return errors.Join(requestErr, stopErr)
+	}
+	if requested != recorded {
+		return task.ErrIdentityMismatch
+	}
+	return nil
 }

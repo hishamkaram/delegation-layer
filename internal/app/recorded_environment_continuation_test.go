@@ -460,7 +460,7 @@ func (f *recordedEnvironmentFixture) entryPointArguments(t *testing.T, entryPoin
 	}
 	switch entryPoint {
 	case "continue --task":
-		return append(args, "continue", "--task", f.predecessorID, "--json")
+		return append(args, "continue", "--task", f.predecessorID, "--budget", "1m", "--json")
 	case "dispatch --resume-task":
 		brief := filepath.Join(f.workspace, "follow-up.md")
 		if err := os.WriteFile(brief, []byte("continue the recorded provider session"), 0o600); err != nil {

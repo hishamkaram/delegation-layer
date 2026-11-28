@@ -11,6 +11,7 @@ import (
 	"time"
 
 	admissioncore "github.com/hishamkaram/delegation-layer/internal/admission"
+	"github.com/hishamkaram/delegation-layer/internal/config"
 	"github.com/hishamkaram/delegation-layer/internal/execution"
 	"github.com/hishamkaram/delegation-layer/internal/predicate"
 	commonprovider "github.com/hishamkaram/delegation-layer/internal/provider"
@@ -165,6 +166,7 @@ func TestTeamInvalidTargetRefusesBeforeManagedProvisioning(t *testing.T) {
 	request.TaskID, request.Isolation = strings.Repeat("c", 32), "git-worktree"
 	request.Selection.RunnerOwnership = task.RunnerOwnershipManaged
 	request.TeamTarget.MemberID = ""
+	request.Config.Budget = "1m"
 	lookups := 0
 	options := DispatchOptions{OpenStore: func(root string, _ bool) (*taskdir.Store, error) {
 		return taskdir.OpenStore(root)
@@ -195,13 +197,17 @@ func TestTeamReplayTreatsOmittedPermissionAsReadOnly(t *testing.T) {
 	if _, err := resolveDispatchTeam(request, DispatchOptions{}, fixture.store, fixture.request.TaskID, request.Cwd); err != nil {
 		t.Fatalf("omitted permission and equivalent budget conflicted with persisted request: %v", err)
 	}
+	budget, err := config.ParseExecutionBudget("1m")
+	if err != nil {
+		t.Fatal(err)
+	}
 	saved := task.TeamIntent{}
 	requested := task.TeamIntent{Config: task.TaskConfig{Permission: "read-only", Budget: "60s"}}
-	if err := compareTeamIntent(requested, saved, fixture.request.Provider, int64(time.Minute)); err != nil {
+	if err := compareTeamIntent(requested, saved, fixture.request.Provider, budget); err != nil {
 		t.Fatalf("CLI default conflicted with saved schedule omissions: %v", err)
 	}
 	requested.Config.Permission = "workspace-write"
-	if err := compareTeamIntent(requested, saved, fixture.request.Provider, int64(time.Minute)); !errors.Is(err, task.ErrRequestConflict) {
+	if err := compareTeamIntent(requested, saved, fixture.request.Provider, budget); !errors.Is(err, task.ErrRequestConflict) {
 		t.Fatalf("different explicit permission error = %v, want ErrRequestConflict", err)
 	}
 }

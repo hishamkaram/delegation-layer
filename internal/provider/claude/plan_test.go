@@ -19,7 +19,7 @@ func profileRequest() task.TaskRecord {
 		RootID: "fedcba9876543210fedcba9876543210", TaskID: "0123456789abcdef0123456789abcdef",
 		Provider: Provider, Mode: Mode, CanonicalCwd: "/workspace with spaces",
 		BriefLength: 12, BudgetNanos: int64(120 * time.Second),
-		RequestedConfig: task.TaskConfig{Permission: Mode, Effort: "default"},
+		RequestedConfig: task.TaskConfig{Permission: Mode, Effort: "default", Budget: "2m0s"},
 	}
 }
 
@@ -378,19 +378,23 @@ func TestPrintArgumentsUseNativeWorkspaceWritePermission(t *testing.T) {
 
 func TestPrintArgumentsRejectUnsupportedRequests(t *testing.T) {
 	cases := map[string]func(*task.TaskRecord){
-		"provider":          func(r *task.TaskRecord) { r.Provider = "codex:exec" },
-		"mode":              func(r *task.TaskRecord) { r.Mode = "workspace-write" },
-		"model newline":     func(r *task.TaskRecord) { r.RequestedConfig.Model = "other\nmodel" },
-		"effort tab":        func(r *task.TaskRecord) { r.RequestedConfig.Effort = "max\t" },
-		"oversized model":   func(r *task.TaskRecord) { r.RequestedConfig.Model = strings.Repeat("m", task.MaxControlRecordSize+1) },
-		"timeout":           func(r *task.TaskRecord) { r.RequestedConfig.NativeTimeout = "3s" },
-		"budget":            func(r *task.TaskRecord) { r.BudgetNanos = 0 },
-		"brief":             func(r *task.TaskRecord) { r.BriefLength = 0 },
-		"oversized brief":   func(r *task.TaskRecord) { r.BriefLength = task.MaxBriefSize + 1 },
-		"workspace":         func(r *task.TaskRecord) { r.CanonicalCwd = "relative" },
-		"unclean workspace": func(r *task.TaskRecord) { r.CanonicalCwd = "/workspace/../elsewhere" },
-		"task ID":           func(r *task.TaskRecord) { r.TaskID = "invalid" },
-		"root ID":           func(r *task.TaskRecord) { r.RootID = "invalid" },
+		"provider":             func(r *task.TaskRecord) { r.Provider = "codex:exec" },
+		"mode":                 func(r *task.TaskRecord) { r.Mode = "workspace-write" },
+		"model newline":        func(r *task.TaskRecord) { r.RequestedConfig.Model = "other\nmodel" },
+		"effort tab":           func(r *task.TaskRecord) { r.RequestedConfig.Effort = "max\t" },
+		"oversized model":      func(r *task.TaskRecord) { r.RequestedConfig.Model = strings.Repeat("m", task.MaxControlRecordSize+1) },
+		"timeout":              func(r *task.TaskRecord) { r.RequestedConfig.NativeTimeout = "3s" },
+		"budget":               func(r *task.TaskRecord) { r.BudgetNanos = 0 },
+		"unlimited with nanos": func(r *task.TaskRecord) { r.RequestedConfig.Budget = "unlimited" },
+		"malformed budget":     func(r *task.TaskRecord) { r.RequestedConfig.Budget = "soon" },
+		"noncanonical budget":  func(r *task.TaskRecord) { r.RequestedConfig.Budget = "120s" },
+		"omitted budget text":  func(r *task.TaskRecord) { r.RequestedConfig.Budget = "" },
+		"brief":                func(r *task.TaskRecord) { r.BriefLength = 0 },
+		"oversized brief":      func(r *task.TaskRecord) { r.BriefLength = task.MaxBriefSize + 1 },
+		"workspace":            func(r *task.TaskRecord) { r.CanonicalCwd = "relative" },
+		"unclean workspace":    func(r *task.TaskRecord) { r.CanonicalCwd = "/workspace/../elsewhere" },
+		"task ID":              func(r *task.TaskRecord) { r.TaskID = "invalid" },
+		"root ID":              func(r *task.TaskRecord) { r.RootID = "invalid" },
 		"session alias": func(r *task.TaskRecord) {
 			r.PriorSession = &task.PriorSession{Provider: Provider, ConversationID: "latest"}
 		},
@@ -406,5 +410,28 @@ func TestPrintArgumentsRejectUnsupportedRequests(t *testing.T) {
 				t.Fatalf("got %v", err)
 			}
 		})
+	}
+}
+
+// The task budget is not a Claude native option, so an unlimited budget keeps
+// the finite request's exact fresh and resumed argv.
+func TestPrintArgumentsAcceptUnlimitedBudgetWithoutNativeChange(t *testing.T) {
+	finite := profileRequest()
+	unlimited := finite
+	unlimited.RequestedConfig.Budget, unlimited.BudgetNanos = "unlimited", 0
+	session, err := FreshSessionID(finite.RootID, finite.TaskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, prior := range []*task.PriorSession{nil, {Provider: Provider, ConversationID: session, PredecessorTaskID: "abcdef0123456789abcdef0123456789"}} {
+		finite.PriorSession, unlimited.PriorSession = prior, prior
+		want, wantInputs, err := printArguments(finite)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, inputs, err := printArguments(unlimited)
+		if err != nil || !slices.Equal(got, want) || len(inputs) != len(wantInputs) {
+			t.Fatalf("unlimited argv=%q inputs=%+v err=%v, want %q", got, inputs, err, want)
+		}
 	}
 }

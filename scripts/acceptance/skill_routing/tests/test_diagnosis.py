@@ -147,6 +147,10 @@ class DiagnosisRoutingTests(unittest.TestCase):
     def test_diagnosis_preflight_matches_public_static_shape(self):
         fixture, workspace, state, case = self.prepare_diagnosis()
         base = ["--root", str(state), "preflight", "--provider", case["provider"], "--json"]
+        code, result = self.call_diagnosis(fixture, state, base + ["--cwd", str(workspace)])
+        self.assertEqual(code, 2)
+        self.assertEqual(result["failure"]["code"], "synthetic_action_refused")
+        base += ["--budget", "30s"]
         for suffix in ([], ["--cwd", "relative"]):
             code, result = self.call_diagnosis(fixture, state, base + suffix)
             self.assertEqual(code, 2)
@@ -158,6 +162,10 @@ class DiagnosisRoutingTests(unittest.TestCase):
         self.assertEqual(result["capability"]["reason_code"], "static_admission_ready")
         self.assertEqual(result["capability"]["live_acceptance"]["authentication"], "unknown")
         self.assertNotIn("live_acceptance", result)
+        unlimited = ["unlimited" if value == "30s" else value for value in base]
+        code, result = self.call_diagnosis(fixture, state, unlimited + ["--cwd", str(workspace)])
+        self.assertEqual(code, 0)
+        self.assertEqual(result["status"], "ready")
 
     def test_diagnosis_keeps_real_static_catalog_and_control_version(self):
         fixture, _, state, _ = self.prepare_diagnosis()

@@ -6,13 +6,10 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
-	"time"
 )
 
 const (
-	DefaultBudgetDuration            = 30 * time.Minute
-	DefaultCodexReviewBudgetDuration = time.Hour
-	DefaultMode                      = "read-only"
+	DefaultMode = "read-only"
 
 	ModeReadOnly       = "read-only"
 	ModeWorkspaceWrite = "workspace-write"
@@ -29,7 +26,6 @@ const (
 )
 
 var (
-	ErrInvalidBudget        = errors.New("budget must be a finite positive duration")
 	ErrInvalidMode          = errors.New("invalid permission mode: must be 'read-only' or 'workspace-write'")
 	ErrUnsupportedProvider  = errors.New("unsupported provider")
 	ErrInvalidCwd           = errors.New("working directory must be an absolute path to an existing directory")
@@ -41,29 +37,6 @@ var (
 	ErrBriefTooLarge        = errors.New("brief file exceeds 8 MiB limit")
 	ErrBriefEmpty           = errors.New("brief must be nonempty")
 )
-
-// ParseBudget parses and validates a finite positive duration.
-func ParseBudget(budgetStr string) (time.Duration, error) {
-	if budgetStr == "" {
-		return DefaultBudgetDuration, nil
-	}
-	duration, err := time.ParseDuration(budgetStr)
-	if err != nil {
-		return 0, fmt.Errorf("%w: %w", ErrInvalidBudget, err)
-	}
-	if duration <= 0 {
-		return 0, ErrInvalidBudget
-	}
-	return duration, nil
-}
-
-// ParseBudgetForProvider applies the provider-specific default when the request omits a budget.
-func ParseBudgetForProvider(provider, budgetStr string) (time.Duration, error) {
-	if budgetStr == "" && provider == ProviderCodexReview {
-		return DefaultCodexReviewBudgetDuration, nil
-	}
-	return ParseBudget(budgetStr)
-}
 
 // ValidateMode validates that mode is a recognized permission mode.
 func ValidateMode(mode string) error {

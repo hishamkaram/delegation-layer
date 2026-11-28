@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -126,5 +127,25 @@ func TestManagedInspectionFailureStopsPolicyPreparation(t *testing.T) {
 	_, err := effectivePolicy(profileRequest(), profileEnvironment{}, time.Now(), func() ([]task.PolicySourceDigest, error) { return nil, failure }, task.ComputeSHA256([]byte("test runtime")))
 	if !errors.Is(err, failure) {
 		t.Fatalf("managed lookup failure lost: %v", err)
+	}
+}
+
+// The historical isolated profile proves that file authentication will not
+// refresh during the task budget. An unlimited budget has no such window, so
+// it is refused before any policy source is read, never given a deadline.
+func TestHistoricalPolicyRefusesUnlimitedBudgetBeforeReadingSources(t *testing.T) {
+	request := profileRequest()
+	request.RequestedConfig.Budget, request.BudgetNanos = "unlimited", 0
+	managed := func() ([]task.PolicySourceDigest, error) {
+		t.Fatal("unlimited historical preparation read managed policy sources")
+		return nil, nil
+	}
+	_, err := effectivePolicy(request, profileEnvironment{}, time.Now(), managed, task.ComputeSHA256([]byte("test runtime")))
+	if !errors.Is(err, ErrUnsupportedProfile) || !strings.Contains(err.Error(), "requires a finite task budget") {
+		t.Fatalf("unlimited historical policy error = %v", err)
+	}
+	request.RequestedConfig.Budget, request.BudgetNanos = "unlimited", 1
+	if _, err = effectivePolicy(request, profileEnvironment{}, time.Now(), managed, task.ComputeSHA256([]byte("test runtime"))); !errors.Is(err, ErrUnsupportedProfile) {
+		t.Fatalf("inconsistent budget reached historical policy: %v", err)
 	}
 }
