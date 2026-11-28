@@ -403,7 +403,7 @@ func TestContinueRepairsRefusedEndpointOfAbsentRecordedDaemon(t *testing.T) {
 	t.Parallel()
 	fixture, refused := newRefusedEndpointContinueFixture(t)
 	before := snapshotOutputUpgradeTask(t, fixture.root, outputUpgradePredecessorID)
-	result := continueTask(Arguments{Root: fixture.root, TaskID: outputUpgradePredecessorID}, fixture.deps)
+	result := continueTask(Arguments{Root: fixture.root, TaskID: outputUpgradePredecessorID, Config: task.TaskConfig{Budget: "1m"}}, fixture.deps)
 	if result.code != 0 || result.err != nil || result.response.TaskRecord != "created" || result.response.TaskID == "" || result.response.TaskID == outputUpgradePredecessorID {
 		t.Fatalf("continue did not create a successor: code=%d err=%v task_record=%q task_id=%q", result.code, result.err, result.response.TaskRecord, result.response.TaskID)
 	}
@@ -435,7 +435,7 @@ func TestContinueRefusedEndpointWithUnprovenOwnerCreatesNoSuccessor(t *testing.T
 			fixture, refused := newRefusedEndpointContinueFixture(t)
 			testCase.owner(t, refused)
 			before := snapshotOutputUpgradeTask(t, fixture.root, outputUpgradePredecessorID)
-			result := continueTask(Arguments{Root: fixture.root, TaskID: outputUpgradePredecessorID}, fixture.deps)
+			result := continueTask(Arguments{Root: fixture.root, TaskID: outputUpgradePredecessorID, Config: task.TaskConfig{Budget: "1m"}}, fixture.deps)
 			var recovery *pueue.PrivateRecoveryError
 			if result.code == 0 || result.response.TaskRecord == "created" || !errors.As(result.err, &recovery) || recovery.ReasonCode != testCase.reason || !errors.Is(result.err, pueue.ErrPrivateEndpointRefused) {
 				t.Fatalf("continue result = code %d response=%+v err=%v, want %s", result.code, result.response, result.err, testCase.reason)

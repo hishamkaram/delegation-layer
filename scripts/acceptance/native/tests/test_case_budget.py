@@ -14,10 +14,9 @@ from scripts.acceptance.native import workflow as gate
 from scripts.acceptance.tasks.request_intent import TaskRequest
 
 
-# Delegate persists an omitted Codex review budget as its public one-hour
-# default (internal/config/policy/policy.go ParseBudgetForProvider).
-REVIEW_DEFAULT_BUDGET = "1h0m0s"
-REVIEW_DEFAULT_BUDGET_NANOS = 3_600_000_000_000
+# The review acceptance fixture explicitly requests one hour.
+REVIEW_BUDGET = "1h0m0s"
+REVIEW_BUDGET_NANOS = 3_600_000_000_000
 ORDINARY_BUDGET = "5m0s"
 ORDINARY_BUDGET_NANOS = 300_000_000_000
 NATIVE_SUITE_SECONDS = 4 * 60 * 60
@@ -100,7 +99,7 @@ class NativeCaseBudgetContractTests(unittest.TestCase):
             ops.wait_task("fresh", "a" * 32)
         return observed["timeout"]
 
-    def test_codex_review_dispatch_omits_budget_and_binds_the_public_default(self):
+    def test_codex_review_dispatch_passes_its_explicit_one_hour_budget(self):
         with tempfile.TemporaryDirectory(prefix="native-review-budget-") as directory:
             root = Path(directory)
             operation = self._operation("codex:review", root)
@@ -108,12 +107,12 @@ class NativeCaseBudgetContractTests(unittest.TestCase):
             brief.write_text("review\n")
             argv, request = self._admission(operation, brief)
 
-        self.assertNotIn("--budget", argv)
+        self.assertEqual(argv[argv.index("--budget") + 1], "1h")
         self.assertNotIn("--model", argv)
         self.assertNotIn("--effort", argv)
         self.assertEqual(argv[argv.index("--permission") + 1], "read-only")
         self.assertEqual(argv[argv.index("--review-target") + 1], "uncommitted")
-        self.assertEqual(request.budget, REVIEW_DEFAULT_BUDGET)
+        self.assertEqual(request.budget, "1h")
 
     def test_ordinary_profiles_keep_the_finite_five_minute_and_timeout_budgets(self):
         for provider in sorted(set(gate.PROFILES) - {"codex:review"}):
@@ -131,10 +130,10 @@ class NativeCaseBudgetContractTests(unittest.TestCase):
 
     def test_persisted_request_budget_matches_the_provider_case(self):
         cases = (
-            ("codex:review", REVIEW_DEFAULT_BUDGET, REVIEW_DEFAULT_BUDGET_NANOS,
+            ("codex:review", REVIEW_BUDGET, REVIEW_BUDGET_NANOS,
              ORDINARY_BUDGET, ORDINARY_BUDGET_NANOS),
             ("codex:exec", ORDINARY_BUDGET, ORDINARY_BUDGET_NANOS,
-             REVIEW_DEFAULT_BUDGET, REVIEW_DEFAULT_BUDGET_NANOS),
+             REVIEW_BUDGET, REVIEW_BUDGET_NANOS),
         )
         for provider, budget, nanos, foreign, foreign_nanos in cases:
             with self.subTest(provider=provider):
@@ -160,7 +159,7 @@ class NativeCaseBudgetContractTests(unittest.TestCase):
                 operation._request_binding(task_id, budget="3m0s")
 
     def test_outer_runner_wait_outlives_the_persisted_budget_within_the_native_suite(self):
-        for provider, budget_seconds in (("codex:review", REVIEW_DEFAULT_BUDGET_NANOS // 10 ** 9),
+        for provider, budget_seconds in (("codex:review", REVIEW_BUDGET_NANOS // 10 ** 9),
                                          ("codex:exec", ORDINARY_BUDGET_NANOS // 10 ** 9),
                                          ("claude:print", ORDINARY_BUDGET_NANOS // 10 ** 9)):
             with self.subTest(provider=provider), tempfile.TemporaryDirectory(
@@ -170,7 +169,7 @@ class NativeCaseBudgetContractTests(unittest.TestCase):
                 self.assertLessEqual(timeout, budget_seconds + 60)
                 self.assertLess(timeout, NATIVE_SUITE_SECONDS)
 
-    def test_codex_review_receipt_records_the_omitted_request_and_persisted_default(self):
+    def test_codex_review_receipt_records_the_explicit_request_and_persisted_budget(self):
         with tempfile.TemporaryDirectory(prefix="native-review-receipt-") as directory:
             operation = self._operation("codex:review", Path(directory))
             task_id = "a" * 32
@@ -190,6 +189,6 @@ class NativeCaseBudgetContractTests(unittest.TestCase):
 
         self.assertEqual(dispatched, [(("fresh", Path("/brief")), {})])
         receipt = fixture_record(operation.success_receipt)
-        self.assertIsNone(receipt["task_budget"])
-        self.assertEqual(receipt["canonical_task_budget"], REVIEW_DEFAULT_BUDGET)
+        self.assertEqual(receipt["task_budget"], "1h")
+        self.assertEqual(receipt["canonical_task_budget"], REVIEW_BUDGET)
         self.assertEqual((receipt["requested_model"], receipt["requested_effort"]), (None, None))

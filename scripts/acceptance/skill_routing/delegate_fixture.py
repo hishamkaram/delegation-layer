@@ -486,13 +486,14 @@ def diagnosis_response(root, runtime, argv):
                      and state["response"].get("task_record") not in ("not_created", "unknown"))
         static_check = (command == "preflight" and "--live" not in argv
                         and option_value(argv, "--provider") in PROVIDERS
+                        and bool(option_value(argv, "--budget"))
                         and bool(option_value(argv, "--cwd"))
                         and Path(option_value(argv, "--cwd")).is_absolute())
         allowed_flags = {"--root", "-root", "--json"}
         if command == "collect":
             allowed_flags.add("--watch")
         if command == "preflight":
-            allowed_flags.update(("--provider", "--permission", "--cwd"))
+            allowed_flags.update(("--provider", "--permission", "--cwd", "--budget"))
             static_check = static_check and option_value(argv, "--permission") in (None, "read-only", "workspace-write")
         flags_valid = all(value.split("=", 1)[0] in allowed_flags
                           for value in argv if value.startswith("-"))

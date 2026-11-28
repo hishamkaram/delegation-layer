@@ -74,7 +74,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _budget_fields(args: argparse.Namespace) -> dict[str, object]:
-    """Record the operation budget: its requested label (None when omitted) and persisted value.
+    """Record the operation budget's explicit requested label and persisted value.
 
     A discovery-only run admits no task; it records its one bounded inspection.
     """

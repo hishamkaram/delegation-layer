@@ -665,7 +665,7 @@ class NativeFailureReceiptBudgetTests(unittest.TestCase):
 
     # (provider, permission, scenario) -> (--budget argument, persisted canonical budget)
     BUDGETS = {
-        ("codex:review", "read-only", "read-only"): (None, "1h0m0s"),
+        ("codex:review", "read-only", "read-only"): ("1h", "1h0m0s"),
         ("codex:exec", "read-only", "read-only"): ("5m", "5m0s"),
         ("pi:json", "read-only", "read-only"): ("5m", "5m0s"),
     }

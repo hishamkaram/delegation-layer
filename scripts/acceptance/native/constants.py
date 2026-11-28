@@ -55,22 +55,20 @@ WATCH_SECONDS = 330
 class CaseTaskBudget:
     """One case's dispatch budget, its persisted record, and the outer runner wait.
 
-    ``requested`` is the public ``--budget`` argument; None omits the flag so
-    the case exercises the product's provider default.
+    ``requested`` is the explicit public ``--budget`` argument chosen by the case.
     """
 
-    requested: str | None
+    requested: str
     canonical: str
     nanos: int
     watch_seconds: int
 
 
 ORDINARY_TASK_BUDGET = CaseTaskBudget(TASK_BUDGET, CANONICAL_TASK_BUDGET, TASK_BUDGET_NANOS, WATCH_SECONDS)
-# Codex review keeps Delegate's public one-hour default
-# (policy.DefaultCodexReviewBudgetDuration); the wait keeps the ordinary
-# 30-second bootstrap margin above that budget.
-CODEX_REVIEW_DEFAULT_TASK_BUDGET = CaseTaskBudget(None, "1h0m0s", 3_600_000_000_000, 3_630)
-_PROVIDER_TASK_BUDGETS = {"codex:review": CODEX_REVIEW_DEFAULT_TASK_BUDGET}
+# The review fixture explicitly chooses one hour; this is no product default.
+# Its outer wait keeps the ordinary 30-second bootstrap margin.
+CODEX_REVIEW_TASK_BUDGET = CaseTaskBudget("1h", "1h0m0s", 3_600_000_000_000, 3_630)
+_PROVIDER_TASK_BUDGETS = {"codex:review": CODEX_REVIEW_TASK_BUDGET}
 
 
 def case_task_budget(provider: str) -> CaseTaskBudget:

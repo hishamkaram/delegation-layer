@@ -75,7 +75,7 @@ func requireRebootReleaseDigest(t *testing.T, fixture *rebootFixture, want strin
 
 func rebootContinue(t *testing.T, fixture *rebootFixture) (commandResult, Response) {
 	t.Helper()
-	result := continueTask(Arguments{Root: fixture.root, TaskID: fixture.req.TaskID}, rebootDependencies(t, fixture))
+	result := continueTask(Arguments{Root: fixture.root, TaskID: fixture.req.TaskID, Config: task.TaskConfig{Budget: "1m"}}, rebootDependencies(t, fixture))
 	var output bytes.Buffer
 	if err := writeJSONResponse(&output, "continue", &result.response, result.err); err != nil {
 		t.Fatal(err)

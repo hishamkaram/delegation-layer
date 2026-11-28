@@ -188,7 +188,7 @@ func TestCommittedOutcomeWinsOverClosedLifetime(t *testing.T) {
 func TestContinueReportsMissingSessionAsContinuationUnavailable(t *testing.T) {
 	t.Parallel()
 	fixture := newRebootFixture(t, rebootSetup{stage: rebootLifetimeClosedPreviousBoot, launchEnvironment: true})
-	result := continueTask(Arguments{Root: fixture.root, TaskID: fixture.req.TaskID}, rebootDependencies(t, fixture))
+	result := continueTask(Arguments{Root: fixture.root, TaskID: fixture.req.TaskID, Config: task.TaskConfig{Budget: "1m"}}, rebootDependencies(t, fixture))
 	if result.code != 2 || !errors.Is(result.err, os.ErrNotExist) {
 		t.Fatalf("continue without session = code %d err=%v", result.code, result.err)
 	}
