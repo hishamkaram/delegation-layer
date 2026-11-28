@@ -183,6 +183,9 @@ func writeHumanTeams(output *bytes.Buffer, response TeamsResponse) {
 
 func writeHumanTeam(output *bytes.Buffer, record contract.Record) {
 	fmt.Fprintf(output, "team scope=%s id=%s revision=%d name=%q purpose=%q\n", record.Reference.Scope, record.Reference.TeamID, record.Revision, record.Definition.Name, record.Definition.Purpose)
+	if record.Definition.MemberUnavailable != "" {
+		fmt.Fprintf(output, "member_unavailable=%s\n", record.Definition.MemberUnavailable)
+	}
 	for _, role := range record.Definition.Roles {
 		fmt.Fprintf(output, "role id=%s name=%q responsibility=%q\n", role.ID, role.Name, role.Responsibility)
 	}

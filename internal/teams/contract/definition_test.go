@@ -144,6 +144,7 @@ func TestTeamRequiredValues(t *testing.T) {
 		{"blank purpose", func(v *Team) { v.Purpose = "\n" }},
 		{"invalid name UTF-8", func(v *Team) { v.Name = "\xff" }},
 		{"invalid purpose UTF-8", func(v *Team) { v.Purpose = "\xff" }},
+		{"unknown member guidance", func(v *Team) { v.MemberUnavailable = "skip" }},
 		{"missing roles", func(v *Team) { v.Roles = nil }},
 		{"missing members", func(v *Team) { v.Members = nil }},
 		{"blank role name", func(v *Team) { v.Roles[0].Name = " " }},
@@ -267,6 +268,57 @@ func TestTeamCodecPreservesSemanticValues(t *testing.T) {
 	}
 	if len(data) == 0 || data[len(data)-1] != '\n' {
 		t.Fatal("canonical definition must end in a newline")
+	}
+}
+
+func TestTeamMemberUnavailableWireValues(t *testing.T) {
+	for _, value := range []string{"", "report", "continue_without"} {
+		t.Run(value, func(t *testing.T) {
+			fields := definitionFields(t, teamDefinitionDocument("[]", "[]"))
+			encodedValue, err := json.Marshal(value)
+			if err != nil {
+				t.Fatal(err)
+			}
+			fields["member_unavailable"] = encodedValue
+			team, err := Decode([]byte(definitionFieldJSON(t, fields)))
+			if err != nil {
+				t.Fatalf("valid member guidance rejected: %v", err)
+			}
+			data, err := Encode(team)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, present := definitionFields(t, string(data))["member_unavailable"]
+			if value == "" {
+				if present {
+					t.Fatalf("empty guidance must remain omitted: %s", data)
+				}
+			} else if !present || string(got) != string(encodedValue) {
+				t.Fatalf("guidance changed during encoding: %s", data)
+			}
+		})
+	}
+}
+
+func TestTeamMemberUnavailableRejectsInvalidWireValues(t *testing.T) {
+	for _, value := range []string{`null`, `true`, `1`, `{}`, `[]`, `"skip"`, `"REPORT"`, `"report "`} {
+		t.Run(value, func(t *testing.T) {
+			fields := definitionFields(t, teamDefinitionDocument("[]", "[]"))
+			fields["member_unavailable"] = json.RawMessage(value)
+			requireInvalidDefinitionJSON(t, definitionFieldJSON(t, fields))
+		})
+	}
+}
+
+func TestTeamLegacyCanonicalBytesRemainUnchanged(t *testing.T) {
+	const legacy = "{\"schema_version\":1,\"id\":\"review-team\",\"name\":\"Review team\",\"purpose\":\"Review changes.\",\"roles\":[],\"members\":[]}\n"
+	team, err := Decode([]byte(legacy))
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := Encode(team)
+	if err != nil || string(data) != legacy {
+		t.Fatalf("legacy canonical definition changed: %q, %v", data, err)
 	}
 }
 

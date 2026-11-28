@@ -229,6 +229,13 @@ Register/update return `mutation.validation` with `definition: "validated"`,
 `provider_capabilities: "validated"`, and `readiness: "not_checked"`.
 Management never claims that a provider/model can execute.
 
+Definitions accept optional `member_unavailable` with `report` or
+`continue_without`. Omission or an empty string means `report`. The CLI stores
+this advisory instruction for the allocating lead. Use the
+[unavailable-Member procedure](result-handling.md#unavailable-team-members)
+for eligibility and reporting. Older strict readers reject definitions that
+populate this field, so remove it using a compatible binary before downgrading.
+
 Handler exit `0` means a successful read/mutation, including empty/no-default
 and safe partial results. Exit `2` means invalid input/definition, an unknown
 explicit target, revision conflict or project/catalog identity mismatch.

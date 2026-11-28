@@ -121,6 +121,26 @@
       "name": "interactive-unsupported-destination",
       "prompt": "A named external provider supports continuation but neither native clarification nor steering. The user wants a discussion with it.",
       "expected": ["preserve named provider", "ordinary bounded turns and continuation", "explain no active-turn questions", "do not pass unsupported interactive flag"]
+    },
+    {
+      "name": "team-unavailable-continue-without",
+      "prompt": "An inspected Team at revision 3 sets member_unavailable to continue_without. Its lead-chosen reviewer has a validated rejected outcome with provider_quota_exhausted. Another independent assignment succeeded. No particular reviewer was mandatory.",
+      "expected": ["preserve original dispatch creation evidence", "report skipped Member and task ID with quota diagnostic", "finish authorized independent work and identify missing review", "preserve write-task cleanup and partial-edit obligations", "replacement assignments require separate authority"]
+    },
+    {
+      "name": "team-unavailable-unknown-creation",
+      "prompt": "The Team sets member_unavailable to continue_without. The selected Member dispatch returns task_record unknown with failure.next_action stop_and_report.",
+      "expected": ["preserve uncertain task creation", "stop that attempt and diagnose bounded evidence", "do not poll an unknown task", "do not mark uncertain work skipped", "zero replacement dispatches", "do not waive required review"]
+    },
+    {
+      "name": "team-unavailable-uncertain-launch",
+      "prompt": "The Team sets member_unavailable to continue_without. The selected Member dispatch returns task_record created, failure.code task_launch_uncertain at enqueue-task, and failure.next_action check_status.",
+      "expected": ["preserve original created task", "observe that exact task with status before any other action", "follow existing observation and recovery guidance", "do not mark uncertain work skipped", "zero replacement dispatches", "do not waive required review"]
+    },
+    {
+      "name": "team-unavailable-broad-preparation-fault",
+      "prompt": "A Team with member_unavailable continue_without receives not_created provider_unavailable at validate-state-placement. Bounded diagnosis identifies state-root overlap.",
+      "expected": ["treat as caller placement fault", "provider_unavailable code alone is insufficient", "follow existing recovery and report", "do not classify the Member unavailable"]
     }
   ]
 }

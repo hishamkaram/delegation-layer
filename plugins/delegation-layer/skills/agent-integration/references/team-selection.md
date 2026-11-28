@@ -15,6 +15,9 @@ work. A Team grants no permission, budget or authority to invent assignments.
    response already contains its full Team record; do not fetch it again.
    List includes Global and current-project Teams; never infer Local identity
    from a remote URL or silently prefer a same-named Local Team.
+   Retain the selected Team's complete inspected definition and revision for
+   this decision, including optional `member_unavailable`. Its application is
+   owned by [unavailable Team members](result-handling.md#unavailable-team-members).
 2. Follow returned `next_cursor` values unchanged with bounded list pages.
    Inspect full definitions of plausible alternatives before selecting Members,
    using each list row's `reference.scope` and `reference.team_id`. User scope uses

@@ -189,6 +189,24 @@ func TestSelectionContextCapturesSelectedRolesAndRawIntent(t *testing.T) {
 	}
 }
 
+func TestSelectionIgnoresMemberUnavailableGuidance(t *testing.T) {
+	resolved := resolvedMemberFixture(t.TempDir())
+	intent := selectionIntentFixture("", "", "")
+	want, err := Select(resolved, intent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, guidance := range []MemberUnavailable{MemberUnavailableReport, MemberUnavailableContinueWithout} {
+		t.Run(string(guidance), func(t *testing.T) {
+			resolved.Record.Definition.MemberUnavailable = guidance
+			got, err := Select(resolved, intent)
+			if err != nil || !reflect.DeepEqual(got, want) {
+				t.Fatalf("advisory guidance changed task selection: %+v, %v; want %+v", got, err, want)
+			}
+		})
+	}
+}
+
 func TestSelectionContextRejectsInvalidSnapshot(t *testing.T) {
 	cases := []struct {
 		name   string

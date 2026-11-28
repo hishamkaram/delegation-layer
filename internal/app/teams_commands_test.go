@@ -85,6 +85,45 @@ func TestTeamsCLIStdinCRUDUsesProductionCatalog(t *testing.T) {
 	requireTeamsMutation(t, exit, response, "register", 4)
 }
 
+func TestTeamsCLIMemberUnavailableGuidancePersistsWithCAS(t *testing.T) {
+	deps := teamsCommandDependencies(t)
+	definition := strings.Replace(teamsDefinitionJSON, `"purpose":`, `"member_unavailable":"continue_without","purpose":`, 1)
+	exit, response := runTeamsForTest(t, deps, definition, "register", "--scope", "user", "--definition", "-")
+	requireTeamsMutation(t, exit, response, "register", 1)
+	requireTeamsMemberUnavailable(t, deps, 1, contract.MemberUnavailableContinueWithout)
+	var stdout, stderr bytes.Buffer
+	exit = Run([]string{"teams", "show", "--scope", "user", "--team", "review"}, &stdout, &stderr, deps)
+	if exit != 0 || !strings.Contains(stdout.String(), "member_unavailable=continue_without\n") {
+		t.Fatalf("human show lost guidance: exit=%d stdout=%s stderr=%s", exit, stdout.String(), stderr.String())
+	}
+	updated := strings.Replace(definition, `"continue_without"`, `"report"`, 1)
+	exit, response = runTeamsForTest(t, deps, updated, "update", "--scope", "user", "--team", "review", "--expected-revision", "1", "--definition", "-")
+	requireTeamsMutation(t, exit, response, "update", 2)
+	for _, rejected := range []struct {
+		definition, revision, code string
+	}{
+		{definition, "1", "revision_conflict"},
+		{strings.Replace(updated, `"report"`, `"skip"`, 1), "2", "invalid_definition"},
+	} {
+		exit, response = runTeamsForTest(t, deps, rejected.definition, "update", "--scope", "user", "--team", "review", "--expected-revision", rejected.revision, "--definition", "-")
+		if exit != 2 || response.Failure == nil || response.Failure.Code != rejected.code || response.Mutation != nil {
+			t.Fatalf("invalid guidance update accepted: exit=%d response=%+v", exit, response)
+		}
+	}
+	requireTeamsMemberUnavailable(t, deps, 2, contract.MemberUnavailableReport)
+	exit, response = runTeamsForTest(t, deps, teamsDefinitionJSON, "update", "--scope", "user", "--team", "review", "--expected-revision", "2", "--definition", "-")
+	requireTeamsMutation(t, exit, response, "update", 3)
+	requireTeamsMemberUnavailable(t, deps, 3, "")
+}
+
+func requireTeamsMemberUnavailable(t *testing.T, deps Dependencies, revision int64, guidance contract.MemberUnavailable) {
+	t.Helper()
+	exit, response := runTeamsForTest(t, deps, "", "show", "--scope", "user", "--team", "review")
+	if exit != 0 || response.Team == nil || response.Team.Revision != revision || response.Team.Definition.MemberUnavailable != guidance {
+		t.Fatalf("wrong durable guidance: exit=%d response=%+v; want revision=%d guidance=%q", exit, response, revision, guidance)
+	}
+}
+
 func TestTeamsCLIRejectedMutationsPreserveAuthoritativeState(t *testing.T) {
 	deps := teamsCommandDependencies(t)
 	exit, response := runTeamsForTest(t, deps, teamsDefinitionJSON, "register", "--scope", "user", "--definition", "-")

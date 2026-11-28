@@ -32,13 +32,22 @@ type Member struct {
 	ExecutionDefaults *ExecutionDefaults `json:"execution_defaults,omitempty"`
 }
 
+// MemberUnavailable is advisory guidance for the allocating lead.
+type MemberUnavailable string
+
+const (
+	MemberUnavailableReport          MemberUnavailable = "report"
+	MemberUnavailableContinueWithout MemberUnavailable = "continue_without"
+)
+
 type Team struct {
-	SchemaVersion int      `json:"schema_version"`
-	ID            string   `json:"id"`
-	Name          string   `json:"name"`
-	Purpose       string   `json:"purpose"`
-	Roles         []Role   `json:"roles"`
-	Members       []Member `json:"members"`
+	SchemaVersion     int               `json:"schema_version"`
+	ID                string            `json:"id"`
+	Name              string            `json:"name"`
+	Purpose           string            `json:"purpose"`
+	Roles             []Role            `json:"roles"`
+	Members           []Member          `json:"members"`
+	MemberUnavailable MemberUnavailable `json:"member_unavailable,omitempty"`
 }
 
 type Record struct {
@@ -62,6 +71,11 @@ func Validate(team Team) error {
 	}
 	if !validText(team.Name) || !validText(team.Purpose) {
 		return invalid("name/purpose", errors.New("nonblank UTF-8 text required"))
+	}
+	switch team.MemberUnavailable {
+	case "", MemberUnavailableReport, MemberUnavailableContinueWithout:
+	default:
+		return invalid("member_unavailable", errors.New("must be report or continue_without when set"))
 	}
 	roles := make(map[string]bool, len(team.Roles))
 	for _, role := range team.Roles {
